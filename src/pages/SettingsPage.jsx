@@ -10,22 +10,25 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState({ type: '', text: '' })
   const [newCompany, setNewCompany] = useState({ name: '', prefix: '' })
+  const [deletedLog, setDeletedLog] = useState([])
   const [logoUploading, setLogoUploading] = useState(null)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
-    const [{ data: co }, { data: us }, { data: me }, { data: uc }] = await Promise.all([
+    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }] = await Promise.all([
       supabase.from('companies').select('*').order('name'),
       supabase.from('users').select('*').order('full_name'),
       supabase.from('payment_methods').select('*').order('name'),
       supabase.from('user_companies').select('*'),
+      supabase.from('deleted_applications_log').select('*').order('deleted_at', { ascending: false }),
     ])
     setCompanies(co || [])
     setUsers(us || [])
     setMethods(me || [])
     setUserCompanies(uc || [])
+    setDeletedLog(dl || [])
     setLoading(false)
   }
 
@@ -95,6 +98,7 @@ export default function SettingsPage() {
     { id: 'companies', label: '🏢 Companies' },
     { id: 'users', label: '👥 Users & Access' },
     { id: 'methods', label: '💳 Payment Methods' },
+    { id: 'deleted', label: '🗑 Deleted Log' },
   ]
 
   return (
@@ -269,6 +273,72 @@ export default function SettingsPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+        {/* DELETED APPLICATIONS LOG */}
+        {tab === 'deleted' && (
+          <div>
+            <div className="alert alert-info" style={{ marginBottom: '16px' }}>
+              Permanent record of all deleted applications. This log cannot be modified or cleared.
+            </div>
+            <div className="card">
+              <div className="card-header">
+                <h2>Deleted Applications Log</h2>
+                <span className="text-sm text-muted">{deletedLog.length} records</span>
+              </div>
+              <div className="table-wrap">
+                {deletedLog.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '40px' }}>
+                    <div className="icon">✅</div>
+                    <h3>No deleted applications</h3>
+                  </div>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Ref</th>
+                        <th>Company</th>
+                        <th>Submitted By</th>
+                        <th>Amount (AED)</th>
+                        <th>Status at Delete</th>
+                        <th>Deleted By</th>
+                        <th>Reason</th>
+                        <th>Deleted At</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {deletedLog.map(d => (
+                        <tr key={d.id}>
+                          <td style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: '12px', fontWeight: 500 }}>
+                            {d.ref_number || '—'}
+                          </td>
+                          <td className="text-sm">{d.company_name}</td>
+                          <td className="text-sm">{d.submitted_by}</td>
+                          <td style={{ fontWeight: 500 }}>
+                            {new Intl.NumberFormat('en-AE', { minimumFractionDigits: 2 }).format(d.amount)}
+                          </td>
+                          <td>
+                            <span className={`badge badge-${d.status_at_delete}`}>
+                              {d.status_at_delete?.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="text-sm">{d.deleted_by}</td>
+                          <td className="text-sm" style={{ maxWidth: '200px', whiteSpace: 'pre-wrap', color: '#dc2626' }}>
+                            {d.delete_reason}
+                          </td>
+                          <td className="text-muted text-sm">
+                            {new Date(d.deleted_at).toLocaleDateString('en-GB', {
+                              day: '2-digit', month: 'short', year: 'numeric',
+                              hour: '2-digit', minute: '2-digit'
+                            })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           </div>
         )}

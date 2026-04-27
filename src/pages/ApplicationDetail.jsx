@@ -168,7 +168,7 @@ function PrintView({ app }) {
 export default function ApplicationDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user, profile, isFinanceOrAbove } = useAuth()
+  const { user, profile, isFinanceOrAbove, isSuperAdmin } = useAuth()
   const printRef = useRef()
 
   const [app, setApp] = useState(null)
@@ -180,6 +180,10 @@ export default function ApplicationDetail() {
   const [escalateTo, setEscalateTo] = useState('')
   const [managers, setManagers] = useState([])
   const [attachmentUrl, setAttachmentUrl] = useState(null)
+  const [showRevert,   setShowRevert]   = useState(false)
+  const [showDelete,   setShowDelete]   = useState(false)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [actionNote2,  setActionNote2]  = useState('')
 
   const handlePrint = useReactToPrint({ content: () => printRef.current })
 
@@ -231,6 +235,59 @@ export default function ApplicationDetail() {
       })
       setNote(''); setShowEscalate(false)
       await load()
+    } finally { setActionLoading(false) }
+  }
+
+  async function revertToPending() {
+    setActionLoading(true)
+    try {
+      await supabase.from('applications').update({
+        status: 'pending',
+        outcome_note: null,
+        processed_at: null,
+      }).eq('id', id)
+      await supabase.from('audit_log').insert({
+        application_id: id, action_by: user.id,
+        action: 'reverted',
+        note: actionNote2 || 'Reverted to Pending by Finance Officer',
+      })
+      setShowRevert(false)
+      setActionNote2('')
+      await load()
+    } finally { setActionLoading(false) }
+  }
+
+  async function softDelete() {
+    if (!deleteReason.trim()) return alert('A reason is required to delete an application.')
+    setActionLoading(true)
+    try {
+      // Snapshot key fields into deleted_applications_log first
+      await supabase.from('deleted_applications_log').insert({
+        application_id:  id,
+        ref_number:      app.ref_number,
+        company_name:    app.company_name,
+        submitted_by:    app.submitted_by_name,
+        amount:          app.amount,
+        payment_reason:  app.payment_reason,
+        status_at_delete: app.status,
+        deleted_by:      profile.full_name,
+        delete_reason:   deleteReason,
+      })
+      // Soft delete — marks row, hides from all views
+      await supabase.from('applications').update({
+        deleted_at:    new Date().toISOString(),
+        deleted_by:    user.id,
+        delete_reason: deleteReason,
+      }).eq('id', id)
+      // Final audit entry
+      await supabase.from('audit_log').insert({
+        application_id: id, action_by: user.id,
+        action: 'deleted',
+        note: `Deleted by ${profile.full_name}. Reason: ${deleteReason}`,
+      })
+      setShowDelete(false)
+      setDeleteReason('')
+      navigate(isFinanceOrAbove ? '/dashboard' : '/my-applications')
     } finally { setActionLoading(false) }
   }
 
@@ -287,8 +344,54 @@ export default function ApplicationDetail() {
           <button className="btn btn-outline" onClick={shareEmail}>✉ Email</button>
           <button className="btn btn-gold" onClick={handlePrint}>⎙ Download PDF</button>
           {canEdit && <button className="btn btn-primary" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
+          {isSuperAdmin && !app.deleted_at && (
+            <button className="btn btn-danger" onClick={() => setShowDelete(true)}>🗑 Delete</button>
+          )}
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {showDelete && (
+        <div style={{
+          position:'fixed', inset:0, zIndex:3000,
+          background:'rgba(10,10,20,0.75)',
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px'
+        }}>
+          <div style={{
+            background:'#fff', borderRadius:'12px', width:'100%', maxWidth:'480px',
+            boxShadow:'0 24px 64px rgba(0,0,0,0.4)', overflow:'hidden'
+          }}>
+            <div style={{background:'#dc2626', padding:'16px 20px', display:'flex', alignItems:'center', gap:'10px'}}>
+              <span style={{fontSize:'20px'}}>🗑</span>
+              <h3 style={{color:'#fff', fontSize:'16px', fontWeight:600}}>Delete Application</h3>
+            </div>
+            <div style={{padding:'24px'}}>
+              <div className="alert alert-error" style={{marginBottom:'16px'}}>
+                <strong>This cannot be undone.</strong> The application will be hidden from all users.
+                A permanent record will be kept in the deleted applications log.
+              </div>
+              <div style={{background:'#f9fafb', borderRadius:'8px', padding:'12px', marginBottom:'16px', fontSize:'13px'}}>
+                <div><strong>Ref:</strong> {app.ref_number}</div>
+                <div><strong>Amount:</strong> AED {formatCurrency(app.amount)}</div>
+                <div><strong>Submitted by:</strong> {app.submitted_by_name}</div>
+                <div><strong>Status:</strong> {app.status?.toUpperCase()}</div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Reason for deletion <span style={{color:'#dc2626'}}>*</span></label>
+                <textarea className="form-control" rows={3}
+                  placeholder="Required: explain why this application is being deleted…"
+                  value={deleteReason} onChange={e => setDeleteReason(e.target.value)} />
+              </div>
+              <div style={{display:'flex', gap:'10px', justifyContent:'flex-end', marginTop:'8px'}}>
+                <button className="btn btn-outline" onClick={() => { setShowDelete(false); setDeleteReason('') }}>Cancel</button>
+                <button className="btn btn-danger" disabled={actionLoading || !deleteReason.trim()} onClick={softDelete}>
+                  {actionLoading ? 'Deleting…' : '🗑 Confirm Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px' }}>
         <div>
@@ -373,6 +476,41 @@ export default function ApplicationDetail() {
                       <button className="btn btn-warning" disabled={actionLoading || !escalateTo}
                         onClick={() => doAction('escalate', { escalated_to: escalateTo })}>↑ Send for Approval</button>
                       <button className="btn btn-outline" onClick={() => setShowEscalate(false)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Revert approved/rejected back to pending */}
+          {isFinanceOrAbove && ['approved','rejected'].includes(app.status) && (
+            <div className="card" style={{ marginBottom: '20px' }}>
+              <div className="card-header">
+                <h2>⚠ Revert Decision</h2>
+                <span className="text-sm text-muted">Finance Officer only</span>
+              </div>
+              <div className="card-body">
+                <div className="alert alert-warning" style={{ marginBottom: '14px' }}>
+                  This will revert the application back to <strong>Pending</strong> for re-review. The action is logged permanently.
+                </div>
+                {!showRevert ? (
+                  <button className="btn btn-warning" onClick={() => setShowRevert(true)}>
+                    ↺ Revert to Pending
+                  </button>
+                ) : (
+                  <div>
+                    <div className="form-group">
+                      <label className="form-label">Reason for reverting <span style={{color:'#dc2626'}}>*</span></label>
+                      <textarea className="form-control" placeholder="Explain why this is being reverted…"
+                        value={actionNote2} onChange={e => setActionNote2(e.target.value)} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <button className="btn btn-warning" disabled={actionLoading || !actionNote2.trim()}
+                        onClick={revertToPending}>
+                        {actionLoading ? 'Reverting…' : '↺ Confirm Revert'}
+                      </button>
+                      <button className="btn btn-outline" onClick={() => { setShowRevert(false); setActionNote2('') }}>Cancel</button>
                     </div>
                   </div>
                 )}
