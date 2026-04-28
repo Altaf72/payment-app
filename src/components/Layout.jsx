@@ -31,19 +31,15 @@ export default function Layout() {
 
         <div className="sidebar-section">Applications</div>
 
-        {!isFinanceOrAbove && (
-          <button className={`sidebar-link ${isActive('/new-application') ? 'active' : ''}`}
-            onClick={() => navigate('/new-application')}>
-            <span className="icon">＋</span> New Application
-          </button>
-        )}
+        <button className={`sidebar-link ${isActive('/new-application') ? 'active' : ''}`}
+          onClick={() => navigate('/new-application')}>
+          <span className="icon">＋</span> New Application
+        </button>
 
-        {!isFinanceOrAbove && (
-          <button className={`sidebar-link ${isActive('/my-applications') ? 'active' : ''}`}
-            onClick={() => navigate('/my-applications')}>
-            <span className="icon">📋</span> My Applications
-          </button>
-        )}
+        <button className={`sidebar-link ${isActive('/my-applications') ? 'active' : ''}`}
+          onClick={() => navigate('/my-applications')}>
+          <span className="icon">📋</span> My Applications
+        </button>
 
         {isFinanceOrAbove && (
           <button className={`sidebar-link ${isActive('/dashboard') ? 'active' : ''}`}
