@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
+import { COMPANY_PALETTE } from '../lib/companyColors'
 
 // ── Attachment popup preview ─────────────────────────────────
 function AttachmentPreview({ path, name, onClose }) {
@@ -198,6 +199,7 @@ export default function FinanceDashboard() {
   const [filterCompany, setFilterCompany]   = useState('')
   const [filterAttachment, setFilterAttachment] = useState('')
   const [companies, setCompanies]           = useState([])
+  const [companiesSorted, setCompaniesSorted] = useState([])
 
   useEffect(() => { load() }, [])
 
@@ -209,6 +211,8 @@ export default function FinanceDashboard() {
     ])
     setApplications(apps || [])
     setCompanies(cos || [])
+    const sorted = [...(cos||[])].sort((a,b)=>(a.created_at||'').localeCompare(b.created_at||''))
+    setCompaniesSorted(sorted)
     setLoading(false)
   }
 
@@ -351,7 +355,18 @@ export default function FinanceDashboard() {
                         {app.ref_number || '—'}
                       </span>
                     </td>
-                    <td className="text-sm">{app.company_name}</td>
+                    <td className="text-sm">
+                      {(() => {
+                        const idx = companiesSorted.findIndex(c => c.name === app.company_name)
+                        const col = COMPANY_PALETTE[Math.max(0,idx) % COMPANY_PALETTE.length]
+                        return (
+                          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                            <span style={{width:'8px',height:'8px',borderRadius:'50%',background:col?.accent||'#999',flexShrink:0,display:'inline-block'}}/>
+                            {app.company_name}
+                          </div>
+                        )
+                      })()}
+                    </td>
                     <td className="text-sm">{app.submitted_by_name}</td>
                     <td style={{maxWidth:'180px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                       {app.payment_reason}

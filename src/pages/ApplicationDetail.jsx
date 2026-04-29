@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useReactToPrint } from 'react-to-print'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency } from '../lib/utils'
+import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
 
 function toProperCase(str) {
   if (!str) return ''
@@ -27,6 +27,8 @@ function AuditTimeline({ log }) {
     returned:         { bg:'#ede9fe', border:'#8b5cf6', text:'#5b21b6', icon:'↩' },
     created:          { bg:'#f3f4f6', border:'#9ca3af', text:'#374151', icon:'○' },
     edited:           { bg:'#f3f4f6', border:'#9ca3af', text:'#374151', icon:'✎' },
+    reverted:         { bg:'#fef3c7', border:'#f59e0b', text:'#92400e', icon:'↺' },
+    deleted:          { bg:'#fee2e2', border:'#ef4444', text:'#991b1b', icon:'🗑' },
     attachment_added: { bg:'#e0f2fe', border:'#0ea5e9', text:'#0369a1', icon:'📎' },
   }
   return (
@@ -41,7 +43,7 @@ function AuditTimeline({ log }) {
             </div>
             <div className="timeline-body">
               <div className="timeline-action" style={{ color: c.text }}>
-                {e.action.charAt(0).toUpperCase() + e.action.slice(1).replace('_', ' ')}
+                {e.action.charAt(0).toUpperCase() + e.action.slice(1).replace(/_/g, ' ')}
               </div>
               <div className="timeline-meta">{e.actor} · {fmtDate(e.created_at)}</div>
               {e.note && <div className="timeline-note">{e.note}</div>}
@@ -53,8 +55,12 @@ function AuditTimeline({ log }) {
   )
 }
 
-function PrintView({ app }) {
-  const date = fmtDate(app.submitted_at || app.created_at)
+// ── Print/PDF layout ─────────────────────────────────────────
+function PrintView({ app, companyColor }) {
+  const date   = fmtDate(app.submitted_at || app.created_at)
+  const accent = companyColor?.accent  || '#1d4ed8'
+  const pastel = companyColor?.pastel  || '#dbeafe'
+
   const lCell = {
     background: '#f5f0e8', padding: '10px 14px', border: '1px solid #c8b99a',
     fontSize: '15px', fontWeight: 700, verticalAlign: 'top', textAlign: 'center',
@@ -64,8 +70,11 @@ function PrintView({ app }) {
     padding: '10px 14px', border: '1px solid #c8b99a',
     fontSize: '16px', verticalAlign: 'top', textAlign: 'center', wordBreak: 'break-word',
   }
+
   return (
-    <div style={{ padding: '32px 40px', fontFamily: "'Cormorant Garamond',serif", maxWidth: '800px', margin: '0 auto' }}>
+    <div style={{ padding: '32px 40px', fontFamily: "'Cormorant Garamond',serif", maxWidth: '800px', margin: '0 auto', position: 'relative' }}>
+
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
         {app.logo_url
           ? <img src={app.logo_url} alt="logo" style={{ height: '52px', objectFit: 'contain' }} />
@@ -77,15 +86,16 @@ function PrintView({ app }) {
         </div>
         <div style={{ textAlign: 'right', fontSize: '12px', color: '#666', minWidth: '120px' }}>
           <div>DATE: {date}</div>
-          <div style={{ marginTop: '4px', fontFamily: 'monospace', fontSize: '11px' }}>{app.ref_number}</div>
+          <div style={{ marginTop: '4px', fontFamily: 'monospace', fontSize: '11px', fontWeight: 700 }}>{app.ref_number}</div>
         </div>
       </div>
 
+      {/* Table */}
       <table style={{ width: '100%', borderCollapse: 'collapse', border: '1.5px solid #8b6914' }}>
         <tbody>
           <tr>
             <td style={lCell}>申请部门<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Company</span></td>
-            <td style={vCell}>{toProperCase(app.company_name)}</td>
+            <td style={{ ...vCell, fontWeight: 700 }}>{toProperCase(app.company_name)}</td>
             <td style={lCell}>申请人<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Applicant</span></td>
             <td style={vCell}>{toProperCase(app.submitted_by_name)}</td>
           </tr>
@@ -121,13 +131,14 @@ function PrintView({ app }) {
             <td style={lCell}>备注说明<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Remarks</span></td>
             <td style={{ ...vCell, minHeight: '60px', whiteSpace: 'pre-wrap' }} colSpan={3}>{app.remarks || '—'}</td>
           </tr>
+          {/* Signature row */}
           <tr>
             <td colSpan={4} style={{ border: '1px solid #c8b99a', padding: '0' }}>
               <div style={{ display: 'flex' }}>
                 {[
                   ['部门主管审批签字', 'Department Head'],
-                  ['财务部审批签字', 'Finance Officer'],
-                  ['总经理审批签字', 'General Manager'],
+                  ['财务部审批签字',   'Finance Officer'],
+                  ['总经理审批签字',   'General Manager'],
                 ].map(([cn, en], i) => (
                   <div key={i} style={{ flex: 1, borderRight: i < 2 ? '1px solid #c8b99a' : 'none', padding: '10px 12px', textAlign: 'center' }}>
                     <div style={{ fontSize: '13px', fontFamily: "'Noto Serif SC',serif", fontWeight: 600, marginBottom: '2px' }}>{cn}</div>
@@ -141,62 +152,77 @@ function PrintView({ app }) {
           </tr>
         </tbody>
       </table>
+
+      {/* Status stamp */}
       <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{
           fontSize: '14px', fontWeight: 700, letterSpacing: '.12em',
-          color: app.status === 'approved' ? '#7f1d1d'
-               : app.status === 'rejected' ? '#7f1d1d'
-               : app.status === 'pending'  ? '#92400e'
-               : '#374151',
-          background: app.status === 'approved' ? '#fee2e2'
-                    : app.status === 'rejected' ? '#fee2e2'
-                    : app.status === 'pending'  ? '#fef3c7'
-                    : '#f3f4f6',
-          padding: '4px 14px', borderRadius: '4px',
-          border: '1.5px solid currentColor',
+          color: ['approved'].includes(app.status) ? '#7f1d1d' : ['rejected'].includes(app.status) ? '#7f1d1d' : '#92400e',
+          background: ['approved','rejected'].includes(app.status) ? '#fee2e2' : '#fef3c7',
+          padding: '4px 14px', borderRadius: '4px', border: '1.5px solid currentColor',
         }}>
           ◆ {app.status?.toUpperCase()}
         </span>
-        <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-          Generated: {fmtDate(new Date().toISOString())}
-        </span>
+        <span style={{ fontSize: '11px', color: '#9ca3af' }}>Generated: {fmtDate(new Date().toISOString())}</span>
+      </div>
+
+      {/* ── Company colour identity strip (bottom, pale, low ink) ── */}
+      <div style={{
+        marginTop: '12px',
+        height: '10px',
+        borderRadius: '3px',
+        background: pastel,
+        border: `1px solid ${accent}`,
+        position: 'relative',
+        overflow: 'hidden',
+      }}>
+        {/* subtle left accent */}
+        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '32px', background: accent, opacity: 0.25 }} />
+        <div style={{
+          position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
+          fontSize: '7px', fontWeight: 700, letterSpacing: '.1em', color: accent, opacity: 0.7,
+        }}>
+          {app.company_name?.toUpperCase()}
+        </div>
       </div>
     </div>
   )
 }
 
 export default function ApplicationDetail() {
-  const { id } = useParams()
-  const navigate = useNavigate()
+  const { id }      = useParams()
+  const navigate    = useNavigate()
   const { user, profile, isFinanceOrAbove, isSuperAdmin } = useAuth()
-  const printRef = useRef()
+  const printRef    = useRef()
 
-  const [app, setApp] = useState(null)
-  const [auditLog, setAuditLog] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [app, setApp]               = useState(null)
+  const [auditLog, setAuditLog]     = useState([])
+  const [loading, setLoading]       = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
-  const [note, setNote] = useState('')
-  const [showEscalate, setShowEscalate] = useState(false)
+  const [note, setNote]             = useState('')
+  const [showEscalate, setShowEscalate]   = useState(false)
   const [escalateTo, setEscalateTo] = useState('')
-  const [managers, setManagers] = useState([])
+  const [managers, setManagers]     = useState([])
   const [attachmentUrl, setAttachmentUrl] = useState(null)
-  const [showRevert,   setShowRevert]   = useState(false)
-  const [showDelete,   setShowDelete]   = useState(false)
-  const [deleteReason, setDeleteReason] = useState('')
-  const [actionNote2,  setActionNote2]  = useState('')
-
-  const handlePrint = useReactToPrint({ content: () => printRef.current })
+  const [companyColor, setCompanyColor]   = useState(null)
+  const [allCompanies, setAllCompanies]   = useState([])
+  const [downloading, setDownloading]     = useState(false)
+  const [showRevert,   setShowRevert]     = useState(false)
+  const [showDelete,   setShowDelete]     = useState(false)
+  const [deleteReason, setDeleteReason]   = useState('')
+  const [actionNote2,  setActionNote2]    = useState('')
 
   useEffect(() => { load() }, [id])
 
   async function load() {
     setLoading(true)
-    const [{ data: appData }, { data: logData }, { data: mgrs }] = await Promise.all([
+    const [{ data: appData }, { data: logData }, { data: mgrs }, { data: cos }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
       supabase.from('audit_log')
         .select('id, action, note, created_at, users!action_by(full_name)')
         .eq('application_id', id).order('created_at'),
-      supabase.from('users').select('id,full_name,role').in('role', ['ceo', 'cfo']),
+      supabase.from('users').select('id,full_name,role').in('role', ['ceo','cfo']),
+      supabase.from('companies').select('*').order('created_at'),
     ])
 
     let logoUrl = null
@@ -208,23 +234,72 @@ export default function ApplicationDetail() {
     setApp(appData ? { ...appData, logo_url: logoUrl } : null)
     setAuditLog((logData || []).map(l => ({ ...l, actor: l.users?.full_name || 'System' })))
     setManagers(mgrs || [])
+    setAllCompanies(cos || [])
+
+    // Assign company colour by creation order
+    if (appData?.company_id && cos) {
+      const sorted = [...cos].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))
+      const idx    = sorted.findIndex(c => c.id === appData.company_id)
+      setCompanyColor(COMPANY_PALETTE[Math.max(0, idx) % COMPANY_PALETTE.length])
+    }
 
     if (appData?.attachment_path) {
       const { data: signed } = await supabase.storage
-        .from('attachments')
-        .createSignedUrl(appData.attachment_path, 3600)
+        .from('attachments').createSignedUrl(appData.attachment_path, 3600)
       setAttachmentUrl(signed?.signedUrl || null)
     }
     setLoading(false)
   }
 
+  // ── Print — direct system dialog ────────────────────────────
+  function handlePrint() {
+    const printWindow = window.open('', '_blank', 'width=900,height=700')
+    const html = printRef.current?.innerHTML || ''
+    printWindow.document.write(`
+      <!DOCTYPE html><html><head>
+      <meta charset="UTF-8"/>
+      <link rel="preconnect" href="https://fonts.googleapis.com"/>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"/>
+      <style>
+        body { margin: 0; padding: 0; font-family: 'Cormorant Garamond', serif; }
+        @media print { @page { margin: 10mm; } }
+      </style>
+      </head><body>${html}</body></html>
+    `)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => { printWindow.print(); printWindow.close() }, 800)
+  }
+
+  // ── Download — silent PDF via html2pdf.js ───────────────────
+  async function handleDownload() {
+    setDownloading(true)
+    try {
+      const html2pdf = (await import('html2pdf.js')).default
+      const element  = printRef.current
+      const filename = buildFilename(app.ref_number)
+      const opt = {
+        margin:       [10, 10, 10, 10],
+        filename,
+        image:        { type: 'jpeg', quality: 0.92 },
+        html2canvas:  { scale: 2, useCORS: true, logging: false },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      }
+      await html2pdf().set(opt).from(element).save()
+    } catch (err) {
+      alert('Download failed: ' + err.message)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   async function doAction(action, extra = {}) {
     setActionLoading(true)
     try {
-      const statusMap = { approve: 'approved', reject: 'rejected', return: 'returned', escalate: 'escalated' }
+      const statusMap = { approve:'approved', reject:'rejected', return:'returned', escalate:'escalated' }
       await supabase.from('applications').update({
         status: statusMap[action],
-        outcome_note: ['reject', 'return'].includes(action) ? note : null,
+        outcome_note: ['reject','return'].includes(action) ? note : null,
         processed_at: new Date().toISOString(),
         ...extra,
       }).eq('id', id)
@@ -242,51 +317,36 @@ export default function ApplicationDetail() {
     setActionLoading(true)
     try {
       await supabase.from('applications').update({
-        status: 'pending',
-        outcome_note: null,
-        processed_at: null,
+        status: 'pending', outcome_note: null, processed_at: null,
       }).eq('id', id)
       await supabase.from('audit_log').insert({
-        application_id: id, action_by: user.id,
-        action: 'reverted',
+        application_id: id, action_by: user.id, action: 'reverted',
         note: actionNote2 || 'Reverted to Pending by Finance Officer',
       })
-      setShowRevert(false)
-      setActionNote2('')
+      setShowRevert(false); setActionNote2('')
       await load()
     } finally { setActionLoading(false) }
   }
 
   async function softDelete() {
-    if (!deleteReason.trim()) return alert('A reason is required to delete an application.')
+    if (!deleteReason.trim()) return alert('A reason is required.')
     setActionLoading(true)
     try {
-      // Snapshot key fields into deleted_applications_log first
       await supabase.from('deleted_applications_log').insert({
-        application_id:  id,
-        ref_number:      app.ref_number,
-        company_name:    app.company_name,
-        submitted_by:    app.submitted_by_name,
-        amount:          app.amount,
-        payment_reason:  app.payment_reason,
-        status_at_delete: app.status,
-        deleted_by:      profile.full_name,
-        delete_reason:   deleteReason,
-      })
-      // Soft delete — marks row, hides from all views
-      await supabase.from('applications').update({
-        deleted_at:    new Date().toISOString(),
-        deleted_by:    user.id,
+        application_id: id, ref_number: app.ref_number,
+        company_name: app.company_name, submitted_by: app.submitted_by_name,
+        amount: app.amount, payment_reason: app.payment_reason,
+        status_at_delete: app.status, deleted_by: profile.full_name,
         delete_reason: deleteReason,
+      })
+      await supabase.from('applications').update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: user.id, delete_reason: deleteReason,
       }).eq('id', id)
-      // Final audit entry
       await supabase.from('audit_log').insert({
-        application_id: id, action_by: user.id,
-        action: 'deleted',
+        application_id: id, action_by: user.id, action: 'deleted',
         note: `Deleted by ${profile.full_name}. Reason: ${deleteReason}`,
       })
-      setShowDelete(false)
-      setDeleteReason('')
       navigate(isFinanceOrAbove ? '/dashboard' : '/my-applications')
     } finally { setActionLoading(false) }
   }
@@ -299,41 +359,42 @@ export default function ApplicationDetail() {
   function shareEmail() {
     const subject = `Payment Application ${app.ref_number} — ${app.company_name}`
     const body = [
-      `Reference: ${app.ref_number}`,
-      `Company: ${app.company_name}`,
-      `Applicant: ${app.submitted_by_name}`,
-      `Payment Reason: ${app.payment_reason}`,
-      `Amount: AED ${formatCurrency(app.amount)}`,
-      `Payment Method: ${app.payment_method_name || '—'}`,
-      `Receiving Company: ${app.payee_name || '—'}`,
-      `Bank: ${app.bank_name || '—'}`,
-      `Account/IBAN: ${app.bank_account || '—'}`,
-      `Status: ${app.status?.toUpperCase()}`,
-      `Date: ${fmtDate(app.submitted_at || app.created_at)}`,
-      ``,
-      `View application: ${window.location.href}`,
+      `Reference: ${app.ref_number}`, `Company: ${app.company_name}`,
+      `Applicant: ${app.submitted_by_name}`, `Payment Reason: ${app.payment_reason}`,
+      `Amount: AED ${formatCurrency(app.amount)}`, `Payment Method: ${app.payment_method_name || '—'}`,
+      `Receiving Company: ${app.payee_name || '—'}`, `Bank: ${app.bank_name || '—'}`,
+      `Account/IBAN: ${app.bank_account || '—'}`, `Status: ${app.status?.toUpperCase()}`,
+      `Date: ${fmtDate(app.submitted_at || app.created_at)}`, ``,
+      `View: ${window.location.href}`,
     ].join('\n')
     window.open(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`)
   }
 
   if (loading) return <div className="empty-state"><p>Loading…</p></div>
-  if (!app) return <div className="empty-state"><h3>Application not found</h3></div>
+  if (!app)    return <div className="empty-state"><h3>Application not found</h3></div>
 
-  const canAct = isFinanceOrAbove && ['pending', 'escalated'].includes(app.status)
+  const canAct  = isFinanceOrAbove && ['pending','escalated'].includes(app.status)
   const isOwner = app.submitted_by === user?.id
-  const canEdit = isOwner && ['draft', 'returned'].includes(app.status)
-  const isMgr = ['ceo', 'cfo'].includes(profile?.role)
+  const canEdit = isOwner && ['draft','returned'].includes(app.status)
+  const isMgr   = ['ceo','cfo'].includes(profile?.role)
+
+  const accentColor = companyColor?.accent || '#1d4ed8'
+  const pastelColor = companyColor?.pastel || '#dbeafe'
 
   return (
     <div>
-      <div style={{ display: 'none' }}>
-        <div ref={printRef}><PrintView app={app} /></div>
+      {/* Hidden print/download target */}
+      <div style={{ position: 'fixed', left: '-9999px', top: 0, width: '800px' }}>
+        <div ref={printRef}><PrintView app={app} companyColor={companyColor} /></div>
       </div>
 
+      {/* Header */}
       <div className="page-header flex justify-between items-center no-print">
         <div>
           <button className="btn btn-outline btn-sm" style={{ marginBottom: '8px' }} onClick={() => navigate(-1)}>← Back</button>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Company colour dot */}
+            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: accentColor, flexShrink: 0, display: 'inline-block' }} title={companyColor?.name} />
             {app.ref_number || 'Application'}
             <StatusBadge status={app.status} />
           </h1>
@@ -342,7 +403,10 @@ export default function ApplicationDetail() {
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button className="btn btn-outline" onClick={shareWhatsApp}>💬 WhatsApp</button>
           <button className="btn btn-outline" onClick={shareEmail}>✉ Email</button>
-          <button className="btn btn-gold" onClick={handlePrint}>⎙ Download PDF</button>
+          <button className="btn btn-outline" onClick={handlePrint}>🖨 Print</button>
+          <button className="btn btn-gold" onClick={handleDownload} disabled={downloading}>
+            {downloading ? '⏳ Saving…' : '↓ Download PDF'}
+          </button>
           {canEdit && <button className="btn btn-primary" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
           {isSuperAdmin && !app.deleted_at && (
             <button className="btn btn-danger" onClick={() => setShowDelete(true)}>🗑 Delete</button>
@@ -350,39 +414,33 @@ export default function ApplicationDetail() {
         </div>
       </div>
 
-      {/* Delete confirmation modal */}
+      {/* Company colour accent bar on detail page */}
+      <div style={{ height: '4px', borderRadius: '2px', background: pastelColor, border: `1px solid ${accentColor}`, marginBottom: '20px', opacity: 0.8 }} />
+
+      {/* Delete modal */}
       {showDelete && (
-        <div style={{
-          position:'fixed', inset:0, zIndex:3000,
-          background:'rgba(10,10,20,0.75)',
-          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px'
-        }}>
-          <div style={{
-            background:'#fff', borderRadius:'12px', width:'100%', maxWidth:'480px',
-            boxShadow:'0 24px 64px rgba(0,0,0,0.4)', overflow:'hidden'
-          }}>
-            <div style={{background:'#dc2626', padding:'16px 20px', display:'flex', alignItems:'center', gap:'10px'}}>
-              <span style={{fontSize:'20px'}}>🗑</span>
-              <h3 style={{color:'#fff', fontSize:'16px', fontWeight:600}}>Delete Application</h3>
+        <div style={{ position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.75)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px' }}>
+          <div style={{ background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'480px',boxShadow:'0 24px 64px rgba(0,0,0,0.4)',overflow:'hidden' }}>
+            <div style={{ background:'#dc2626',padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px' }}>
+              <span style={{ fontSize:'20px' }}>🗑</span>
+              <h3 style={{ color:'#fff',fontSize:'16px',fontWeight:600 }}>Delete Application</h3>
             </div>
-            <div style={{padding:'24px'}}>
-              <div className="alert alert-error" style={{marginBottom:'16px'}}>
-                <strong>This cannot be undone.</strong> The application will be hidden from all users.
-                A permanent record will be kept in the deleted applications log.
+            <div style={{ padding:'24px' }}>
+              <div className="alert alert-error" style={{ marginBottom:'16px' }}>
+                <strong>This cannot be undone.</strong> A permanent record will be kept in the deleted log.
               </div>
-              <div style={{background:'#f9fafb', borderRadius:'8px', padding:'12px', marginBottom:'16px', fontSize:'13px'}}>
+              <div style={{ background:'#f9fafb',borderRadius:'8px',padding:'12px',marginBottom:'16px',fontSize:'13px' }}>
                 <div><strong>Ref:</strong> {app.ref_number}</div>
                 <div><strong>Amount:</strong> AED {formatCurrency(app.amount)}</div>
                 <div><strong>Submitted by:</strong> {app.submitted_by_name}</div>
                 <div><strong>Status:</strong> {app.status?.toUpperCase()}</div>
               </div>
               <div className="form-group">
-                <label className="form-label">Reason for deletion <span style={{color:'#dc2626'}}>*</span></label>
-                <textarea className="form-control" rows={3}
-                  placeholder="Required: explain why this application is being deleted…"
+                <label className="form-label">Reason for deletion <span style={{ color:'#dc2626' }}>*</span></label>
+                <textarea className="form-control" rows={3} placeholder="Required: explain why this is being deleted…"
                   value={deleteReason} onChange={e => setDeleteReason(e.target.value)} />
               </div>
-              <div style={{display:'flex', gap:'10px', justifyContent:'flex-end', marginTop:'8px'}}>
+              <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'8px' }}>
                 <button className="btn btn-outline" onClick={() => { setShowDelete(false); setDeleteReason('') }}>Cancel</button>
                 <button className="btn btn-danger" disabled={actionLoading || !deleteReason.trim()} onClick={softDelete}>
                   {actionLoading ? 'Deleting…' : '🗑 Confirm Delete'}
@@ -399,22 +457,22 @@ export default function ApplicationDetail() {
             <div className="card-header"><h2>Payment Details</h2></div>
             <div className="card-body">
               <div className="form-row">
-                <div><div className="form-label">Company</div><div style={{ fontWeight: 500 }}>{app.company_name}</div></div>
+                <div>
+                  <div className="form-label">Company</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px', fontWeight:500 }}>
+                    <span style={{ width:'10px', height:'10px', borderRadius:'50%', background: accentColor, display:'inline-block', flexShrink:0 }} />
+                    {app.company_name}
+                  </div>
+                </div>
                 <div><div className="form-label">Applicant</div><div>{toProperCase(app.submitted_by_name)}</div></div>
               </div>
               <hr className="divider" />
-              <div className="form-group">
-                <div className="form-label">Payment Reason</div>
-                <div>{toProperCase(app.payment_reason)}</div>
-              </div>
+              <div className="form-group"><div className="form-label">Payment Reason</div><div>{toProperCase(app.payment_reason)}</div></div>
               <div className="form-row">
                 <div><div className="form-label">Payment Method</div><div>{toProperCase(app.payment_method_name) || '—'}</div></div>
-                <div><div className="form-label">Amount</div><div style={{ fontWeight: 600, fontSize: '17px' }}>AED {formatCurrency(app.amount)}</div></div>
+                <div><div className="form-label">Amount</div><div style={{ fontWeight:600, fontSize:'17px' }}>AED {formatCurrency(app.amount)}</div></div>
               </div>
-              <div className="form-group">
-                <div className="form-label">Amount in Words</div>
-                <div className="text-muted">{app.amount_words}</div>
-              </div>
+              <div className="form-group"><div className="form-label">Amount in Words</div><div className="text-muted">{app.amount_words}</div></div>
               <hr className="divider" />
               <div className="form-row">
                 <div><div className="form-label">Receiving Company</div><div>{toProperCase(app.payee_name) || '—'}</div></div>
@@ -422,14 +480,9 @@ export default function ApplicationDetail() {
               </div>
               <div className="form-group">
                 <div className="form-label">Account / IBAN</div>
-                <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: '13px' }}>{app.bank_account || '—'}</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:'13px' }}>{app.bank_account || '—'}</div>
               </div>
-              {app.remarks && (
-                <div className="form-group">
-                  <div className="form-label">Remarks</div>
-                  <div style={{ whiteSpace: 'pre-line' }}>{app.remarks}</div>
-                </div>
-              )}
+              {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
               {attachmentUrl && (
                 <div className="form-group">
                   <div className="form-label">📎 Attachment</div>
@@ -442,25 +495,20 @@ export default function ApplicationDetail() {
           </div>
 
           {canAct && (
-            <div className="card" style={{ marginBottom: '20px' }}>
+            <div className="card" style={{ marginBottom:'20px' }}>
               <div className="card-header"><h2>Review Application</h2></div>
               <div className="card-body">
                 <div className="form-group">
                   <label className="form-label">Note (shown to applicant on reject/return)</label>
-                  <textarea className="form-control" placeholder="Optional note…"
-                    value={note} onChange={e => setNote(e.target.value)} />
+                  <textarea className="form-control" placeholder="Optional note…" value={note} onChange={e => setNote(e.target.value)} />
                 </div>
                 {!showEscalate ? (
-                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <div style={{ display:'flex', gap:'10px', flexWrap:'wrap' }}>
                     <button className="btn btn-success" disabled={actionLoading} onClick={() => doAction('approve')}>✓ Approve</button>
                     <button className="btn btn-warning" disabled={actionLoading}
-                      onClick={() => { if (!note.trim()) return alert('Add a note explaining what to correct'); doAction('return') }}>
-                      ↩ Return for Edit
-                    </button>
+                      onClick={() => { if (!note.trim()) return alert('Add a note explaining what to correct'); doAction('return') }}>↩ Return for Edit</button>
                     <button className="btn btn-danger" disabled={actionLoading}
-                      onClick={() => { if (!note.trim()) return alert('Add a rejection reason'); doAction('reject') }}>
-                      ✕ Reject
-                    </button>
+                      onClick={() => { if (!note.trim()) return alert('Add a rejection reason'); doAction('reject') }}>✕ Reject</button>
                     <button className="btn btn-outline" disabled={actionLoading} onClick={() => setShowEscalate(true)}>↑ Escalate</button>
                   </div>
                 ) : (
@@ -472,7 +520,7 @@ export default function ApplicationDetail() {
                         {managers.map(m => <option key={m.id} value={m.id}>{m.full_name} ({m.role.toUpperCase()})</option>)}
                       </select>
                     </div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ display:'flex', gap:'10px' }}>
                       <button className="btn btn-warning" disabled={actionLoading || !escalateTo}
                         onClick={() => doAction('escalate', { escalated_to: escalateTo })}>↑ Send for Approval</button>
                       <button className="btn btn-outline" onClick={() => setShowEscalate(false)}>Cancel</button>
@@ -483,31 +531,24 @@ export default function ApplicationDetail() {
             </div>
           )}
 
-          {/* Revert approved/rejected back to pending */}
           {isFinanceOrAbove && ['approved','rejected'].includes(app.status) && (
-            <div className="card" style={{ marginBottom: '20px' }}>
-              <div className="card-header">
-                <h2>⚠ Revert Decision</h2>
-                <span className="text-sm text-muted">Finance Officer only</span>
-              </div>
+            <div className="card" style={{ marginBottom:'20px' }}>
+              <div className="card-header"><h2>⚠ Revert Decision</h2></div>
               <div className="card-body">
-                <div className="alert alert-warning" style={{ marginBottom: '14px' }}>
-                  This will revert the application back to <strong>Pending</strong> for re-review. The action is logged permanently.
+                <div className="alert alert-warning" style={{ marginBottom:'14px' }}>
+                  Reverts the application back to <strong>Pending</strong> for re-review. Logged permanently.
                 </div>
                 {!showRevert ? (
-                  <button className="btn btn-warning" onClick={() => setShowRevert(true)}>
-                    ↺ Revert to Pending
-                  </button>
+                  <button className="btn btn-warning" onClick={() => setShowRevert(true)}>↺ Revert to Pending</button>
                 ) : (
                   <div>
                     <div className="form-group">
-                      <label className="form-label">Reason for reverting <span style={{color:'#dc2626'}}>*</span></label>
+                      <label className="form-label">Reason for reverting <span style={{ color:'#dc2626' }}>*</span></label>
                       <textarea className="form-control" placeholder="Explain why this is being reverted…"
                         value={actionNote2} onChange={e => setActionNote2(e.target.value)} />
                     </div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      <button className="btn btn-warning" disabled={actionLoading || !actionNote2.trim()}
-                        onClick={revertToPending}>
+                    <div style={{ display:'flex', gap:'10px' }}>
+                      <button className="btn btn-warning" disabled={actionLoading || !actionNote2.trim()} onClick={revertToPending}>
                         {actionLoading ? 'Reverting…' : '↺ Confirm Revert'}
                       </button>
                       <button className="btn btn-outline" onClick={() => { setShowRevert(false); setActionNote2('') }}>Cancel</button>
@@ -519,7 +560,7 @@ export default function ApplicationDetail() {
           )}
 
           {isMgr && app.status === 'escalated' && app.escalated_to === user?.id && (
-            <div className="card" style={{ marginBottom: '20px' }}>
+            <div className="card" style={{ marginBottom:'20px' }}>
               <div className="card-header"><h2>Management Approval</h2></div>
               <div className="card-body">
                 <div className="alert alert-warning">This application has been escalated to you for final approval.</div>
@@ -527,7 +568,7 @@ export default function ApplicationDetail() {
                   <label className="form-label">Decision note</label>
                   <textarea className="form-control" placeholder="Add a note…" value={note} onChange={e => setNote(e.target.value)} />
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display:'flex', gap:'10px' }}>
                   <button className="btn btn-success" disabled={actionLoading} onClick={() => doAction('approve')}>✓ Approve</button>
                   <button className="btn btn-danger" disabled={actionLoading}
                     onClick={() => { if (!note.trim()) return alert('Add a reason'); doAction('reject') }}>✕ Reject</button>
@@ -537,8 +578,8 @@ export default function ApplicationDetail() {
           )}
 
           {!isFinanceOrAbove && app.outcome_note && (
-            <div className={`alert ${app.status === 'approved' ? 'alert-success' : app.status === 'returned' ? 'alert-warning' : 'alert-error'}`}>
-              <strong>{app.status === 'returned' ? 'Please correct and resubmit:' : app.status === 'rejected' ? 'Rejection reason:' : 'Note:'}</strong>
+            <div className={`alert ${app.status==='approved'?'alert-success':app.status==='returned'?'alert-warning':'alert-error'}`}>
+              <strong>{app.status==='returned'?'Please correct and resubmit:':app.status==='rejected'?'Rejection reason:':'Note:'}</strong>
               {' '}{app.outcome_note}
             </div>
           )}
