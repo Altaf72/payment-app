@@ -100,7 +100,7 @@ function PrintView({ app, companyColor }) {
             <td style={vCell}>{toProperCase(app.submitted_by_name)}</td>
           </tr>
           <tr>
-            <td style={lCell}>付款事由<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Payment Reason</span></td>
+            <td style={lCell}>付款事由<br /><span style={{ fontSize: '14px', fontWeight: 400 }}>Payment Reason</span></td>
             <td style={vCell} colSpan={3}>{toProperCase(app.payment_reason)}</td>
           </tr>
           <tr>
