@@ -55,96 +55,160 @@ function AuditTimeline({ log }) {
   )
 }
 
-// ── Print/PDF layout ─────────────────────────────────────────
+// ── Print/PDF layout — fully self-contained, no app CSS ──────
 function PrintView({ app, companyColor }) {
   const date   = fmtDate(app.submitted_at || app.created_at)
-  const accent = companyColor?.accent  || '#1d4ed8'
-  const pastel = companyColor?.pastel  || '#dbeafe'
+  const accent = companyColor?.accent || '#8b6914'
+  const pastel = companyColor?.pastel || '#fef3c7'
+
+  // Base reset wrapper — isolates from app CSS completely
+  const wrap = {
+    all: 'initial',
+    display: 'block',
+    fontFamily: "Georgia, 'Times New Roman', serif",
+    fontSize: '13px',
+    lineHeight: '1.4',
+    color: '#111',
+    background: '#fff',
+    width: '740px',
+    padding: '36px 44px',
+    margin: '0 auto',
+    boxSizing: 'border-box',
+  }
 
   const lCell = {
-    background: '#f5f0e8', padding: '10px 14px', border: '1px solid #c8b99a',
-    fontSize: '15px', fontWeight: 700, verticalAlign: 'top', textAlign: 'center',
-    width: '140px', fontFamily: "'Noto Serif SC',serif",
+    background: '#f5f0e8',
+    padding: '9px 12px',
+    border: '1px solid #c8b99a',
+    fontSize: '12px',
+    fontWeight: 'bold',
+    verticalAlign: 'top',
+    textAlign: 'center',
+    width: '130px',
+    fontFamily: "Georgia, serif",
+    color: '#2a1a00',
   }
+
   const vCell = {
-    padding: '10px 14px', border: '1px solid #c8b99a',
-    fontSize: '16px', verticalAlign: 'top', textAlign: 'center', wordBreak: 'break-word',
+    padding: '9px 13px',
+    border: '1px solid #c8b99a',
+    fontSize: '13px',
+    verticalAlign: 'middle',
+    textAlign: 'center',
+    wordBreak: 'break-word',
+    color: '#111',
+    background: '#fff',
+    fontFamily: "Georgia, serif",
+  }
+
+  const subLabel = {
+    display: 'block',
+    fontSize: '10px',
+    fontWeight: 'normal',
+    color: '#7a5c00',
+    marginTop: '2px',
+    fontFamily: "Georgia, serif",
   }
 
   return (
-    <div style={{ padding: '32px 40px', fontFamily: "'Cormorant Garamond',serif", maxWidth: '800px', margin: '0 auto', position: 'relative' }}>
-
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-        {app.logo_url
-          ? <img src={app.logo_url} alt="logo" style={{ height: '52px', objectFit: 'contain' }} />
-          : <div style={{ width: '52px' }} />
-        }
-        <div style={{ textAlign: 'center', flex: 1 }}>
-          <div style={{ fontFamily: "'Noto Serif SC',serif", fontSize: '29px', fontWeight: 700, letterSpacing: '.2em' }}>付款申请单</div>
-          <div style={{ fontSize: '15px', letterSpacing: '.35em', marginTop: '4px', color: '#333', fontWeight: 600 }}>PAYMENT APPLICATION</div>
+    <div style={wrap}>
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+        <div style={{ width: '80px' }}>
+          {app.logo_url && <img src={app.logo_url} alt="" style={{ maxHeight: '48px', maxWidth: '80px', objectFit: 'contain', display: 'block' }} />}
         </div>
-        <div style={{ textAlign: 'right', fontSize: '12px', color: '#666', minWidth: '120px' }}>
-          <div>DATE: {date}</div>
-          <div style={{ marginTop: '4px', fontFamily: 'monospace', fontSize: '11px', fontWeight: 700 }}>{app.ref_number}</div>
+        <div style={{ textAlign: 'center', flex: 1 }}>
+          <div style={{ fontSize: '22px', fontWeight: 'bold', letterSpacing: '6px', color: '#1a0a00', fontFamily: "Georgia, serif", marginBottom: '3px' }}>
+            付款申请单
+          </div>
+          <div style={{ fontSize: '13px', letterSpacing: '5px', color: '#3a2a00', fontWeight: 'bold', fontFamily: "Georgia, serif" }}>
+            PAYMENT APPLICATION
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', width: '110px' }}>
+          <div style={{ fontSize: '11px', color: '#555', fontFamily: "Georgia, serif" }}>DATE: {date}</div>
+          <div style={{ fontSize: '10px', color: '#333', fontFamily: 'monospace', marginTop: '3px', fontWeight: 'bold' }}>{app.ref_number}</div>
         </div>
       </div>
 
-      {/* Table */}
-      <table style={{ width: '100%', borderCollapse: 'collapse', border: '1.5px solid #8b6914' }}>
+      {/* ── Divider ── */}
+      <div style={{ borderTop: '2px solid #8b6914', marginBottom: '14px' }} />
+
+      {/* ── Main table ── */}
+      <table style={{ width: '100%', borderCollapse: 'collapse', border: '1.5px solid #8b6914', fontFamily: "Georgia, serif" }}>
         <tbody>
+          {/* Row 1: Company + Applicant */}
           <tr>
-            <td style={lCell}>申请部门<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Company</span></td>
-            <td style={{ ...vCell, fontWeight: 700 }}>{toProperCase(app.company_name)}</td>
-            <td style={lCell}>申请人<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Applicant</span></td>
+            <td style={lCell}>申请部门<span style={subLabel}>Company</span></td>
+            <td style={{ ...vCell, fontWeight: 'bold' }}>{toProperCase(app.company_name)}</td>
+            <td style={lCell}>申请人<span style={subLabel}>Applicant</span></td>
             <td style={vCell}>{toProperCase(app.submitted_by_name)}</td>
           </tr>
+          {/* Payment Reason */}
           <tr>
-            <td style={lCell}>付款事由<br /><span style={{ fontSize: '14px', fontWeight: 400 }}>Payment Reason</span></td>
-            <td style={vCell} colSpan={3}>{toProperCase(app.payment_reason)}</td>
+            <td style={lCell}>付款事由<span style={subLabel}>Payment Reason</span></td>
+            <td style={{ ...vCell, textAlign: 'left' }} colSpan={3}>{toProperCase(app.payment_reason)}</td>
           </tr>
+          {/* Payment Method */}
           <tr>
-            <td style={lCell}>付款方式<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Payment Method</span></td>
+            <td style={lCell}>付款方式<span style={subLabel}>Payment Method</span></td>
             <td style={vCell} colSpan={3}>{toProperCase(app.payment_method_name) || '—'}</td>
           </tr>
+          {/* Amount */}
           <tr>
-            <td style={lCell}>付款金额<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Amount</span></td>
-            <td style={{ ...vCell, fontWeight: 700, fontSize: '18px' }} colSpan={3}>AED {formatCurrency(app.amount)}</td>
+            <td style={lCell}>付款金额<span style={subLabel}>Amount (AED)</span></td>
+            <td style={{ ...vCell, fontWeight: 'bold', fontSize: '15px' }} colSpan={3}>
+              AED {formatCurrency(app.amount)}
+            </td>
           </tr>
+          {/* Amount in Words */}
           <tr>
-            <td style={lCell}>大写金额<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>In Words</span></td>
-            <td style={vCell} colSpan={3}>{toProperCase(app.amount_words)}</td>
+            <td style={lCell}>大写金额<span style={subLabel}>In Words</span></td>
+            <td style={{ ...vCell, fontStyle: 'italic', color: '#333' }} colSpan={3}>{toProperCase(app.amount_words)}</td>
           </tr>
+          {/* Receiving Company */}
           <tr>
-            <td style={lCell}>收款单位<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Receiving Co.</span></td>
+            <td style={lCell}>收款单位<span style={subLabel}>Receiving Co.</span></td>
             <td style={vCell} colSpan={3}>{toProperCase(app.payee_name) || '—'}</td>
           </tr>
+          {/* Bank */}
           <tr>
-            <td style={lCell}>开户银行<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Bank</span></td>
+            <td style={lCell}>开户银行<span style={subLabel}>Bank</span></td>
             <td style={vCell} colSpan={3}>{toProperCase(app.bank_name) || '—'}</td>
           </tr>
+          {/* Account */}
           <tr>
-            <td style={lCell}>银行账号<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Account/IBAN</span></td>
-            <td style={{ ...vCell, fontFamily: 'monospace', fontSize: '14px' }} colSpan={3}>{app.bank_account || '—'}</td>
+            <td style={lCell}>银行账号<span style={subLabel}>Account / IBAN</span></td>
+            <td style={{ ...vCell, fontFamily: 'monospace', fontSize: '12px', letterSpacing: '0.5px' }} colSpan={3}>
+              {app.bank_account || '—'}
+            </td>
           </tr>
+          {/* Remarks */}
           <tr>
-            <td style={lCell}>备注说明<br /><span style={{ fontSize: '12px', fontWeight: 400 }}>Remarks</span></td>
-            <td style={{ ...vCell, minHeight: '60px', whiteSpace: 'pre-wrap' }} colSpan={3}>{app.remarks || '—'}</td>
+            <td style={lCell}>备注说明<span style={subLabel}>Remarks</span></td>
+            <td style={{ ...vCell, textAlign: 'left', minHeight: '52px', whiteSpace: 'pre-wrap' }} colSpan={3}>
+              {app.remarks || '—'}
+            </td>
           </tr>
-          {/* Signature row */}
+          {/* Signatures */}
           <tr>
             <td colSpan={4} style={{ border: '1px solid #c8b99a', padding: '0' }}>
               <div style={{ display: 'flex' }}>
                 {[
-                  ['部门主管审批签字', 'Department Head'],
-                  ['财务部审批签字',   'Finance Officer'],
-                  ['总经理审批签字',   'General Manager'],
+                  ['部门主管审批签字', 'Department Head Signature'],
+                  ['财务部审批签字',   'Finance Officer Signature'],
+                  ['总经理审批签字',   'General Manager Signature'],
                 ].map(([cn, en], i) => (
-                  <div key={i} style={{ flex: 1, borderRight: i < 2 ? '1px solid #c8b99a' : 'none', padding: '10px 12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '13px', fontFamily: "'Noto Serif SC',serif", fontWeight: 600, marginBottom: '2px' }}>{cn}</div>
-                    <div style={{ fontSize: '12px', color: '#555', marginBottom: '8px' }}>{en}</div>
-                    <div style={{ height: '44px', borderBottom: '1px solid #999', margin: '0 16px' }} />
-                    <div style={{ fontSize: '12px', color: '#555', marginTop: '6px' }}>DATE: {date}</div>
+                  <div key={i} style={{
+                    flex: 1,
+                    borderRight: i < 2 ? '1px solid #c8b99a' : 'none',
+                    padding: '10px 10px 8px',
+                    textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: '11px', fontFamily: "Georgia, serif", fontWeight: 'bold', color: '#2a1a00', marginBottom: '2px' }}>{cn}</div>
+                    <div style={{ fontSize: '10px', color: '#666', marginBottom: '10px', fontFamily: "Georgia, serif" }}>{en}</div>
+                    <div style={{ height: '40px', borderBottom: '1px solid #aaa', margin: '0 12px' }} />
+                    <div style={{ fontSize: '10px', color: '#555', marginTop: '5px', fontFamily: "Georgia, serif" }}>DATE: {date}</div>
                   </div>
                 ))}
               </div>
@@ -153,34 +217,45 @@ function PrintView({ app, companyColor }) {
         </tbody>
       </table>
 
-      {/* Status stamp */}
-      <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* ── Status + Generated ── */}
+      <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{
-          fontSize: '14px', fontWeight: 700, letterSpacing: '.12em',
-          color: ['approved'].includes(app.status) ? '#7f1d1d' : ['rejected'].includes(app.status) ? '#7f1d1d' : '#92400e',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          letterSpacing: '2px',
+          color: app.status === 'approved' ? '#7f1d1d' : app.status === 'rejected' ? '#7f1d1d' : '#78350f',
           background: ['approved','rejected'].includes(app.status) ? '#fee2e2' : '#fef3c7',
-          padding: '4px 14px', borderRadius: '4px', border: '1.5px solid currentColor',
+          padding: '3px 12px',
+          borderRadius: '3px',
+          border: '1.5px solid currentColor',
+          fontFamily: "Georgia, serif",
         }}>
           ◆ {app.status?.toUpperCase()}
         </span>
-        <span style={{ fontSize: '11px', color: '#9ca3af' }}>Generated: {fmtDate(new Date().toISOString())}</span>
+        <span style={{ fontSize: '10px', color: '#aaa', fontFamily: "Georgia, serif" }}>
+          Generated: {fmtDate(new Date().toISOString())}
+        </span>
       </div>
 
-      {/* ── Company colour identity strip (bottom, pale, low ink) ── */}
+      {/* ── Company colour strip (bottom, pale, low ink) ── */}
       <div style={{
-        marginTop: '12px',
-        height: '10px',
-        borderRadius: '3px',
+        marginTop: '10px',
+        height: '9px',
+        borderRadius: '2px',
         background: pastel,
         border: `1px solid ${accent}`,
         position: 'relative',
         overflow: 'hidden',
       }}>
-        {/* subtle left accent */}
-        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '32px', background: accent, opacity: 0.25 }} />
         <div style={{
-          position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
-          fontSize: '7px', fontWeight: 700, letterSpacing: '.1em', color: accent, opacity: 0.7,
+          position: 'absolute', left: 0, top: 0, bottom: 0,
+          width: '28px', background: accent, opacity: 0.2,
+        }} />
+        <div style={{
+          position: 'absolute', right: '8px', top: '50%',
+          transform: 'translateY(-50%)',
+          fontSize: '7px', fontWeight: 'bold', letterSpacing: '1px',
+          color: accent, opacity: 0.65, fontFamily: "Georgia, serif",
         }}>
           {app.company_name?.toUpperCase()}
         </div>
