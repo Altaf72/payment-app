@@ -250,3 +250,12 @@ tbody tr:last-child { border-bottom: none; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--ink-3); }
 .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
 .empty-state h3 { font-size: 15px; font-weight: 500; color: var(--ink-2); margin-bottom: 6px; }
+
+/* Force background colours to print — critical for PDF label cells */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+}

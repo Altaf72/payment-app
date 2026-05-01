@@ -14,51 +14,64 @@ function CountdownTimer({ submittedAt }) {
   const [mins, setMins] = useState(0)
   useEffect(() => {
     function tick() {
-      const elapsed = minutesAgo(submittedAt)
-      const remaining = Math.max(0, 30 - elapsed)
-      setMins(remaining)
+      setMins(Math.max(0, 30 - minutesAgo(submittedAt)))
     }
     tick()
     const id = setInterval(tick, 30000)
     return () => clearInterval(id)
   }, [submittedAt])
-
   if (mins <= 0) return null
   return (
-    <div style={{
-      fontSize: '10px', color: 'var(--status-pending)',
-      background: 'var(--status-pending-bg)',
-      padding: '1px 6px', borderRadius: '20px', marginTop: '3px',
-      display: 'inline-block'
-    }}>
+    <div style={{ fontSize:'10px', color:'var(--status-pending)', background:'var(--status-pending-bg)',
+      padding:'1px 6px', borderRadius:'20px', marginTop:'3px', display:'inline-block' }}>
       ⏱ {Math.ceil(mins)}m to edit
     </div>
   )
 }
 
-export default function MyApplications() {
-  const { user } = useAuth()
-  const navigate = useNavigate()
-  const [applications, setApplications] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [withdrawing, setWithdrawing] = useState(null)
+const PAGE_SIZE_OPTIONS = [20, 50, 100]
 
-  useEffect(() => { load() }, [])
+export default function MyApplications() {
+  const { user }   = useAuth()
+  const navigate   = useNavigate()
+
+  const [applications, setApplications] = useState([])
+  const [total, setTotal]               = useState(0)
+  const [loading, setLoading]           = useState(true)
+  const [search, setSearch]             = useState('')
+  const [withdrawing, setWithdrawing]   = useState(null)
+  const [page, setPage]                 = useState(1)
+  const [pageSize, setPageSize]         = useState(20)
+
+  useEffect(() => { setPage(1) }, [search])
+  useEffect(() => { load() }, [page, pageSize, search])
 
   async function load() {
     setLoading(true)
-    const { data, error } = await supabase
+    const from = (page - 1) * pageSize
+    const to   = from + pageSize - 1
+
+    let query = supabase
       .from('applications_full')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
-    if (error) console.error('Load error:', error)
+      .range(from, to)
+
+    if (search) {
+      query = query.or(
+        `ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,company_name.ilike.%${search}%`
+      )
+    }
+
+    const { data, count, error } = await query
+    if (error) console.error(error)
     setApplications(data || [])
+    setTotal(count || 0)
     setLoading(false)
   }
 
   async function withdraw(app) {
-    if (!confirm('Withdraw this application? It will go back to Draft and you can resubmit later.')) return
+    if (!confirm('Withdraw this application? It will go back to Draft.')) return
     setWithdrawing(app.id)
     const { error } = await supabase
       .from('applications')
@@ -68,29 +81,21 @@ export default function MyApplications() {
       alert('Could not withdraw: ' + error.message)
     } else {
       await supabase.from('audit_log').insert({
-        application_id: app.id,
-        action_by: user.id,
-        action: 'edited',
-        note: 'Withdrawn by applicant within edit window',
+        application_id: app.id, action_by: user.id,
+        action: 'edited', note: 'Withdrawn by applicant within edit window',
       })
       await load()
     }
     setWithdrawing(null)
   }
 
-  const filtered = applications.filter(a =>
-    !search ||
-    a.ref_number?.toLowerCase().includes(search.toLowerCase()) ||
-    a.payment_reason?.toLowerCase().includes(search.toLowerCase()) ||
-    a.company_name?.toLowerCase().includes(search.toLowerCase())
-  )
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   const counts = {
-    total:    applications.length,
+    total:    total,
     pending:  applications.filter(a => a.status === 'pending').length,
     approved: applications.filter(a => a.status === 'approved').length,
     returned: applications.filter(a => a.status === 'returned').length,
-    draft:    applications.filter(a => a.status === 'draft').length,
   }
 
   return (
@@ -105,11 +110,10 @@ export default function MyApplications() {
         </button>
       </div>
 
-      {/* Stats */}
       <div className="stats-row">
         <div className="stat-card">
           <div className="stat-label">Total</div>
-          <div className="stat-value">{counts.total}</div>
+          <div className="stat-value">{total}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Pending</div>
@@ -120,26 +124,25 @@ export default function MyApplications() {
           <div className="stat-value" style={{color:'var(--status-approved)'}}>{counts.approved}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Draft / Returned</div>
-          <div className="stat-value" style={{color:'var(--status-draft)'}}>
-            {counts.draft + counts.returned}
-          </div>
+          <div className="stat-label">Returned</div>
+          <div className="stat-value" style={{color:'var(--status-returned)'}}>{counts.returned}</div>
         </div>
       </div>
 
-      {/* Search */}
       <div className="filter-bar">
         <input className="form-control search-input"
           placeholder="Search by ref, reason, company…"
           value={search} onChange={e => setSearch(e.target.value)} />
+        {search && (
+          <button className="btn btn-outline btn-sm" onClick={() => setSearch('')}>✕ Clear</button>
+        )}
       </div>
 
-      {/* Table */}
       <div className="card">
         <div className="table-wrap">
           {loading ? (
             <div className="empty-state"><p>Loading…</p></div>
-          ) : filtered.length === 0 ? (
+          ) : applications.length === 0 ? (
             <div className="empty-state">
               <div className="icon">📋</div>
               <h3>No applications yet</h3>
@@ -159,11 +162,10 @@ export default function MyApplications() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(app => {
+                {applications.map(app => {
                   const withinWindow = app.status === 'pending' && minutesAgo(app.submitted_at) < 30
-                  const canEdit = app.status === 'draft' || app.status === 'returned' || withinWindow
+                  const canEdit   = app.status === 'draft' || app.status === 'returned' || withinWindow
                   const canWithdraw = withinWindow
-
                   return (
                     <tr key={app.id}>
                       <td>
@@ -189,18 +191,13 @@ export default function MyApplications() {
                       <td>
                         <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
                           <button className="btn btn-outline btn-sm"
-                            onClick={() => navigate(`/application/${app.id}`)}>
-                            View
-                          </button>
+                            onClick={() => navigate(`/application/${app.id}`)}>View</button>
                           {canEdit && (
                             <button className="btn btn-primary btn-sm"
-                              onClick={() => navigate(`/new-application?edit=${app.id}`)}>
-                              ✎ Edit
-                            </button>
+                              onClick={() => navigate(`/new-application?edit=${app.id}`)}>✎ Edit</button>
                           )}
                           {canWithdraw && (
-                            <button
-                              className="btn btn-sm"
+                            <button className="btn btn-sm"
                               style={{background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5'}}
                               disabled={withdrawing === app.id}
                               onClick={() => withdraw(app)}>
@@ -216,6 +213,57 @@ export default function MyApplications() {
             </table>
           )}
         </div>
+
+        {/* Pagination */}
+        {!loading && total > 0 && (
+          <div style={{
+            display:'flex', alignItems:'center', justifyContent:'space-between',
+            padding:'12px 20px', borderTop:'1px solid var(--border-2)',
+            flexWrap:'wrap', gap:'10px',
+          }}>
+            <div style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',color:'var(--ink-3)'}}>
+              <span>Rows per page:</span>
+              {PAGE_SIZE_OPTIONS.map(s => (
+                <button key={s} onClick={() => { setPageSize(s); setPage(1) }}
+                  style={{
+                    padding:'3px 10px', borderRadius:'6px', cursor:'pointer',
+                    fontSize:'12px', fontWeight: pageSize===s ? 600 : 400,
+                    background: pageSize===s ? 'var(--ink)' : 'transparent',
+                    color: pageSize===s ? '#fff' : 'var(--ink-3)',
+                    border: pageSize===s ? 'none' : '1px solid var(--border)',
+                  }}>{s}</button>
+              ))}
+            </div>
+
+            <div style={{fontSize:'13px',color:'var(--ink-3)'}}>
+              Showing <strong>{((page-1)*pageSize)+1}</strong> – <strong>{Math.min(page*pageSize,total)}</strong> of <strong>{total}</strong>
+            </div>
+
+            <div style={{display:'flex',gap:'4px',alignItems:'center'}}>
+              <button className="btn btn-outline btn-sm" disabled={page===1} onClick={() => setPage(1)}>«</button>
+              <button className="btn btn-outline btn-sm" disabled={page===1} onClick={() => setPage(p=>p-1)}>‹ Prev</button>
+              {Array.from({length: Math.min(5, totalPages)}, (_, i) => {
+                let p
+                if (totalPages <= 5)           p = i + 1
+                else if (page <= 3)            p = i + 1
+                else if (page >= totalPages-2) p = totalPages - 4 + i
+                else                           p = page - 2 + i
+                return (
+                  <button key={p} onClick={() => setPage(p)}
+                    style={{
+                      padding:'4px 10px', borderRadius:'6px', cursor:'pointer',
+                      fontSize:'12px', fontWeight: page===p ? 600 : 400,
+                      background: page===p ? 'var(--ink)' : 'transparent',
+                      color: page===p ? '#fff' : 'var(--ink-3)',
+                      border: page===p ? 'none' : '1px solid var(--border)',
+                    }}>{p}</button>
+                )
+              })}
+              <button className="btn btn-outline btn-sm" disabled={page===totalPages} onClick={() => setPage(p=>p+1)}>Next ›</button>
+              <button className="btn btn-outline btn-sm" disabled={page===totalPages} onClick={() => setPage(totalPages)}>»</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
