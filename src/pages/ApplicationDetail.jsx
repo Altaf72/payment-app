@@ -346,6 +346,7 @@ export default function ApplicationDetail() {
   const [companyColor, setCompanyColor]   = useState(null)
   const [allCompanies, setAllCompanies]   = useState([])
   const [downloading, setDownloading]     = useState(false)
+  const [showDuplicate, setShowDuplicate] = useState(false)
   const [showRevert,   setShowRevert]     = useState(false)
   const [showDelete,   setShowDelete]     = useState(false)
   const [deleteReason, setDeleteReason]   = useState('')
@@ -547,6 +548,10 @@ export default function ApplicationDetail() {
             {downloading ? '⏳ Saving…' : '↓ Download PDF'}
           </button>
           {canEdit && <button className="btn btn-primary" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
+          <button className="btn btn-outline" onClick={() => setShowDuplicate(true)}
+            title="Create a new application based on this one">
+            ⧉ Duplicate
+          </button>
           {isSuperAdmin && !app.deleted_at && (
             <button className="btn btn-danger" onClick={() => setShowDelete(true)}>🗑 Delete</button>
           )}
@@ -555,6 +560,62 @@ export default function ApplicationDetail() {
 
       {/* Company colour accent bar on detail page */}
       <div style={{ height: '4px', borderRadius: '2px', background: pastelColor, border: `1px solid ${accentColor}`, marginBottom: '20px', opacity: 0.8 }} />
+
+      {/* Duplicate confirmation modal */}
+      {showDuplicate && (
+        <div style={{ position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.7)',
+          display:'flex',alignItems:'center',justifyContent:'center',padding:'20px' }}>
+          <div style={{ background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'500px',
+            boxShadow:'0 24px 64px rgba(0,0,0,0.3)',overflow:'hidden' }}>
+            <div style={{ background:'var(--ink)',padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px' }}>
+              <span style={{ fontSize:'20px' }}>⧉</span>
+              <h3 style={{ color:'#fff',fontSize:'16px',fontWeight:600 }}>Duplicate Application</h3>
+            </div>
+            <div style={{ padding:'24px' }}>
+              <div style={{ background:'var(--cream-2)',borderRadius:'8px',padding:'12px 16px',
+                marginBottom:'20px',fontSize:'13px',border:'1px solid var(--border)' }}>
+                <div style={{ fontWeight:600,marginBottom:'4px' }}>Source: {app.ref_number}</div>
+                <div style={{ color:'var(--ink-2)' }}>{app.company_name} · {app.payment_reason}</div>
+                <div style={{ color:'var(--ink-3)',marginTop:'2px',fontSize:'12px' }}>
+                  AED {new Intl.NumberFormat('en-AE',{minimumFractionDigits:2}).format(app.amount)} · {app.status?.toUpperCase()}
+                </div>
+              </div>
+              <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'20px' }}>
+                <div style={{ background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:'8px',padding:'12px' }}>
+                  <div style={{ fontSize:'12px',fontWeight:600,color:'#065f46',marginBottom:'8px' }}>✓ Will be copied</div>
+                  {['Company','Payment Reason','Payment Method','Receiving Company','Bank Name','Account / IBAN','Remarks'].map(f => (
+                    <div key={f} style={{ fontSize:'12px',color:'#047857',padding:'2px 0' }}>· {f}</div>
+                  ))}
+                </div>
+                <div style={{ background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:'8px',padding:'12px' }}>
+                  <div style={{ fontSize:'12px',fontWeight:600,color:'#9a3412',marginBottom:'8px' }}>✗ Will be reset</div>
+                  {[
+                    ['Amount','enter fresh'],
+                    ['Attachment','upload new if needed'],
+                    ['Reference No.','auto-generated'],
+                    ['Date','today\'s date'],
+                    ['Status','opens as Draft'],
+                  ].map(([f,hint]) => (
+                    <div key={f} style={{ fontSize:'12px',color:'#c2410c',padding:'2px 0' }}>
+                      · {f} <span style={{ fontSize:'10px',color:'#9a3412' }}>({hint})</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="alert alert-warning" style={{ marginBottom:'20px',fontSize:'12px' }}>
+                ⚠ Opens as a <strong>new draft</strong>. Nothing is submitted until you review and click Submit.
+              </div>
+              <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end' }}>
+                <button className="btn btn-outline" onClick={() => setShowDuplicate(false)}>Cancel</button>
+                <button className="btn btn-primary"
+                  onClick={() => { setShowDuplicate(false); navigate(`/new-application?duplicate=${id}`) }}>
+                  ⧉ Open Duplicate Form
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete modal */}
       {showDelete && (

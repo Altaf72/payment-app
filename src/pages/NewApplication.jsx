@@ -199,6 +199,7 @@ export default function NewApplication() {
   const navigate           = useNavigate()
   const [searchParams]     = useSearchParams()
   const editId             = searchParams.get('edit')
+  const duplicateId        = searchParams.get('duplicate')
   const isEditing          = !!editId
   const submittingRef      = useRef(false)
 
@@ -228,15 +229,15 @@ export default function NewApplication() {
 
   // Persist form to sessionStorage so back-navigation restores it
   useEffect(() => {
-    const key = `pa_form_${editId||'new'}`
+    const key = `pa_form_${editId||duplicateId||'new'}`
     const stored = sessionStorage.getItem(key)
-    if (stored && !editId) {
+    if (stored && !editId && !duplicateId) {
       try { setForm(JSON.parse(stored)) } catch {}
     }
   }, [])
 
   useEffect(() => {
-    const key = `pa_form_${editId||'new'}`
+    const key = `pa_form_${editId||duplicateId||'new'}`
     sessionStorage.setItem(key, JSON.stringify(form))
   }, [form])
 
@@ -251,8 +252,8 @@ export default function NewApplication() {
         supabase.from('payment_reasons').select('*').eq('active', true).order('name'),
         supabase.from('payees').select('*').order('last_used_at', { ascending: false }),
         supabase.from('banks').select('*').eq('active', true).order('name'),
-        editId
-          ? supabase.from('applications_full').select('*').eq('id', editId).single()
+        (editId || duplicateId)
+          ? supabase.from('applications_full').select('*').eq('id', editId || duplicateId).single()
           : Promise.resolve({ data: null }),
       ])
 
@@ -298,26 +299,46 @@ export default function NewApplication() {
     if (app) {
       const method = (pm || []).find(m => m.id === app.payment_method_id)
       const bank   = (bk || []).find(b => b.name === app.bank_name)
-      // Match payment reason text back to its ID in the lookup list
       const reason = (pr || []).find(r =>
         r.name.toLowerCase() === (app.payment_reason || '').toLowerCase()
       )
-      setForm({
-        company_id:          app.company_id || '',
-        payment_reason_id:   reason?.id || '',
-        payment_reason_text: app.payment_reason || '',
-        payment_method_id:   app.payment_method_id || '',
-        payment_method_text: method?.name || app.payment_method_name || '',
-        amount:              app.amount?.toString() || '',
-        amount_words:        app.amount_words || '',
-        payee_name:          app.payee_name || '',
-        bank_id:             bank?.id || '',
-        bank_name:           app.bank_name || '',
-        bank_account:        app.bank_account || '',
-        remarks:             app.remarks || '',
-      })
-      setOutcomeNote(app.outcome_note || '')
-      if (app.attachment_name) setExistingAtt({ name: app.attachment_name, path: app.attachment_path })
+
+      if (duplicateId) {
+        // DUPLICATE MODE — copy fields, reset amount + attachment
+        setForm({
+          company_id:          app.company_id || '',
+          payment_reason_id:   reason?.id || '',
+          payment_reason_text: app.payment_reason || '',
+          payment_method_id:   app.payment_method_id || '',
+          payment_method_text: method?.name || app.payment_method_name || '',
+          amount:              '',        // must re-enter
+          amount_words:        '',
+          payee_name:          app.payee_name || '',
+          bank_id:             bank?.id || '',
+          bank_name:           app.bank_name || '',
+          bank_account:        app.bank_account || '',
+          remarks:             app.remarks || '',
+        })
+        // No outcome note, no existing attachment
+      } else {
+        // EDIT MODE — load everything
+        setForm({
+          company_id:          app.company_id || '',
+          payment_reason_id:   reason?.id || '',
+          payment_reason_text: app.payment_reason || '',
+          payment_method_id:   app.payment_method_id || '',
+          payment_method_text: method?.name || app.payment_method_name || '',
+          amount:              app.amount?.toString() || '',
+          amount_words:        app.amount_words || '',
+          payee_name:          app.payee_name || '',
+          bank_id:             bank?.id || '',
+          bank_name:           app.bank_name || '',
+          bank_account:        app.bank_account || '',
+          remarks:             app.remarks || '',
+        })
+        setOutcomeNote(app.outcome_note || '')
+        if (app.attachment_name) setExistingAtt({ name: app.attachment_name, path: app.attachment_path })
+      }
     }
     setPageLoading(false)
   }
@@ -457,11 +478,24 @@ export default function NewApplication() {
           <div style={{marginTop:'6px',fontSize:'12px'}}>Please make the necessary corrections and resubmit.</div>
         </div>
       )}
+
+      {duplicateId && (
+        <div className="alert alert-info" style={{marginBottom:'20px',lineHeight:'1.7'}}>
+          <strong>⧉ Duplicated application</strong> — pre-filled fields are shown below.<br/>
+          <span style={{fontSize:'12px'}}>
+            <span style={{color:'var(--status-approved)',fontWeight:500}}>✓ Copied: </span>
+            Company, Payment Reason, Method, Receiving Company, Bank, Account, Remarks
+            &nbsp;&nbsp;
+            <span style={{color:'var(--status-rejected)',fontWeight:500}}>✗ Reset: </span>
+            Amount (enter fresh), Attachment, Reference number, Date
+          </span>
+        </div>
+      )}
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="card">
         <div className="card-header">
-          <h2>{isEditing ? 'Correct & Resubmit' : 'Application Details'}</h2>
+          <h2>{isEditing ? 'Correct & Resubmit' : duplicateId ? '⧉ New Application (Duplicated)' : 'Application Details'}</h2>
           <span className="text-sm text-muted">Fields marked <span style={{color:'#dc2626'}}>*</span> are required</span>
         </div>
         <div className="card-body">
