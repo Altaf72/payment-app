@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -38,12 +38,28 @@ export default function MyApplications() {
   const [applications, setApplications] = useState([])
   const [total, setTotal]               = useState(0)
   const [loading, setLoading]           = useState(true)
-  const [search, setSearch]             = useState('')
   const [withdrawing, setWithdrawing]   = useState(null)
-  const [page, setPage]                 = useState(1)
-  const [pageSize, setPageSize]         = useState(20)
 
-  useEffect(() => { setPage(1) }, [search])
+  const STORAGE_KEY = 'my_applications_filters'
+  function getSaved() {
+    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}') } catch { return {} }
+  }
+  const saved = getSaved()
+
+  const [search,   setSearch]   = useState(saved.search   || '')
+  const [page,     setPage]     = useState(saved.page     || 1)
+  const [pageSize, setPageSize] = useState(saved.pageSize || 20)
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ search, page, pageSize }))
+  }, [search, page, pageSize])
+
+  const isFirstRender = React.useRef(true)
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return }
+    setPage(1)
+  }, [search])
+
   useEffect(() => { load() }, [page, pageSize, search])
 
   async function load() {
@@ -134,7 +150,10 @@ export default function MyApplications() {
           placeholder="Search by ref, reason, company…"
           value={search} onChange={e => setSearch(e.target.value)} />
         {search && (
-          <button className="btn btn-outline btn-sm" onClick={() => setSearch('')}>✕ Clear</button>
+          <button className="btn btn-outline btn-sm" onClick={() => {
+            setSearch(''); setPage(1)
+            sessionStorage.removeItem('my_applications_filters')
+          }}>✕ Clear</button>
         )}
       </div>
 

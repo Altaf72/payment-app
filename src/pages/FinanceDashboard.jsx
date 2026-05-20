@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -92,18 +92,35 @@ export default function FinanceDashboard() {
   const [companies, setCompanies]             = useState([])
   const [companiesSorted, setCompaniesSorted] = useState([])
 
-  // Filters
-  const [search, setSearch]               = useState('')
-  const [amountSearch, setAmountSearch]   = useState('')
-  const [filterStatus, setFilterStatus]   = useState('')
-  const [filterCompany, setFilterCompany] = useState('')
-  const [filterAttachment, setFilterAttachment] = useState('')
+  // Restore filter state from sessionStorage on mount
+  const STORAGE_KEY = 'finance_dashboard_filters'
+  function getSaved() {
+    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}') } catch { return {} }
+  }
+  const saved = getSaved()
 
-  // Pagination
-  const [page, setPage]         = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  // Filters — restored from session
+  const [search,           setSearch]           = useState(saved.search           || '')
+  const [amountSearch,     setAmountSearch]     = useState(saved.amountSearch     || '')
+  const [filterStatus,     setFilterStatus]     = useState(saved.filterStatus     || '')
+  const [filterCompany,    setFilterCompany]    = useState(saved.filterCompany    || '')
+  const [filterAttachment, setFilterAttachment] = useState(saved.filterAttachment || '')
 
+  // Pagination — restored from session
+  const [page,     setPage]     = useState(saved.page     || 1)
+  const [pageSize, setPageSize] = useState(saved.pageSize || 20)
+
+  // Persist filter state to sessionStorage whenever it changes
   useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      search, amountSearch, filterStatus, filterCompany, filterAttachment, page, pageSize
+    }))
+  }, [search, amountSearch, filterStatus, filterCompany, filterAttachment, page, pageSize])
+
+  // Reset to page 1 when filters change (but not on page/size changes themselves)
+  const isFirstRender = React.useRef(true)
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
   }, [search, amountSearch, filterStatus, filterCompany, filterAttachment])
 
@@ -120,8 +137,12 @@ export default function FinanceDashboard() {
 
   async function load() {
     setLoading(true)
-    const from = (page - 1) * pageSize
-    const to   = from + pageSize - 1
+
+    // When searching/filtering: query ALL matching rows (no pagination limit)
+    // When browsing: paginate to avoid loading unnecessary data
+    const isSearching = !!(search.trim() || amountSearch.trim())
+    const from = isSearching ? 0 : (page - 1) * pageSize
+    const to   = isSearching ? 9999 : from + pageSize - 1
 
     let query = supabase
       .from('applications_full')
@@ -134,24 +155,25 @@ export default function FinanceDashboard() {
     if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
     if (filterAttachment === 'no')  query = query.is('attachment_path', null)
 
-    // Text search (ref, reason, name, payee)
-    if (search) {
+    // Server-side text search across all records
+    if (search.trim()) {
       query = query.or(
-        `ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,submitted_by_name.ilike.%${search}%,payee_name.ilike.%${search}%`
+        `ref_number.ilike.%${search.trim()}%,payment_reason.ilike.%${search.trim()}%,submitted_by_name.ilike.%${search.trim()}%,payee_name.ilike.%${search.trim()}%,attachment_name.ilike.%${search.trim()}%`
       )
     }
 
     const { data, count, error } = await query
     if (error) console.error(error)
 
-    // Amount filter (client-side — partial match e.g. "105" matches 105, 1050, 2105)
+    // Amount: server-side LIKE on cast — done client-side as postgres cant partial-match numerics
     let rows = data || []
     if (amountSearch.trim()) {
       rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
     }
 
     setApplications(rows)
-    setTotal(count || 0)
+    // When searching, show actual result count not paginated count
+    setTotal(isSearching ? rows.length : (count || 0))
     setLoading(false)
   }
 
@@ -189,6 +211,9 @@ export default function FinanceDashboard() {
     URL.revokeObjectURL(url)
   }
 
+  // Derived — are we in search mode?
+  const isSearching = !!(search.trim() || amountSearch.trim())
+
   return (
     <div>
       <div className="page-header flex justify-between items-center">
@@ -202,9 +227,14 @@ export default function FinanceDashboard() {
       {/* Stats — current page */}
       <div className="stats-row">
         <div className="stat-card">
-          <div className="stat-label">Total Records</div>
+          <div className="stat-label">{isSearching ? 'Search Results' : 'Total Records'}</div>
           <div className="stat-value">{total.toLocaleString()}</div>
-          <div className="stat-sub">Page {page} of {totalPages}</div>
+          <div className="stat-sub">
+            {isSearching
+              ? <span style={{color:'var(--gold)',fontWeight:500}}>🔍 Searching all records</span>
+              : `Page ${page} of ${totalPages}`
+            }
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Pending (page)</div>
@@ -254,10 +284,32 @@ export default function FinanceDashboard() {
         </select>
         {(search||amountSearch||filterStatus||filterCompany||filterAttachment) && (
           <button className="btn btn-outline btn-sm" onClick={() => {
-            setSearch(''); setAmountSearch(''); setFilterStatus(''); setFilterCompany(''); setFilterAttachment('')
-          }}>✕ Clear</button>
+            setSearch(''); setAmountSearch(''); setFilterStatus('');
+            setFilterCompany(''); setFilterAttachment(''); setPage(1)
+            sessionStorage.removeItem('finance_dashboard_filters')
+          }}>✕ Clear all</button>
         )}
       </div>
+
+      {/* Search mode banner */}
+      {isSearching && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:'10px',
+          padding:'10px 16px', marginBottom:'10px',
+          background:'#fef3c7', border:'1px solid #fcd34d',
+          borderRadius:'var(--radius-sm)', fontSize:'13px', color:'#92400e',
+        }}>
+          <span>🔍</span>
+          <span>
+            Searching <strong>all {total} matching records</strong> across the entire database
+            {amountSearch && ` · Amount contains "${amountSearch}"`}
+            {search && ` · Text: "${search}"`}
+          </span>
+          <span style={{marginLeft:'auto',fontSize:'11px',color:'#b45309'}}>
+            Pagination hidden during search
+          </span>
+        </div>
+      )}
 
       {/* Table */}
       <div className="card">
@@ -268,7 +320,12 @@ export default function FinanceDashboard() {
             <div className="empty-state">
               <div className="icon">🔍</div>
               <h3>No results found</h3>
-              <p>Try adjusting your filters</p>
+              <p>
+                {isSearching
+                  ? 'No records match your search across the entire database.'
+                  : 'Try adjusting your filters.'
+                }
+              </p>
             </div>
           ) : (
             <table>
@@ -331,8 +388,8 @@ export default function FinanceDashboard() {
           )}
         </div>
 
-        {/* Pagination bar */}
-        {!loading && total > 0 && (
+        {/* Pagination bar — hidden during search */}
+        {!loading && total > 0 && !isSearching && (
           <div style={{
             display:'flex', alignItems:'center', justifyContent:'space-between',
             padding:'12px 20px', borderTop:'1px solid var(--border-2)',
