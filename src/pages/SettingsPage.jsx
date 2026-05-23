@@ -25,6 +25,96 @@ function UsageBar({ label, used, limit, unit }) {
   )
 }
 
+// ── Company Colour Picker ────────────────────────────────────
+const PALETTE = [
+  ['#1d4ed8','#dbeafe','Blue'],
+  ['#065f46','#d1fae5','Green'],
+  ['#92400e','#fef3c7','Amber'],
+  ['#7c3aed','#ede9fe','Purple'],
+  ['#be123c','#ffe4e6','Rose'],
+  ['#0e7490','#cffafe','Cyan'],
+  ['#c2410c','#ffedd5','Orange'],
+  ['#4d7c0f','#ecfccb','Lime'],
+  ['#1f2937','#f3f4f6','Slate'],
+  ['#831843','#fdf2f8','Pink'],
+]
+
+function CompanyColorPicker({ companyId, currentAccent, saving, onSave }) {
+  const [open, setOpen] = useState(false)
+  const current = PALETTE.find(p => p[0] === currentAccent)
+
+  return (
+    <div style={{position:'relative'}}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display:'flex', alignItems:'center', gap:'8px',
+          padding:'4px 10px', borderRadius:'6px', cursor:'pointer',
+          border:'1px solid var(--border)', background:'#fff',
+          fontSize:'12px', fontWeight:500,
+        }}
+      >
+        <span style={{
+          width:'16px', height:'16px', borderRadius:'50%',
+          background: currentAccent || '#999',
+          border:'2px solid #fff', boxShadow:'0 0 0 1px #ccc',
+          display:'inline-block', flexShrink:0,
+        }}/>
+        <span>{current ? current[2] : 'Set colour'}</span>
+        <span style={{fontSize:'10px', opacity:0.5}}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position:'absolute', top:'110%', left:0, zIndex:200,
+          background:'#fff', border:'1px solid var(--border)',
+          borderRadius:'10px', padding:'12px', width:'220px',
+          boxShadow:'0 8px 24px rgba(0,0,0,0.12)',
+        }}>
+          <div style={{fontSize:'11px', fontWeight:600, color:'var(--ink-3)',
+            marginBottom:'8px', textTransform:'uppercase', letterSpacing:'.07em'}}>
+            Select company colour
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:'6px', marginBottom:'12px'}}>
+            {PALETTE.map(([accent, pastel, name]) => (
+              <button key={accent}
+                title={name}
+                onClick={() => { onSave(companyId, accent, pastel); setOpen(false) }}
+                style={{
+                  width:'32px', height:'32px', borderRadius:'50%',
+                  background: accent,
+                  border: accent === currentAccent ? '3px solid var(--ink)' : '2px solid #fff',
+                  boxShadow: accent === currentAccent ? '0 0 0 2px var(--ink)' : '0 0 0 1px #ddd',
+                  cursor:'pointer',
+                }}
+              />
+            ))}
+          </div>
+          <div style={{fontSize:'11px', color:'var(--ink-3)', marginBottom:'6px'}}>Or pick custom:</div>
+          <div style={{display:'flex', gap:'8px', alignItems:'center'}}>
+            <input type="color"
+              defaultValue={currentAccent || '#1d4ed8'}
+              onChange={e => {
+                const hex = e.target.value
+                onSave(companyId, hex, hex + '22')
+              }}
+              style={{width:'36px', height:'28px', border:'none', cursor:'pointer', borderRadius:'4px', padding:'2px'}}
+            />
+            <span style={{fontSize:'11px', color:'var(--ink-3)'}}>Custom colour</span>
+          </div>
+          {saving && <div style={{fontSize:'11px', color:'var(--gold)', marginTop:'8px'}}>Saving…</div>}
+          <button onClick={() => setOpen(false)}
+            style={{marginTop:'10px', fontSize:'11px', color:'var(--ink-3)',
+              background:'none', border:'none', cursor:'pointer', padding:0}}>
+            Close ✕
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 export default function SettingsPage() {
   const [tab, setTab]                   = useState('companies')
   const [companies, setCompanies]       = useState([])
@@ -36,6 +126,7 @@ export default function SettingsPage() {
   const [msg, setMsg]                   = useState({ type: '', text: '' })
   const [newCompany, setNewCompany]     = useState({ name: '', prefix: '' })
   const [logoUploading, setLogoUploading] = useState(null)
+  const [savingColor, setSavingColor]     = useState(null)
 
   // System health
   const [dbStats, setDbStats]           = useState(null)
@@ -143,6 +234,14 @@ export default function SettingsPage() {
     await supabase.from('companies').update({ logo_url: pub.publicUrl }).eq('id', companyId)
     flash('success', 'Logo uploaded')
     setLogoUploading(null)
+    load()
+  }
+
+  async function saveCompanyColor(id, accent, pastel) {
+    setSavingColor(id)
+    await supabase.from('companies').update({ accent_color: accent, pastel_color: pastel }).eq('id', id)
+    setSavingColor(null)
+    flash('success', 'Company colour saved')
     load()
   }
 
@@ -274,12 +373,20 @@ export default function SettingsPage() {
               <div className="card-header"><h2>All Companies</h2></div>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>Name</th><th>Prefix</th><th>Logo</th><th>Status</th><th></th></tr></thead>
+                  <thead><tr><th>Name</th><th>Prefix</th><th>Colour</th><th>Logo</th><th>Status</th><th></th></tr></thead>
                   <tbody>
                     {companies.map(c => (
                       <tr key={c.id}>
                         <td style={{fontWeight:500}}>{c.name}</td>
                         <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:'12px'}}>{c.prefix}</span></td>
+                        <td>
+                          <CompanyColorPicker
+                            companyId={c.id}
+                            currentAccent={c.accent_color}
+                            saving={savingColor === c.id}
+                            onSave={saveCompanyColor}
+                          />
+                        </td>
                         <td>
                           <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
                             {c.logo_url && <img src={c.logo_url} alt="logo" style={{height:'28px',objectFit:'contain',border:'1px solid var(--border)',borderRadius:'4px',padding:'2px'}} />}

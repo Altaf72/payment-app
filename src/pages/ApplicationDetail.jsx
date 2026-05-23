@@ -376,11 +376,16 @@ export default function ApplicationDetail() {
     setManagers(mgrs || [])
     setAllCompanies(cos || [])
 
-    // Assign company colour by creation order
+    // Use admin-saved colour, fallback to auto-palette by creation order
     if (appData?.company_id && cos) {
       const sorted = [...cos].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))
       const idx    = sorted.findIndex(c => c.id === appData.company_id)
-      setCompanyColor(COMPANY_PALETTE[Math.max(0, idx) % COMPANY_PALETTE.length])
+      const co     = sorted[idx]
+      if (co?.accent_color) {
+        setCompanyColor({ accent: co.accent_color, pastel: co.pastel_color || co.accent_color + '22' })
+      } else {
+        setCompanyColor(COMPANY_PALETTE[Math.max(0, idx) % COMPANY_PALETTE.length])
+      }
     }
 
     if (appData?.attachment_path) {

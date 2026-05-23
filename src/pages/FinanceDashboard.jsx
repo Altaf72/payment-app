@@ -72,7 +72,9 @@ function AttachmentPill({ path, name }) {
           borderRadius:'20px',cursor:'pointer',background:'#eff6ff',border:'1px solid #bfdbfe',
           color:'#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
         {isPDF ? '📄' : isImage ? '🖼' : '📎'}
-        <span style={{ overflow:'hidden',textOverflow:'ellipsis',maxWidth:'110px' }}>{name}</span>
+        <span style={{ overflow:'hidden',textOverflow:'ellipsis',maxWidth:'60px',fontSize:'11px' }}>
+          {name && name.length > 9 ? name.slice(0,8)+'…' : name}
+        </span>
         <span style={{ opacity:0.6,fontSize:'10px' }}>👁</span>
       </button>
       {show && <AttachmentPreview path={path} name={name} onClose={() => setShow(false)} />}
@@ -158,7 +160,7 @@ export default function FinanceDashboard() {
     // Server-side text search across all records
     if (search.trim()) {
       query = query.or(
-        `ref_number.ilike.%${search.trim()}%,payment_reason.ilike.%${search.trim()}%,submitted_by_name.ilike.%${search.trim()}%,payee_name.ilike.%${search.trim()}%,attachment_name.ilike.%${search.trim()}%`
+        `ref_number.ilike.%${search.trim()}%,payment_reason.ilike.%${search.trim()}%,submitted_by_name.ilike.%${search.trim()}%,payee_name.ilike.%${search.trim()}%,attachment_name.ilike.%${search.trim()}%,remarks.ilike.%${search.trim()}%`
       )
     }
 
@@ -190,7 +192,7 @@ export default function FinanceDashboard() {
     let query = supabase.from('applications_full').select('*').order('created_at', { ascending: false })
     if (filterStatus)  query = query.eq('status', filterStatus)
     if (filterCompany) query = query.eq('company_name', filterCompany)
-    if (search) query = query.or(`ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,submitted_by_name.ilike.%${search}%,payee_name.ilike.%${search}%`)
+    if (search) query = query.or(`ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,submitted_by_name.ilike.%${search}%,payee_name.ilike.%${search}%,remarks.ilike.%${search}%`)
     const { data } = await query
     let rows = data || []
     if (amountSearch.trim()) rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
@@ -346,41 +348,141 @@ export default function FinanceDashboard() {
               <tbody>
                 {applications.map(app => {
                   const idx = companiesSorted.findIndex(c => c.name === app.company_name)
+                  const dbColor = companiesSorted[idx]?.accent_color
                   const col = COMPANY_PALETTE[Math.max(0,idx) % COMPANY_PALETTE.length]
+                  const dotColor = dbColor || col?.accent || '#999'
+                  const totalCols = 10
                   return (
-                    <tr key={app.id}>
-                      <td>
-                        <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:'12px',fontWeight:500}}>
-                          {app.ref_number || '—'}
-                        </span>
-                      </td>
-                      <td className="text-sm">
-                        <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                          <span style={{width:'8px',height:'8px',borderRadius:'50%',background:col?.accent||'#999',flexShrink:0,display:'inline-block'}}/>
-                          {app.company_name}
-                        </div>
-                      </td>
-                      <td className="text-sm">{app.submitted_by_name}</td>
-                      <td style={{maxWidth:'180px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                        {app.payment_reason}
-                      </td>
-                      <td className="text-sm text-muted">{app.payee_name || '—'}</td>
-                      <td style={{fontWeight:500}}>{formatCurrency(app.amount)}</td>
-                      <td className="text-muted text-sm">{formatDate(app.created_at)}</td>
-                      <td>
-                        {app.attachment_path
-                          ? <AttachmentPill path={app.attachment_path} name={app.attachment_name} />
-                          : <span className="text-muted text-sm">—</span>
-                        }
-                      </td>
-                      <td><StatusBadge status={app.status} /></td>
-                      <td>
-                        <button className="btn btn-outline btn-sm"
-                          onClick={() => navigate(`/application/${app.id}`)}>
-                          Open →
-                        </button>
-                      </td>
-                    </tr>
+                    <React.Fragment key={app.id}>
+                      <tr style={{lineHeight:'1.3'}}>
+
+                        {/* Reference + copy button */}
+                        <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
+                            <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:'11px',fontWeight:600,whiteSpace:'nowrap'}}>
+                              {app.ref_number || '—'}
+                            </span>
+                            <button
+                              title="Copy reference number"
+                              onClick={() => {
+                                navigator.clipboard.writeText(app.ref_number || '')
+                                const el = document.getElementById(`copied-${app.id}`)
+                                if (el) { el.style.opacity=1; setTimeout(()=>el.style.opacity=0,1200) }
+                              }}
+                              style={{
+                                background:'none', border:'1px solid var(--border)',
+                                borderRadius:'3px', padding:'1px 4px', cursor:'pointer',
+                                fontSize:'9px', color:'var(--ink-3)', lineHeight:1, flexShrink:0,
+                              }}>
+                              ⧉
+                            </button>
+                            <span id={`copied-${app.id}`} style={{
+                              fontSize:'9px', color:'var(--status-approved)',
+                              opacity:0, transition:'opacity 0.2s', whiteSpace:'nowrap',
+                            }}>✓</span>
+                          </div>
+                        </td>
+
+                        {/* Company — 1 line ellipsis */}
+                        <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px',maxWidth:'130px'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                            <span style={{
+                              width:'8px',height:'8px',borderRadius:'50%',
+                              background:dotColor,flexShrink:0,display:'inline-block',
+                            }}/>
+                            <span style={{
+                              fontSize:'12px',fontWeight:500,
+                              overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                              maxWidth:'110px',
+                            }} title={app.company_name}>
+                              {app.company_name}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Applicant */}
+                        <td style={{fontSize:'12px',verticalAlign:'middle',
+                          maxWidth:'80px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          {app.submitted_by_name}
+                        </td>
+
+                        {/* Payment reason — 1 line ellipsis */}
+                        <td style={{verticalAlign:'middle',maxWidth:'140px',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <div style={{fontSize:'12px',overflow:'hidden',
+                            textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                            {app.payment_reason}
+                          </div>
+                        </td>
+
+                        {/* Payee — 1 line */}
+                        <td style={{verticalAlign:'middle',maxWidth:'100px',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <div style={{fontSize:'12px',color:'var(--ink-3)',
+                            overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                            {app.payee_name || '—'}
+                          </div>
+                        </td>
+
+                        {/* Amount */}
+                        <td style={{fontWeight:600,fontSize:'13px',verticalAlign:'middle',whiteSpace:'nowrap',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          {formatCurrency(app.amount)}
+                        </td>
+
+                        {/* Date */}
+                        <td style={{fontSize:'11px',color:'var(--ink-3)',verticalAlign:'middle',whiteSpace:'nowrap',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          {formatDate(app.created_at)}
+                        </td>
+
+                        {/* Attachment — icon + 8 char filename */}
+                        <td style={{verticalAlign:'middle',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          {app.attachment_path
+                            ? <AttachmentPill path={app.attachment_path} name={app.attachment_name} />
+                            : <span style={{fontSize:'11px',color:'var(--ink-3)'}}>—</span>
+                          }
+                        </td>
+
+                        {/* Status */}
+                        <td style={{verticalAlign:'middle',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <StatusBadge status={app.status} />
+                        </td>
+
+                        {/* Action */}
+                        <td style={{verticalAlign:'middle',
+                          paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <button className="btn btn-outline btn-sm"
+                            onClick={() => navigate(`/application/${app.id}`)}>
+                            Open →
+                          </button>
+                        </td>
+                      </tr>
+
+                      {/* Remarks sub-row — spans from company col to end */}
+                      {app.remarks && (
+                        <tr style={{borderTop:'none'}}>
+                          <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
+                          <td colSpan={8} style={{
+                            padding:'0 0 8px 6px',
+                            borderTop:'none',
+                            fontSize:'11px',
+                            color:'#dc2626',
+                            fontStyle:'italic',
+                            overflow:'hidden',
+                            textOverflow:'ellipsis',
+                            whiteSpace:'nowrap',
+                            maxWidth:0,
+                          }}>
+                            {app.remarks}
+                          </td>
+                          <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
+                        </tr>
+                      )}
+                    </React.Fragment>
                   )
                 })}
               </tbody>
