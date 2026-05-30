@@ -346,8 +346,10 @@ export default function ApplicationDetail() {
   const [companyColor, setCompanyColor]   = useState(null)
   const [allCompanies, setAllCompanies]   = useState([])
   const [downloading, setDownloading]     = useState(false)
-  const [showDuplicate, setShowDuplicate] = useState(false)
-  const [showRevert,   setShowRevert]     = useState(false)
+  const [showDuplicate,    setShowDuplicate]    = useState(false)
+  const [showReturnInline, setShowReturnInline] = useState(false)
+  const [showRejectInline, setShowRejectInline] = useState(false)
+  const [showRevert,       setShowRevert]       = useState(false)
   const [showDelete,   setShowDelete]     = useState(false)
   const [deleteReason, setDeleteReason]   = useState('')
   const [actionNote2,  setActionNote2]    = useState('')
@@ -453,7 +455,10 @@ export default function ApplicationDetail() {
         action: statusMap[action] || action,
         note: note || null,
       })
-      setNote(''); setShowEscalate(false)
+      setNote('')
+      setShowEscalate(false)
+      setShowReturnInline(false)
+      setShowRejectInline(false)
       await load()
     } finally { setActionLoading(false) }
   }
@@ -534,37 +539,169 @@ export default function ApplicationDetail() {
       </div>
 
       {/* Header */}
-      <div className="page-header flex justify-between items-center no-print">
-        <div>
-          <button className="btn btn-outline btn-sm" style={{ marginBottom: '8px' }} onClick={() => navigate(-1)}>← Back</button>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* Company colour dot */}
-            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: accentColor, flexShrink: 0, display: 'inline-block' }} title={companyColor?.name} />
-            {app.ref_number || 'Application'}
-            <StatusBadge status={app.status} />
-          </h1>
-          <p>{toProperCase(app.submitted_by_name)} · {app.company_name} · {fmtDate(app.submitted_at || app.created_at)}</p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button className="btn btn-outline" onClick={shareWhatsApp}>💬 WhatsApp</button>
-          <button className="btn btn-outline" onClick={shareEmail}>✉ Email</button>
-          <button className="btn btn-outline" onClick={handlePrint}>🖨 Print</button>
-          <button className="btn btn-gold" onClick={handleDownload} disabled={downloading}>
-            {downloading ? '⏳ Saving…' : '↓ Download PDF'}
-          </button>
-          {canEdit && <button className="btn btn-primary" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
-          <button className="btn btn-outline" onClick={() => setShowDuplicate(true)}
-            title="Create a new application based on this one">
-            ⧉ Duplicate
-          </button>
-          {isSuperAdmin && !app.deleted_at && (
-            <button className="btn btn-danger" onClick={() => setShowDelete(true)}>🗑 Delete</button>
-          )}
-        </div>
-      </div>
+      <div className="no-print" style={{ marginBottom: '16px' }}>
 
-      {/* Company colour accent bar on detail page */}
-      <div style={{ height: '4px', borderRadius: '2px', background: pastelColor, border: `1px solid ${accentColor}`, marginBottom: '20px', opacity: 0.8 }} />
+        {/* Row 1: Back + title + utility buttons */}
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexWrap:'wrap', gap:'10px', marginBottom:'10px' }}>
+          <div>
+            <button className="btn btn-outline btn-sm" style={{ marginBottom: '6px' }} onClick={() => navigate(-1)}>← Back</button>
+            <h1 style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize:'20px' }}>
+              <span style={{ width:'12px', height:'12px', borderRadius:'50%', background:accentColor, flexShrink:0, display:'inline-block' }} />
+              {app.ref_number || 'Application'}
+              <StatusBadge status={app.status} />
+            </h1>
+            <p style={{ fontSize:'13px', color:'var(--ink-3)', marginTop:'2px' }}>
+              {toProperCase(app.submitted_by_name)} · {app.company_name} · {fmtDate(app.submitted_at || app.created_at)}
+            </p>
+          </div>
+          <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'flex-start' }}>
+            <button className="btn btn-outline btn-sm" onClick={shareWhatsApp}>💬 WhatsApp</button>
+            <button className="btn btn-outline btn-sm" onClick={shareEmail}>✉ Email</button>
+            <button className="btn btn-outline btn-sm" onClick={handlePrint}>🖨 Print</button>
+            <button className="btn btn-gold btn-sm" onClick={handleDownload} disabled={downloading}>
+              {downloading ? '⏳…' : '↓ PDF'}
+            </button>
+            {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
+            <button className="btn btn-outline btn-sm" onClick={() => setShowDuplicate(true)}>⧉ Duplicate</button>
+            {isSuperAdmin && !app.deleted_at && (
+              <button className="btn btn-danger btn-sm" onClick={() => setShowDelete(true)}>🗑</button>
+            )}
+          </div>
+        </div>
+
+        {/* Company colour accent bar */}
+        <div style={{ height:'3px', borderRadius:'2px', background:pastelColor, border:`1px solid ${accentColor}`, opacity:0.8, marginBottom:'10px' }} />
+
+        {/* Row 2: Quick action buttons — Finance only, shown when actionable */}
+        {canAct && (
+          <div style={{
+            background: 'var(--cream-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            padding: '12px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            flexWrap: 'wrap',
+          }}>
+            <span style={{ fontSize:'12px', fontWeight:600, color:'var(--ink-3)', marginRight:'4px' }}>
+              Quick actions:
+            </span>
+
+            {/* Approve */}
+            <button className="btn btn-success btn-sm" disabled={actionLoading}
+              onClick={() => doAction('approve')}>
+              ✓ Approve
+            </button>
+
+            {/* Return — inline note */}
+            {!showReturnInline && !showRejectInline && !showEscalate && (
+              <button className="btn btn-warning btn-sm" disabled={actionLoading}
+                onClick={() => { setShowReturnInline(true); setShowRejectInline(false) }}>
+                ↩ Return for Edit
+              </button>
+            )}
+
+            {/* Reject — inline note */}
+            {!showReturnInline && !showRejectInline && !showEscalate && (
+              <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                onClick={() => { setShowRejectInline(true); setShowReturnInline(false) }}>
+                ✕ Reject
+              </button>
+            )}
+
+            {/* Escalate */}
+            {!showReturnInline && !showRejectInline && !showEscalate && (
+              <button className="btn btn-outline btn-sm" disabled={actionLoading}
+                onClick={() => setShowEscalate(true)}>
+                ↑ Escalate
+              </button>
+            )}
+
+            {/* Inline Return note */}
+            {showReturnInline && (
+              <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1, minWidth:'280px' }}>
+                <input className="form-control" style={{ fontSize:'12px', padding:'5px 10px' }}
+                  placeholder="Note to applicant (optional)…"
+                  value={note} onChange={e => setNote(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && doAction('return')}
+                  autoFocus />
+                <button className="btn btn-warning btn-sm" disabled={actionLoading}
+                  onClick={() => doAction('return')}>
+                  {actionLoading ? '…' : '↩ Confirm Return'}
+                </button>
+                <button className="btn btn-outline btn-sm"
+                  onClick={() => { setShowReturnInline(false); setNote('') }}>✕</button>
+              </div>
+            )}
+
+            {/* Inline Reject note */}
+            {showRejectInline && (
+              <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1, minWidth:'280px' }}>
+                <input className="form-control" style={{ fontSize:'12px', padding:'5px 10px' }}
+                  placeholder="Reason for rejection (optional)…"
+                  value={note} onChange={e => setNote(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && doAction('reject')}
+                  autoFocus />
+                <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                  onClick={() => doAction('reject')}>
+                  {actionLoading ? '…' : '✕ Confirm Reject'}
+                </button>
+                <button className="btn btn-outline btn-sm"
+                  onClick={() => { setShowRejectInline(false); setNote('') }}>✕</button>
+              </div>
+            )}
+
+            {/* Inline Escalate */}
+            {showEscalate && (
+              <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1, minWidth:'280px', flexWrap:'wrap' }}>
+                <select className="form-control" style={{ fontSize:'12px', padding:'5px 10px', width:'auto' }}
+                  value={escalateTo} onChange={e => setEscalateTo(e.target.value)}>
+                  <option value="">Select CEO / CFO…</option>
+                  {managers.map(m => <option key={m.id} value={m.id}>{m.full_name} ({m.role.toUpperCase()})</option>)}
+                </select>
+                <button className="btn btn-warning btn-sm" disabled={actionLoading || !escalateTo}
+                  onClick={() => doAction('escalate', { escalated_to: escalateTo })}>
+                  {actionLoading ? '…' : '↑ Send'}
+                </button>
+                <button className="btn btn-outline btn-sm"
+                  onClick={() => { setShowEscalate(false); setEscalateTo('') }}>✕</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* CEO/CFO quick actions */}
+        {isMgr && app.status === 'escalated' && app.escalated_to === user?.id && (
+          <div style={{
+            background:'#fef3c7', border:'1px solid #fcd34d',
+            borderRadius:'var(--radius)', padding:'12px 16px',
+            display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap',
+          }}>
+            <span style={{ fontSize:'12px', fontWeight:600, color:'#92400e' }}>
+              ↑ Escalated to you for approval:
+            </span>
+            <button className="btn btn-success btn-sm" disabled={actionLoading}
+              onClick={() => doAction('approve')}>✓ Approve</button>
+            {!showRejectInline && (
+              <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                onClick={() => setShowRejectInline(true)}>✕ Reject</button>
+            )}
+            {showRejectInline && (
+              <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1, minWidth:'260px' }}>
+                <input className="form-control" style={{ fontSize:'12px', padding:'5px 10px' }}
+                  placeholder="Reason for rejection…"
+                  value={note} onChange={e => setNote(e.target.value)}
+                  autoFocus />
+                <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                  onClick={() => doAction('reject')}>Confirm</button>
+                <button className="btn btn-outline btn-sm"
+                  onClick={() => { setShowRejectInline(false); setNote('') }}>✕</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Duplicate confirmation modal */}
       {showDuplicate && (
@@ -699,42 +836,7 @@ export default function ApplicationDetail() {
             </div>
           </div>
 
-          {canAct && (
-            <div className="card" style={{ marginBottom:'20px' }}>
-              <div className="card-header"><h2>Review Application</h2></div>
-              <div className="card-body">
-                <div className="form-group">
-                  <label className="form-label">Note (shown to applicant on reject/return)</label>
-                  <textarea className="form-control" placeholder="Optional note…" value={note} onChange={e => setNote(e.target.value)} />
-                </div>
-                {!showEscalate ? (
-                  <div style={{ display:'flex', gap:'10px', flexWrap:'wrap' }}>
-                    <button className="btn btn-success" disabled={actionLoading} onClick={() => doAction('approve')}>✓ Approve</button>
-                    <button className="btn btn-warning" disabled={actionLoading}
-                      onClick={() => { if (!note.trim()) return alert('Add a note explaining what to correct'); doAction('return') }}>↩ Return for Edit</button>
-                    <button className="btn btn-danger" disabled={actionLoading}
-                      onClick={() => { if (!note.trim()) return alert('Add a rejection reason'); doAction('reject') }}>✕ Reject</button>
-                    <button className="btn btn-outline" disabled={actionLoading} onClick={() => setShowEscalate(true)}>↑ Escalate</button>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="form-group">
-                      <label className="form-label">Escalate to</label>
-                      <select className="form-control" value={escalateTo} onChange={e => setEscalateTo(e.target.value)}>
-                        <option value="">Select CEO / CFO…</option>
-                        {managers.map(m => <option key={m.id} value={m.id}>{m.full_name} ({m.role.toUpperCase()})</option>)}
-                      </select>
-                    </div>
-                    <div style={{ display:'flex', gap:'10px' }}>
-                      <button className="btn btn-warning" disabled={actionLoading || !escalateTo}
-                        onClick={() => doAction('escalate', { escalated_to: escalateTo })}>↑ Send for Approval</button>
-                      <button className="btn btn-outline" onClick={() => setShowEscalate(false)}>Cancel</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Quick actions moved to top header bar */}
 
           {isFinanceOrAbove && ['approved','rejected'].includes(app.status) && (
             <div className="card" style={{ marginBottom:'20px' }}>
@@ -764,23 +866,7 @@ export default function ApplicationDetail() {
             </div>
           )}
 
-          {isMgr && app.status === 'escalated' && app.escalated_to === user?.id && (
-            <div className="card" style={{ marginBottom:'20px' }}>
-              <div className="card-header"><h2>Management Approval</h2></div>
-              <div className="card-body">
-                <div className="alert alert-warning">This application has been escalated to you for final approval.</div>
-                <div className="form-group mt-3">
-                  <label className="form-label">Decision note</label>
-                  <textarea className="form-control" placeholder="Add a note…" value={note} onChange={e => setNote(e.target.value)} />
-                </div>
-                <div style={{ display:'flex', gap:'10px' }}>
-                  <button className="btn btn-success" disabled={actionLoading} onClick={() => doAction('approve')}>✓ Approve</button>
-                  <button className="btn btn-danger" disabled={actionLoading}
-                    onClick={() => { if (!note.trim()) return alert('Add a reason'); doAction('reject') }}>✕ Reject</button>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* CEO/CFO approval handled in top header bar */}
 
           {!isFinanceOrAbove && app.outcome_note && (
             <div className={`alert ${app.status==='approved'?'alert-success':app.status==='returned'?'alert-warning':'alert-error'}`}>
