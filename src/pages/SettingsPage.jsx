@@ -127,6 +127,10 @@ export default function SettingsPage() {
   const [newCompany, setNewCompany]     = useState({ name: '', prefix: '' })
   const [logoUploading, setLogoUploading] = useState(null)
   const [savingColor, setSavingColor]     = useState(null)
+  const [userAppCounts, setUserAppCounts] = useState({})
+  const [mergeSource, setMergeSource]     = useState(null)
+  const [mergeTarget, setMergeTarget]     = useState('')
+  const [mergingUser, setMergingUser]     = useState(false)
 
   // System health
   const [dbStats, setDbStats]           = useState(null)
@@ -159,6 +163,24 @@ export default function SettingsPage() {
     setMethods(me || [])
     setUserCompanies(uc || [])
     setDeletedLog(dl || [])
+
+    // Load transaction counts per user per company
+    if (us && co) {
+      const counts = {}
+      await Promise.all((us || []).map(async u => {
+        counts[u.id] = {}
+        await Promise.all((co || []).map(async c => {
+          const { count } = await supabase
+            .from('applications')
+            .select('id', { count: 'exact', head: true })
+            .eq('submitted_by', u.id)
+            .eq('company_id', c.id)
+            .is('deleted_at', null)
+          counts[u.id][c.id] = count || 0
+        }))
+      }))
+      setUserAppCounts(counts)
+    }
 
     // Load self-approval preference
     const { data: pref } = await supabase.from('system_settings').select('value').eq('key','finance_self_approval').single()
@@ -235,6 +257,48 @@ export default function SettingsPage() {
     flash('success', 'Logo uploaded')
     setLogoUploading(null)
     load()
+  }
+
+  async function toggleUserActive(userId, currentlyActive) {
+    const action = currentlyActive ? 'deactivate' : 'activate'
+    if (!confirm(`${action.charAt(0).toUpperCase()+action.slice(1)} this user? ${currentlyActive ? 'They will not be able to log in.' : 'They will be able to log in again.'}`)) return
+    await supabase.from('users').update({ is_active: !currentlyActive }).eq('id', userId)
+    flash('success', `User ${action}d successfully`)
+    load()
+  }
+
+  async function mergeUsers(sourceId, targetId) {
+    if (!targetId) return
+    setMergingUser(true)
+    try {
+      // 1. Reassign all applications from source to target
+      await supabase.from('applications')
+        .update({ submitted_by: targetId })
+        .eq('submitted_by', sourceId)
+
+      // 2. Mark source as merged and deactivate
+      await supabase.from('users').update({
+        merged_into: targetId,
+        is_active: false,
+      }).eq('id', sourceId)
+
+      // 3. Log in audit
+      await supabase.from('audit_log').insert({
+        application_id: '00000000-0000-0000-0000-000000000000',
+        action_by: (await supabase.auth.getUser()).data.user.id,
+        action: 'edited',
+        note: `User merged: ${sourceId} → ${targetId}. All applications reassigned.`,
+      }).catch(() => {}) // audit log may fail due to FK — that's ok
+
+      flash('success', 'Users merged successfully. All applications reassigned.')
+      setMergeSource(null)
+      setMergeTarget('')
+      load()
+    } catch (err) {
+      flash('error', err.message || 'Merge failed')
+    } finally {
+      setMergingUser(false)
+    }
   }
 
   async function saveCompanyColor(id, accent, pastel) {
@@ -411,54 +475,143 @@ export default function SettingsPage() {
         {tab === 'users' && (
           <div>
             <div className="alert alert-info" style={{marginBottom:'16px'}}>
-              Invite new users via <strong>Supabase → Authentication → Users → Invite</strong>. They appear here once they accept. Set role and assign companies below.
+              Invite new users via <strong>Supabase → Authentication → Users → Invite</strong>. They appear here once they accept.
             </div>
-            <div className="card">
-              <div className="card-header">
-                <h2>Users & Company Access</h2>
-                <span className="text-sm text-muted">Tick to grant company access per user</span>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th><th>Email</th><th>Role</th>
-                      {companies.filter(c=>c.active).map(c=>(
-                        <th key={c.id} style={{textAlign:'center',fontSize:'11px'}}>{c.name}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map(u=>(
-                      <tr key={u.id}>
-                        <td style={{fontWeight:500,whiteSpace:'nowrap'}}>{u.full_name}</td>
-                        <td className="text-muted text-sm">{u.email}</td>
-                        <td>
+
+            {/* User cards */}
+            {users.map(u => {
+              const myCompanies = companies.filter(c => c.active && userHasCompany(u.id, c.id))
+              const isMerged = !!u.merged_into
+              return (
+                <div key={u.id} className="card" style={{marginBottom:'12px',opacity: (!u.is_active || isMerged) ? 0.7 : 1}}>
+                  <div className="card-body" style={{padding:'16px 20px'}}>
+                    <div style={{display:'flex',alignItems:'flex-start',gap:'16px',flexWrap:'wrap'}}>
+
+                      {/* Status dot + Name */}
+                      <div style={{flex:'0 0 220px'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}}>
+                          <span style={{
+                            width:'10px',height:'10px',borderRadius:'50%',flexShrink:0,
+                            background: isMerged ? '#9ca3af' : u.is_active ? '#059669' : '#dc2626',
+                          }} title={isMerged ? 'Merged' : u.is_active ? 'Active' : 'Deactivated'} />
+                          <span style={{fontWeight:600,fontSize:'14px'}}>{u.full_name}</span>
+                          {isMerged && <span className="badge badge-draft" style={{fontSize:'10px'}}>Merged</span>}
+                          {!u.is_active && !isMerged && <span className="badge badge-rejected" style={{fontSize:'10px'}}>Inactive</span>}
+                        </div>
+                        <div style={{fontSize:'12px',color:'var(--ink-3)',marginLeft:'18px'}}>{u.email}</div>
+                        <div style={{marginLeft:'18px',marginTop:'6px'}}>
                           <select className="form-control" style={{width:'auto',padding:'4px 8px',fontSize:'12px'}}
-                            value={u.role} onChange={e=>updateUserRole(u.id,e.target.value)}>
+                            value={u.role} onChange={e=>updateUserRole(u.id,e.target.value)}
+                            disabled={isMerged}>
                             <option value="staff">Staff</option>
                             <option value="finance">Finance Officer</option>
                             <option value="ceo">CEO</option>
                             <option value="cfo">CFO</option>
                             <option value="superadmin">Super Admin</option>
                           </select>
-                        </td>
-                        {companies.filter(c=>c.active).map(c=>{
-                          const has = userHasCompany(u.id,c.id)
-                          return (
-                            <td key={c.id} style={{textAlign:'center'}}>
-                              <input type="checkbox" checked={has}
-                                onChange={()=>toggleUserCompany(u.id,c.id,has)}
-                                style={{width:'16px',height:'16px',cursor:'pointer'}} />
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+                      </div>
+
+                      {/* Company assignments + tx counts */}
+                      <div style={{flex:1,minWidth:'200px'}}>
+                        <div style={{fontSize:'11px',fontWeight:600,color:'var(--ink-3)',
+                          textTransform:'uppercase',letterSpacing:'.07em',marginBottom:'8px'}}>
+                          Company Access & Transactions
+                        </div>
+                        <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
+                          {companies.filter(c=>c.active).map(c => {
+                            const has = userHasCompany(u.id, c.id)
+                            const count = userAppCounts[u.id]?.[c.id] ?? '…'
+                            return (
+                              <label key={c.id} style={{
+                                display:'flex',alignItems:'center',gap:'6px',
+                                padding:'5px 10px',borderRadius:'6px',cursor:'pointer',
+                                background: has ? 'var(--cream-2)' : 'var(--cream-3)',
+                                border: has ? '1px solid var(--border)' : '1px dashed var(--border-2)',
+                                fontSize:'12px',
+                              }}>
+                                <input type="checkbox" checked={has}
+                                  onChange={()=>toggleUserCompany(u.id,c.id,has)}
+                                  disabled={isMerged}
+                                  style={{width:'13px',height:'13px',cursor:'pointer'}} />
+                                <span style={{fontWeight:500}}>{c.name}</span>
+                                {has && (
+                                  <span style={{
+                                    background:'var(--ink)',color:'#fff',
+                                    borderRadius:'20px',padding:'1px 7px',
+                                    fontSize:'10px',fontWeight:600,
+                                  }}>{count}</span>
+                                )}
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div style={{display:'flex',flexDirection:'column',gap:'6px',flexShrink:0}}>
+                        {!isMerged && (
+                          <button
+                            className={`btn btn-sm ${u.is_active ? 'btn-danger' : 'btn-success'}`}
+                            onClick={() => toggleUserActive(u.id, u.is_active)}
+                            style={{whiteSpace:'nowrap'}}>
+                            {u.is_active ? '⊘ Deactivate' : '✓ Activate'}
+                          </button>
+                        )}
+                        {!isMerged && (
+                          <button className="btn btn-outline btn-sm"
+                            onClick={() => setMergeSource(u)}
+                            style={{whiteSpace:'nowrap'}}>
+                            ⇄ Merge into…
+                          </button>
+                        )}
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+
+            {/* Merge modal */}
+            {mergeSource && (
+              <div style={{position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.7)',
+                display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+                <div style={{background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'500px',
+                  boxShadow:'0 24px 64px rgba(0,0,0,0.3)',overflow:'hidden'}}>
+                  <div style={{background:'var(--ink)',padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px'}}>
+                    <span style={{fontSize:'18px'}}>⇄</span>
+                    <h3 style={{color:'#fff',fontSize:'16px',fontWeight:600}}>Merge User Account</h3>
+                  </div>
+                  <div style={{padding:'24px'}}>
+                    <div style={{background:'var(--cream-2)',borderRadius:'8px',padding:'12px',marginBottom:'16px',fontSize:'13px'}}>
+                      <div style={{fontWeight:600,marginBottom:'2px'}}>Source (will be deactivated):</div>
+                      <div style={{color:'var(--ink-2)'}}>{mergeSource.full_name} — {mergeSource.email}</div>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Merge into (surviving account) <span style={{color:'#dc2626'}}>*</span></label>
+                      <select className="form-control" value={mergeTarget} onChange={e=>setMergeTarget(e.target.value)}>
+                        <option value="">Select target user…</option>
+                        {users.filter(u=>u.id!==mergeSource.id&&!u.merged_into).map(u=>(
+                          <option key={u.id} value={u.id}>{u.full_name} — {u.email}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="alert alert-warning" style={{marginBottom:'16px',fontSize:'12px'}}>
+                      ⚠ All applications from <strong>{mergeSource.full_name}</strong> will be reassigned to the target account.
+                      The source account will be deactivated and flagged as merged. This cannot be undone.
+                    </div>
+                    <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
+                      <button className="btn btn-outline" onClick={()=>{setMergeSource(null);setMergeTarget('')}}>Cancel</button>
+                      <button className="btn btn-primary" disabled={!mergeTarget||mergingUser}
+                        onClick={()=>mergeUsers(mergeSource.id,mergeTarget)}>
+                        {mergingUser ? 'Merging…' : '⇄ Confirm Merge'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 

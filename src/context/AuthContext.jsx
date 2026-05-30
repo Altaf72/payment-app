@@ -36,6 +36,20 @@ export function AuthProvider({ children }) {
   async function signIn(email, password) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
+    // Check app-level active flag
+    const { data: profile } = await supabase
+      .from('users')
+      .select('is_active, merged_into')
+      .eq('id', data.user.id)
+      .single()
+    if (profile?.is_active === false) {
+      await supabase.auth.signOut()
+      throw new Error('Your account has been deactivated. Please contact your administrator.')
+    }
+    if (profile?.merged_into) {
+      await supabase.auth.signOut()
+      throw new Error('This account has been merged. Please log in with your new account credentials.')
+    }
     return data
   }
 
