@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -241,24 +241,28 @@ export default function FinanceDashboard() {
     URL.revokeObjectURL(url)
   }
 
-  // Batch helpers
-  function getSelected() { return applications.filter(a => selected.has(a.id)) }
+  // Batch helpers — memoised to prevent render crashes
+  const selectedApps = React.useMemo(
+    () => (applications || []).filter(a => selected.has(a.id)),
+    [applications, selected]
+  )
 
-  function batchCompatible(apps) {
-    if (apps.length < 2) return null
-    const first = apps[0]
-    const mismatch = apps.find(a =>
+  const batchError = React.useMemo(() => {
+    if (selectedApps.length < 2) return null
+    const first = selectedApps[0]
+    const mismatch = selectedApps.find(a =>
       a.payee_name !== first.payee_name ||
       a.payment_method_name !== first.payment_method_name ||
       a.bank_account !== first.bank_account
     )
-    if (mismatch) return 'Selected applications must have the same Payee, Payment Method, and Bank Account.'
-    return null
-  }
+    return mismatch ? 'Selected applications must have the same Payee, Payment Method, and Bank Account.' : null
+  }, [selectedApps])
 
-  const selectedApps   = getSelected()
-  const batchError     = batchCompatible(selectedApps)
-  const batchTotal     = selectedApps.reduce((s,a) => s + Number(a.amount), 0)
+  const batchTotal = React.useMemo(
+    () => selectedApps.reduce((s, a) => s + Number(a.amount || 0), 0),
+    [selectedApps]
+  )
+
   const canCreateBatch = selectedApps.length >= 2 && (!batchError || forceMode)
 
   async function createBatch() {
