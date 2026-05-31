@@ -6,6 +6,27 @@ import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { COMPANY_PALETTE } from '../lib/companyColors'
 
+// Batch colour palette — unique colour per batch number
+const BATCH_PALETTE = [
+  { accent:'#1d4ed8', bg:'#dbeafe', light:'#eff6ff' },  // blue
+  { accent:'#065f46', bg:'#d1fae5', light:'#f0fdf4' },  // green
+  { accent:'#7c3aed', bg:'#ede9fe', light:'#f5f3ff' },  // purple
+  { accent:'#c2410c', bg:'#ffedd5', light:'#fff7ed' },  // orange
+  { accent:'#be123c', bg:'#ffe4e6', light:'#fff1f2' },  // rose
+  { accent:'#0e7490', bg:'#cffafe', light:'#ecfeff' },  // cyan
+  { accent:'#92400e', bg:'#fef3c7', light:'#fefce8' },  // amber
+  { accent:'#4d7c0f', bg:'#ecfccb', light:'#f7fee7' },  // lime
+]
+
+// Derive a consistent colour from a batch number string
+function batchColor(batchNumber) {
+  if (!batchNumber) return BATCH_PALETTE[0]
+  // Extract sequence number from e.g. BATCH-2026-0003 -> 3
+  const parts = batchNumber.split('-')
+  const seq = parseInt(parts[parts.length - 1] || '0', 10)
+  return BATCH_PALETTE[seq % BATCH_PALETTE.length]
+}
+
 // Attachment popup
 function AttachmentPreview({ path, name, onClose }) {
   const [url, setUrl]         = useState(null)
@@ -93,6 +114,13 @@ export default function FinanceDashboard() {
   const [loading, setLoading]                 = useState(true)
   const [companies, setCompanies]             = useState([])
   const [companiesSorted, setCompaniesSorted] = useState([])
+  const [selected, setSelected]         = useState(new Set())
+  const [showBatchModal, setShowBatchModal] = useState(false)
+  const [batchForm, setBatchForm]       = useState({ transfer_ref:'', transfer_date:'', note:'' })
+  const [creatingBatch, setCreatingBatch] = useState(false)
+  const [batchMsg, setBatchMsg]         = useState('')
+  const [forceMode, setForceMode]       = useState(false)
+  const [forceReason, setForceReason]   = useState('')
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = 'finance_dashboard_filters'
@@ -213,6 +241,67 @@ export default function FinanceDashboard() {
     URL.revokeObjectURL(url)
   }
 
+  // Batch helpers
+  function getSelected() { return applications.filter(a => selected.has(a.id)) }
+
+  function batchCompatible(apps) {
+    if (apps.length < 2) return null
+    const first = apps[0]
+    const mismatch = apps.find(a =>
+      a.payee_name !== first.payee_name ||
+      a.payment_method_name !== first.payment_method_name ||
+      a.bank_account !== first.bank_account
+    )
+    if (mismatch) return 'Selected applications must have the same Payee, Payment Method, and Bank Account.'
+    return null
+  }
+
+  const selectedApps   = getSelected()
+  const batchError     = batchCompatible(selectedApps)
+  const batchTotal     = selectedApps.reduce((s,a) => s + Number(a.amount), 0)
+  const canCreateBatch = selectedApps.length >= 2 && (!batchError || forceMode)
+
+  async function createBatch() {
+    if (!batchForm.transfer_ref.trim()) return setBatchMsg('Transfer reference is required')
+    if (!batchForm.transfer_date)       return setBatchMsg('Transfer date is required')
+    setCreatingBatch(true)
+    setBatchMsg('')
+    try {
+      // Generate batch number via RPC
+      const { data: batchNum } = await supabase.rpc('generate_batch_number')
+      const ids = selectedApps.map(a => a.id)
+      const { data: batch, error: bErr } = await supabase
+        .from('payment_batches')
+        .insert({
+          batch_number:      batchNum,
+          transfer_ref:      batchForm.transfer_ref.trim(),
+          transfer_date:     batchForm.transfer_date,
+          note:              batchForm.note.trim() || null,
+          total_amount:      batchTotal,
+          application_count: ids.length,
+          force_reason:      forceMode ? forceReason.trim() : null,
+        })
+        .select().single()
+      if (bErr) throw bErr
+      // Link all selected applications to this batch
+      const { error: lErr } = await supabase
+        .from('applications')
+        .update({ batch_id: batch.id })
+        .in('id', ids)
+      if (lErr) throw lErr
+      setSelected(new Set())
+      setShowBatchModal(false)
+      setBatchForm({ transfer_ref:'', transfer_date:'', note:'' })
+      setForceMode(false)
+      setForceReason('')
+      await load()
+    } catch (err) {
+      setBatchMsg(err.message || 'Failed to create batch')
+    } finally {
+      setCreatingBatch(false)
+    }
+  }
+
   // Derived — are we in search mode?
   const isSearching = !!(search.trim() || amountSearch.trim())
 
@@ -293,6 +382,30 @@ export default function FinanceDashboard() {
         )}
       </div>
 
+      {/* Batch selection bar */}
+      {selected.size > 0 && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:'12px', flexWrap:'wrap',
+          padding:'10px 16px', marginBottom:'10px',
+          background: canCreateBatch ? '#f0fdf4' : '#fff7ed',
+          border: `1px solid ${canCreateBatch ? '#bbf7d0' : '#fed7aa'}`,
+          borderRadius:'var(--radius-sm)', fontSize:'13px',
+        }}>
+          <span style={{fontWeight:600, color: canCreateBatch ? '#065f46' : '#9a3412'}}>
+            {selected.size} application{selected.size>1?'s':''} selected (AED {formatCurrency(batchTotal)})
+          </span>
+          {batchError && <span style={{color:'#c2410c',fontSize:'12px'}}>⚠ {batchError}</span>}
+          {canCreateBatch && (
+            <button className="btn btn-success btn-sm" onClick={() => setShowBatchModal(true)}>
+              ⧉ Create Payment Batch
+            </button>
+          )}
+          <button className="btn btn-outline btn-sm" onClick={() => setSelected(new Set())}>
+            ✕ Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Search mode banner */}
       {isSearching && (
         <div style={{
@@ -333,6 +446,16 @@ export default function FinanceDashboard() {
             <table>
               <thead>
                 <tr>
+                  <th style={{width:'32px'}}>
+                    <input type="checkbox"
+                      style={{width:'13px',height:'13px',cursor:'pointer'}}
+                      checked={selected.size === applications.length && applications.length > 0}
+                      onChange={e => {
+                        if (e.target.checked) setSelected(new Set(applications.map(a=>a.id)))
+                        else setSelected(new Set())
+                      }}
+                    />
+                  </th>
                   <th>Reference</th>
                   <th>Company</th>
                   <th>Applicant</th>
@@ -355,7 +478,18 @@ export default function FinanceDashboard() {
                   return (
                     <React.Fragment key={app.id}>
                       <tr style={{lineHeight:'1.3'}}>
-
+                        {/* Checkbox */}
+                        <td style={{verticalAlign:'middle',paddingTop:'8px'}}>
+                          <input type="checkbox"
+                            style={{width:'13px',height:'13px',cursor:'pointer'}}
+                            checked={selected.has(app.id)}
+                            onChange={e => {
+                              const s = new Set(selected)
+                              e.target.checked ? s.add(app.id) : s.delete(app.id)
+                              setSelected(s)
+                            }}
+                          />
+                        </td>
                         {/* Reference + copy button */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
@@ -381,6 +515,21 @@ export default function FinanceDashboard() {
                               opacity:0, transition:'opacity 0.2s', whiteSpace:'nowrap',
                             }}>✓</span>
                           </div>
+                          {app.batch_number && (() => {
+                            const bc = batchColor(app.batch_number)
+                            return (
+                              <div style={{marginTop:'3px'}}>
+                                <span style={{
+                                  fontSize:'9px',fontWeight:600,padding:'1px 6px',
+                                  borderRadius:'20px',
+                                  background: bc.bg,
+                                  color: bc.accent,
+                                  border: `1px solid ${bc.accent}`,
+                                  fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',
+                                }}>⧉ {app.batch_number}</span>
+                              </div>
+                            )
+                          })()}
                         </td>
 
                         {/* Company — 1 line ellipsis */}
@@ -465,6 +614,7 @@ export default function FinanceDashboard() {
                       {/* Remarks sub-row — spans from company col to end */}
                       {app.remarks && (
                         <tr style={{borderTop:'none'}}>
+                          <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                           <td colSpan={8} style={{
                             padding:'0 0 8px 6px',
@@ -551,6 +701,105 @@ export default function FinanceDashboard() {
           </div>
         )}
       </div>
+      {/* Batch creation modal */}
+      {showBatchModal && (
+        <div style={{position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.7)',
+          display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div style={{background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'520px',
+            boxShadow:'0 24px 64px rgba(0,0,0,0.3)',overflow:'hidden'}}>
+            <div style={{background:'var(--ink)',padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px'}}>
+              <span style={{fontSize:'18px'}}>⧉</span>
+              <h3 style={{color:'#fff',fontSize:'16px',fontWeight:600}}>Create Payment Batch</h3>
+            </div>
+            <div style={{padding:'24px'}}>
+              {/* Summary */}
+              <div style={{background:'var(--cream-2)',borderRadius:'8px',padding:'12px',marginBottom:'16px'}}>
+                <div style={{fontSize:'12px',fontWeight:600,color:'var(--ink-3)',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'.05em'}}>
+                  Included Applications
+                </div>
+                {selectedApps.map(a => (
+                  <div key={a.id} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0',borderBottom:'1px solid var(--border-2)'}}>
+                    <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:500}}>{a.ref_number}</span>
+                    <span style={{color:'var(--ink-2)'}}>{a.payment_reason}</span>
+                    <span style={{fontWeight:600}}>AED {formatCurrency(a.amount)}</span>
+                  </div>
+                ))}
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:700,marginTop:'8px',paddingTop:'8px'}}>
+                  <span>Total</span>
+                  <span>AED {formatCurrency(batchTotal)}</span>
+                </div>
+                <div style={{fontSize:'12px',color:'var(--ink-3)',marginTop:'4px'}}>
+                  Payee: {selectedApps[0]?.payee_name} · {selectedApps[0]?.payment_method_name} · {selectedApps[0]?.bank_account}
+                </div>
+              </div>
+              {/* Form */}
+              <div className="form-group">
+                <label className="form-label">Bank Transfer Reference <span style={{color:'#dc2626'}}>*</span></label>
+                <input className="form-control" placeholder="e.g. TT2026051234"
+                  value={batchForm.transfer_ref}
+                  onChange={e => setBatchForm(f => ({...f,transfer_ref:e.target.value}))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Transfer Date <span style={{color:'#dc2626'}}>*</span></label>
+                <input type="date" className="form-control"
+                  value={batchForm.transfer_date}
+                  onChange={e => setBatchForm(f => ({...f,transfer_date:e.target.value}))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Note <span style={{color:'var(--ink-3)',fontWeight:400}}>(optional)</span></label>
+                <input className="form-control" placeholder="e.g. May 2026 supplier payments"
+                  value={batchForm.note}
+                  onChange={e => setBatchForm(f => ({...f,note:e.target.value}))} />
+              </div>
+              {/* Force mode — shown when mismatch detected */}
+              {batchError && !forceMode && (
+                <div style={{marginBottom:'12px',padding:'10px 14px',background:'#fff7ed',
+                  border:'1px solid #fed7aa',borderRadius:'var(--radius-sm)'}}>
+                  <div style={{fontSize:'12px',color:'#9a3412',marginBottom:'8px'}}>
+                    ⚠ {batchError}
+                  </div>
+                  <button className="btn btn-warning btn-sm"
+                    onClick={() => setForceMode(true)}>
+                    Force Batch Anyway
+                  </button>
+                </div>
+              )}
+              {forceMode && (
+                <div className="form-group">
+                  <label className="form-label" style={{color:'#c2410c'}}>
+                    Force Override Reason <span style={{color:'#dc2626'}}>*</span>
+                  </label>
+                  <input className="form-control"
+                    placeholder="Required: explain why different payees/methods are being batched…"
+                    value={forceReason}
+                    onChange={e => setForceReason(e.target.value)}
+                    style={{borderColor:'#fed7aa'}}
+                    autoFocus
+                  />
+                  <p className="form-hint" style={{color:'#9a3412'}}>
+                    This reason will be permanently recorded with the batch.
+                  </p>
+                </div>
+              )}
+              {batchMsg && <div className="alert alert-error" style={{marginBottom:'12px'}}>{batchMsg}</div>}
+              <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
+                <button className="btn btn-outline" onClick={() => {
+                  setShowBatchModal(false); setBatchMsg('');
+                  setForceMode(false); setForceReason('')
+                }}>Cancel</button>
+                <button className="btn btn-primary"
+                  disabled={creatingBatch || (forceMode && !forceReason.trim())}
+                  onClick={() => {
+                    if (forceMode && !forceReason.trim()) return setBatchMsg('Override reason is required')
+                    createBatch()
+                  }}>
+                  {creatingBatch ? 'Creating…' : forceMode ? '⚠ Force Create Batch' : '⧉ Create Batch'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

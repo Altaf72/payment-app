@@ -6,6 +6,24 @@ import StatusBadge from '../components/StatusBadge'
 import { formatCurrency } from '../lib/utils'
 import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
 
+// Batch colour palette — must match FinanceDashboard
+const BATCH_PALETTE = [
+  { accent:'#1d4ed8', bg:'#dbeafe', light:'#eff6ff' },
+  { accent:'#065f46', bg:'#d1fae5', light:'#f0fdf4' },
+  { accent:'#7c3aed', bg:'#ede9fe', light:'#f5f3ff' },
+  { accent:'#c2410c', bg:'#ffedd5', light:'#fff7ed' },
+  { accent:'#be123c', bg:'#ffe4e6', light:'#fff1f2' },
+  { accent:'#0e7490', bg:'#cffafe', light:'#ecfeff' },
+  { accent:'#92400e', bg:'#fef3c7', light:'#fefce8' },
+  { accent:'#4d7c0f', bg:'#ecfccb', light:'#f7fee7' },
+]
+function batchColor(batchNumber) {
+  if (!batchNumber) return BATCH_PALETTE[0]
+  const parts = batchNumber.split('-')
+  const seq = parseInt(parts[parts.length - 1] || '0', 10)
+  return BATCH_PALETTE[seq % BATCH_PALETTE.length]
+}
+
 function toProperCase(str) {
   if (!str) return ''
   return str.replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase())
@@ -344,6 +362,7 @@ export default function ApplicationDetail() {
   const [managers, setManagers]     = useState([])
   const [attachmentUrl, setAttachmentUrl] = useState(null)
   const [companyColor, setCompanyColor]   = useState(null)
+  const [batchApps, setBatchApps]         = useState([])
   const [allCompanies, setAllCompanies]   = useState([])
   const [downloading, setDownloading]     = useState(false)
   const [showDuplicate,    setShowDuplicate]    = useState(false)
@@ -395,6 +414,19 @@ export default function ApplicationDetail() {
         .from('attachments').createSignedUrl(appData.attachment_path, 3600)
       setAttachmentUrl(signed?.signedUrl || null)
     }
+
+    // Load all applications in same batch
+    if (appData?.batch_id) {
+      const { data: linked } = await supabase
+        .from('applications_full')
+        .select('id, ref_number, payment_reason, amount, status, submitted_by_name')
+        .eq('batch_id', appData.batch_id)
+        .order('created_at')
+      setBatchApps(linked || [])
+    } else {
+      setBatchApps([])
+    }
+
     setLoading(false)
   }
 
@@ -837,6 +869,116 @@ export default function ApplicationDetail() {
           </div>
 
           {/* Quick actions moved to top header bar */}
+
+          {/* Batch panel — shown when app belongs to a batch */}
+          {app.batch_number && (() => {
+            const bc = batchColor(app.batch_number)
+            return (
+              <div className="card" style={{ marginBottom:'20px', border:`1.5px solid ${bc.accent}` }}>
+                <div className="card-header" style={{ background: bc.light }}>
+                  <h2 style={{ color: bc.accent, display:'flex', alignItems:'center', gap:'8px' }}>
+                    <span>⧉</span> Payment Batch
+                  </h2>
+                  <span style={{
+                    fontFamily:"'JetBrains Mono',monospace", fontSize:'13px',
+                    fontWeight:700, color: bc.accent,
+                    background: bc.bg, padding:'2px 10px', borderRadius:'20px',
+                    border:`1px solid ${bc.accent}`,
+                  }}>{app.batch_number}</span>
+                </div>
+                <div className="card-body">
+                  {/* Batch header info */}
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'16px', marginBottom:'16px' }}>
+                    <div>
+                      <div className="form-label">Transfer Reference</div>
+                      <div style={{ fontFamily:"'JetBrains Mono',monospace", fontWeight:600 }}>
+                        {app.batch_transfer_ref}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="form-label">Transfer Date</div>
+                      <div style={{ fontWeight:500 }}>
+                        {app.batch_transfer_date ? fmtDate(app.batch_transfer_date) : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="form-label">Batch Total</div>
+                      <div style={{ fontWeight:700, fontSize:'15px' }}>
+                        AED {formatCurrency(app.batch_total_amount)}
+                        <span style={{ fontSize:'11px', fontWeight:400, color:'var(--ink-3)', marginLeft:'6px' }}>
+                          ({app.batch_app_count} applications)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {app.batch_note && (
+                    <div style={{ fontSize:'12px', color:'var(--ink-2)', fontStyle:'italic', marginBottom:'12px' }}>
+                      📝 {app.batch_note}
+                    </div>
+                  )}
+
+                  {/* Force reason if applicable */}
+                  {app.batch_force_reason && (
+                    <div style={{ fontSize:'12px', color:'#c2410c', background:'#fff7ed',
+                      border:'1px solid #fed7aa', borderRadius:'6px',
+                      padding:'8px 12px', marginBottom:'12px' }}>
+                      ⚠ Force override reason: <em>{app.batch_force_reason}</em>
+                    </div>
+                  )}
+
+                  {/* Linked transactions */}
+                  <div style={{ fontSize:'12px', fontWeight:600, color:'var(--ink-3)',
+                    textTransform:'uppercase', letterSpacing:'.06em', marginBottom:'8px' }}>
+                    All Applications in This Batch
+                  </div>
+                  <div style={{ border:`1px solid ${bc.bg}`, borderRadius:'8px', overflow:'hidden' }}>
+                    {batchApps.map((a, i) => (
+                      <div key={a.id}
+                        onClick={() => navigate(`/application/${a.id}`)}
+                        style={{
+                          display:'flex', alignItems:'center', gap:'12px',
+                          padding:'9px 12px', cursor:'pointer',
+                          background: a.id === id ? bc.light : i % 2 === 0 ? '#fff' : '#fafafa',
+                          borderBottom: i < batchApps.length-1 ? `1px solid ${bc.bg}` : 'none',
+                          transition:'background .12s',
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = bc.light}
+                        onMouseLeave={e => e.currentTarget.style.background = a.id === id ? bc.light : i%2===0?'#fff':'#fafafa'}
+                      >
+                        <span style={{
+                          fontFamily:"'JetBrains Mono',monospace", fontSize:'11px',
+                          fontWeight: a.id===id ? 700 : 500, color: bc.accent,
+                          flexShrink:0,
+                        }}>{a.ref_number}</span>
+                        {a.id === id && (
+                          <span style={{ fontSize:'10px', background: bc.bg,
+                            color: bc.accent, padding:'1px 6px', borderRadius:'20px',
+                            fontWeight:600, flexShrink:0 }}>current</span>
+                        )}
+                        <span style={{ fontSize:'12px', color:'var(--ink-2)', flex:1,
+                          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {a.payment_reason}
+                        </span>
+                        <span style={{ fontSize:'12px', color:'var(--ink-3)', flexShrink:0 }}>
+                          {a.submitted_by_name}
+                        </span>
+                        <span style={{ fontSize:'13px', fontWeight:600, flexShrink:0 }}>
+                          AED {formatCurrency(a.amount)}
+                        </span>
+                        <StatusBadge status={a.status} />
+                        <span style={{ fontSize:'11px', color: bc.accent, flexShrink:0 }}>→</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize:'11px', color:'var(--ink-3)', marginTop:'10px' }}>
+                    Use transfer reference <strong>{app.batch_transfer_ref}</strong> for bank reconciliation.
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
           {isFinanceOrAbove && ['approved','rejected'].includes(app.status) && (
             <div className="card" style={{ marginBottom:'20px' }}>
