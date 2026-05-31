@@ -395,11 +395,18 @@ export default function FinanceDashboard() {
             {selected.size} application{selected.size>1?'s':''} selected (AED {formatCurrency(batchTotal)})
           </span>
           {batchError && <span style={{color:'#c2410c',fontSize:'12px'}}>⚠ {batchError}</span>}
-          {canCreateBatch && (
-            <button className="btn btn-success btn-sm" onClick={() => setShowBatchModal(true)}>
-              ⧉ Create Payment Batch
-            </button>
-          )}
+          {selected.size >= 2 && (
+              <button className="btn btn-sm" disabled={actionLoading}
+                style={{
+                  background: batchError ? '#fff7ed' : '#f0fdf4',
+                  border: `1px solid ${batchError ? '#fed7aa' : '#bbf7d0'}`,
+                  color: batchError ? '#9a3412' : '#065f46',
+                  fontWeight: 500,
+                }}
+                onClick={() => { setForceMode(!!batchError); setShowBatchModal(true) }}>
+                ⧉ {batchError ? 'Force Batch…' : 'Create Payment Batch'}
+              </button>
+            )}
           <button className="btn btn-outline btn-sm" onClick={() => setSelected(new Set())}>
             ✕ Clear selection
           </button>
