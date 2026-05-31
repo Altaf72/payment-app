@@ -66,6 +66,13 @@ export default function Layout() {
           <button className="btn btn-outline w-full" style={{fontSize:'12px',justifyContent:'center'}} onClick={handleSignOut}>
             Sign out
           </button>
+          <div style={{
+            marginTop:'10px', textAlign:'center',
+            fontSize:'10px', color:'rgba(255,255,255,0.2)',
+            letterSpacing:'.08em', fontFamily:"'JetBrains Mono',monospace",
+          }}>
+            v1.4.2
+          </div>
         </div>
       </aside>
 

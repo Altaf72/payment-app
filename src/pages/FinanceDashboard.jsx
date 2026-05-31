@@ -400,7 +400,7 @@ export default function FinanceDashboard() {
           </span>
           {batchError && <span style={{color:'#c2410c',fontSize:'12px'}}>⚠ {batchError}</span>}
           {selected.size >= 2 && (
-              <button className="btn btn-sm" disabled={actionLoading}
+              <button className="btn btn-sm" disabled={creatingBatch}
                 style={{
                   background: batchError ? '#fff7ed' : '#f0fdf4',
                   border: `1px solid ${batchError ? '#fed7aa' : '#bbf7d0'}`,
