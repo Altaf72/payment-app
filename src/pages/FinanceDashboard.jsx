@@ -195,6 +195,8 @@ export default function FinanceDashboard() {
     const { data, count, error } = await query
     if (error) console.error(error)
 
+    let rows = data || []
+
     // Amount filter — normalise decimals so 115.50 matches 115.5
     if (amountSearch.trim()) {
       const needle = parseFloat(amountSearch.trim())
@@ -367,11 +369,11 @@ export default function FinanceDashboard() {
         <input className="form-control" style={{minWidth:'220px',flex:'2'}}
           placeholder="🔍 Search ref, reason, applicant, payee…"
           value={search} onChange={e => setSearch(e.target.value)} />
-        <input className="form-control" style={{width:'140px'}}
+        <input className="form-control"
+          style={{width:'140px', MozAppearance:'textfield'}}
           placeholder="💰 Amount e.g. 115.50"
           type="text"
           inputMode="decimal"
-          style={{MozAppearance:'textfield'}}
           value={amountSearch} onChange={e => setAmountSearch(e.target.value)} />
         <select className="form-control" style={{width:'auto'}} value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}>
