@@ -195,10 +195,19 @@ export default function FinanceDashboard() {
     const { data, count, error } = await query
     if (error) console.error(error)
 
-    // Amount: server-side LIKE on cast — done client-side as postgres cant partial-match numerics
-    let rows = data || []
+    // Amount filter — normalise decimals so 115.50 matches 115.5
     if (amountSearch.trim()) {
-      rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
+      const needle = parseFloat(amountSearch.trim())
+      if (!isNaN(needle)) {
+        rows = rows.filter(a => {
+          const val = parseFloat(a.amount)
+          // exact match OR string contains (for partial like "115")
+          return val === needle || String(a.amount).includes(amountSearch.trim()) ||
+                 String(val).includes(amountSearch.trim())
+        })
+      } else {
+        rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
+      }
     }
 
     setApplications(rows)
@@ -223,7 +232,14 @@ export default function FinanceDashboard() {
     if (search) query = query.or(`ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,submitted_by_name.ilike.%${search}%,payee_name.ilike.%${search}%,remarks.ilike.%${search}%`)
     const { data } = await query
     let rows = data || []
-    if (amountSearch.trim()) rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
+    if (amountSearch.trim()) {
+      const needle = parseFloat(amountSearch.trim())
+      if (!isNaN(needle)) {
+        rows = rows.filter(a => parseFloat(a.amount) === needle || String(a.amount).includes(amountSearch.trim()) || String(parseFloat(a.amount)).includes(amountSearch.trim()))
+      } else {
+        rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
+      }
+    }
 
     const csv = [
       ['Ref','Date','Company','Applicant','Payment Reason','Method','Amount','Payee','Bank','Account','Status','Attachment'],
@@ -352,8 +368,10 @@ export default function FinanceDashboard() {
           placeholder="🔍 Search ref, reason, applicant, payee…"
           value={search} onChange={e => setSearch(e.target.value)} />
         <input className="form-control" style={{width:'140px'}}
-          placeholder="💰 Amount e.g. 105"
-          type="number" step="0.01" min="0"
+          placeholder="💰 Amount e.g. 115.50"
+          type="text"
+          inputMode="decimal"
+          style={{MozAppearance:'textfield'}}
           value={amountSearch} onChange={e => setAmountSearch(e.target.value)} />
         <select className="form-control" style={{width:'auto'}} value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}>

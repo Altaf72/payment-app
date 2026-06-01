@@ -259,3 +259,13 @@ tbody tr:last-child { border-bottom: none; }
     color-adjust: exact !important;
   }
 }
+
+/* Hide number input spinners */
+input[inputmode="decimal"]::-webkit-outer-spin-button,
+input[inputmode="decimal"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] { -moz-appearance: textfield; }

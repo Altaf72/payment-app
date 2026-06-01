@@ -74,10 +74,15 @@ function AuditTimeline({ log }) {
 }
 
 // ── Print/PDF layout — original table format + colour strip ─
-function PrintView({ app, companyColor }) {
-  const date   = fmtDate(app.submitted_at || app.created_at)
-  const accent = companyColor?.accent || '#8b6914'
-  const pastel = companyColor?.pastel || '#fef3c7'
+function PrintView({ app, companyColor, auditLog = [] }) {
+  const date      = fmtDate(app.submitted_at || app.created_at)
+  const accent    = companyColor?.accent || '#8b6914'
+  const pastel    = companyColor?.pastel || '#fef3c7'
+
+  // Find approved-by from audit log
+  const approvedEntry = auditLog.find(l => l.action === 'approved')
+  const approvedBy    = approvedEntry?.actor || null
+  const approvedDate  = approvedEntry ? fmtDate(approvedEntry.created_at) : date
 
   const s = {
     wrap: {
@@ -172,14 +177,14 @@ function PrintView({ app, companyColor }) {
               申请部门
               <span style={s.sub}>Application<br/>Department</span>
             </td>
-            <td style={{ ...s.vc, width:'28%', fontWeight:'bold' }}>
+            <td style={{ ...s.vc, width:'45%', fontWeight:'bold' }}>
               {toProperCase(app.company_name)}
             </td>
-            <td style={{ ...s.lc, borderLeft:'1.5px solid #8b6914' }}>
+            <td style={{ ...s.lc, borderLeft:'1.5px solid #8b6914', width:'90px' }}>
               申请人
               <span style={s.sub}>Applicant</span>
             </td>
-            <td style={s.vc}>
+            <td style={{ ...s.vc, width:'15%' }}>
               {toProperCase(app.submitted_by_name)}
             </td>
           </tr>
@@ -277,10 +282,10 @@ function PrintView({ app, companyColor }) {
             <td colSpan={4} style={{ border:'1px solid #c8b99a', padding:'0' }}>
               <div style={{ display:'flex' }}>
                 {[
-                  ['部门主管审批签字', 'Department Head Signature'],
-                  ['财务部审批签字',   'Department Finance Signature'],
-                  ['总经理审批签字',   'General Manager Signature'],
-                ].map(([cn, en], i) => (
+                  ['部门主管审批签字', 'Department Head Signature', null, date],
+                  ['财务部审批签字',   'Department Finance Signature', approvedBy, approvedDate],
+                  ['总经理审批签字',   'General Manager Signature', null, date],
+                ].map(([cn, en, signedBy, signedDate], i) => (
                   <div key={i} style={{
                     flex:1,
                     borderRight: i < 2 ? '1px solid #c8b99a' : 'none',
@@ -288,9 +293,20 @@ function PrintView({ app, companyColor }) {
                     textAlign:'center',
                   }}>
                     <div style={{ fontSize:'11px', fontFamily:"Georgia, serif", fontWeight:'bold', color:'#2a1500', marginBottom:'2px' }}>{cn}</div>
-                    <div style={{ fontSize:'10px', color:'#666', marginBottom:'12px', fontFamily:"Georgia, serif" }}>{en}</div>
-                    <div style={{ height:'36px', borderBottom:'1px solid #aaa', margin:'0 10px' }} />
-                    <div style={{ fontSize:'10px', color:'#555', marginTop:'6px', fontFamily:"Georgia, serif" }}>DATE: {date}</div>
+                    <div style={{ fontSize:'10px', color:'#666', marginBottom:'6px', fontFamily:"Georgia, serif" }}>{en}</div>
+                    {signedBy && app.status === 'approved' ? (
+                      <div style={{ fontSize:'11px', fontWeight:'bold', color:'#1a0800',
+                        fontFamily:"Georgia, serif", borderBottom:'1px solid #aaa',
+                        margin:'0 10px', paddingBottom:'4px', minHeight:'28px',
+                        display:'flex', alignItems:'flex-end', justifyContent:'center' }}>
+                        {signedBy}
+                      </div>
+                    ) : (
+                      <div style={{ height:'36px', borderBottom:'1px solid #aaa', margin:'0 10px' }} />
+                    )}
+                    <div style={{ fontSize:'10px', color:'#555', marginTop:'6px', fontFamily:"Georgia, serif" }}>
+                      DATE: {signedBy && app.status === 'approved' ? signedDate : date}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -567,7 +583,7 @@ export default function ApplicationDetail() {
     <div>
       {/* Hidden print/download target */}
       <div style={{ position: 'fixed', left: '-9999px', top: 0, width: '800px' }}>
-        <div ref={printRef}><PrintView app={app} companyColor={companyColor} /></div>
+        <div ref={printRef}><PrintView app={app} companyColor={companyColor} auditLog={auditLog} /></div>
       </div>
 
       {/* Header */}
