@@ -109,9 +109,9 @@ export default function MyApplications() {
 
   const counts = {
     total:    total,
-    pending:  applications.filter(a => a.status === 'pending').length,
+    pending:  applications.filter(a => ['pending','mgr_approved','fin_approved'].includes(a.status)).length,
     approved: applications.filter(a => a.status === 'approved').length,
-    returned: applications.filter(a => a.status === 'returned').length,
+    returned: applications.filter(a => ['returned','mgr_rejected'].includes(a.status)).length,
   }
 
   return (
@@ -183,7 +183,7 @@ export default function MyApplications() {
               <tbody>
                 {applications.map(app => {
                   const withinWindow = app.status === 'pending' && minutesAgo(app.submitted_at) < 30
-                  const canEdit   = app.status === 'draft' || app.status === 'returned' || withinWindow
+                  const canEdit   = app.status === 'draft' || app.status === 'returned' || app.status === 'mgr_rejected' || withinWindow
                   const canWithdraw = withinWindow
                   return (
                     <tr key={app.id}>

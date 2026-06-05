@@ -57,7 +57,7 @@ export function AuthProvider({ children }) {
     await supabase.auth.signOut()
   }
 
-  const isFinanceOrAbove = profile?.role && ['finance','ceo','cfo','superadmin'].includes(profile.role)
+  const isFinanceOrAbove = profile?.role && ['finance','manager','ceo','cfo','superadmin'].includes(profile.role)
   const isSuperAdmin = profile?.role === 'superadmin'
   const isUpperManagement = profile?.role && ['ceo','cfo'].includes(profile.role)
 

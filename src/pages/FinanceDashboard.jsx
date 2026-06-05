@@ -1,31 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { COMPANY_PALETTE } from '../lib/companyColors'
-
-// Batch colour palette — unique colour per batch number
-const BATCH_PALETTE = [
-  { accent:'#1d4ed8', bg:'#dbeafe', light:'#eff6ff' },  // blue
-  { accent:'#065f46', bg:'#d1fae5', light:'#f0fdf4' },  // green
-  { accent:'#7c3aed', bg:'#ede9fe', light:'#f5f3ff' },  // purple
-  { accent:'#c2410c', bg:'#ffedd5', light:'#fff7ed' },  // orange
-  { accent:'#be123c', bg:'#ffe4e6', light:'#fff1f2' },  // rose
-  { accent:'#0e7490', bg:'#cffafe', light:'#ecfeff' },  // cyan
-  { accent:'#92400e', bg:'#fef3c7', light:'#fefce8' },  // amber
-  { accent:'#4d7c0f', bg:'#ecfccb', light:'#f7fee7' },  // lime
-]
-
-// Derive a consistent colour from a batch number string
-function batchColor(batchNumber) {
-  if (!batchNumber) return BATCH_PALETTE[0]
-  // Extract sequence number from e.g. BATCH-2026-0003 -> 3
-  const parts = batchNumber.split('-')
-  const seq = parseInt(parts[parts.length - 1] || '0', 10)
-  return BATCH_PALETTE[seq % BATCH_PALETTE.length]
-}
 
 // Attachment popup
 function AttachmentPreview({ path, name, onClose }) {
@@ -119,8 +98,6 @@ export default function FinanceDashboard() {
   const [batchForm, setBatchForm]       = useState({ transfer_ref:'', transfer_date:'', note:'' })
   const [creatingBatch, setCreatingBatch] = useState(false)
   const [batchMsg, setBatchMsg]         = useState('')
-  const [forceMode, setForceMode]       = useState(false)
-  const [forceReason, setForceReason]   = useState('')
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = 'finance_dashboard_filters'
@@ -195,21 +172,10 @@ export default function FinanceDashboard() {
     const { data, count, error } = await query
     if (error) console.error(error)
 
+    // Amount: server-side LIKE on cast — done client-side as postgres cant partial-match numerics
     let rows = data || []
-
-    // Amount filter — normalise decimals so 115.50 matches 115.5
     if (amountSearch.trim()) {
-      const needle = parseFloat(amountSearch.trim())
-      if (!isNaN(needle)) {
-        rows = rows.filter(a => {
-          const val = parseFloat(a.amount)
-          // exact match OR string contains (for partial like "115")
-          return val === needle || String(a.amount).includes(amountSearch.trim()) ||
-                 String(val).includes(amountSearch.trim())
-        })
-      } else {
-        rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
-      }
+      rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
     }
 
     setApplications(rows)
@@ -221,7 +187,7 @@ export default function FinanceDashboard() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   // Summary counts (from current page only — full counts need separate queries)
-  const pagePending   = applications.filter(a => a.status === 'pending').length
+  const pagePending   = applications.filter(a => ['pending','mgr_approved','fin_approved'].includes(a.status)).length
   const pageApproved  = applications.filter(a => a.status === 'approved').length
   const pageEscalated = applications.filter(a => a.status === 'escalated').length
   const pageAmount    = applications.filter(a => a.status === 'approved').reduce((s,a) => s + Number(a.amount), 0)
@@ -234,14 +200,7 @@ export default function FinanceDashboard() {
     if (search) query = query.or(`ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,submitted_by_name.ilike.%${search}%,payee_name.ilike.%${search}%,remarks.ilike.%${search}%`)
     const { data } = await query
     let rows = data || []
-    if (amountSearch.trim()) {
-      const needle = parseFloat(amountSearch.trim())
-      if (!isNaN(needle)) {
-        rows = rows.filter(a => parseFloat(a.amount) === needle || String(a.amount).includes(amountSearch.trim()) || String(parseFloat(a.amount)).includes(amountSearch.trim()))
-      } else {
-        rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
-      }
-    }
+    if (amountSearch.trim()) rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
 
     const csv = [
       ['Ref','Date','Company','Applicant','Payment Reason','Method','Amount','Payee','Bank','Account','Status','Attachment'],
@@ -259,29 +218,25 @@ export default function FinanceDashboard() {
     URL.revokeObjectURL(url)
   }
 
-  // Batch helpers — memoised to prevent render crashes
-  const selectedApps = React.useMemo(
-    () => (applications || []).filter(a => selected.has(a.id)),
-    [applications, selected]
-  )
+  // Batch helpers
+  function getSelected() { return applications.filter(a => selected.has(a.id)) }
 
-  const batchError = React.useMemo(() => {
-    if (selectedApps.length < 2) return null
-    const first = selectedApps[0]
-    const mismatch = selectedApps.find(a =>
+  function batchCompatible(apps) {
+    if (apps.length < 2) return null
+    const first = apps[0]
+    const mismatch = apps.find(a =>
       a.payee_name !== first.payee_name ||
       a.payment_method_name !== first.payment_method_name ||
       a.bank_account !== first.bank_account
     )
-    return mismatch ? 'Selected applications must have the same Payee, Payment Method, and Bank Account.' : null
-  }, [selectedApps])
+    if (mismatch) return 'Selected applications must have the same Payee, Payment Method, and Bank Account.'
+    return null
+  }
 
-  const batchTotal = React.useMemo(
-    () => selectedApps.reduce((s, a) => s + Number(a.amount || 0), 0),
-    [selectedApps]
-  )
-
-  const canCreateBatch = selectedApps.length >= 2 && (!batchError || forceMode)
+  const selectedApps   = getSelected()
+  const batchError     = batchCompatible(selectedApps)
+  const batchTotal     = selectedApps.reduce((s,a) => s + Number(a.amount), 0)
+  const canCreateBatch = selectedApps.length >= 2 && !batchError
 
   async function createBatch() {
     if (!batchForm.transfer_ref.trim()) return setBatchMsg('Transfer reference is required')
@@ -301,7 +256,6 @@ export default function FinanceDashboard() {
           note:              batchForm.note.trim() || null,
           total_amount:      batchTotal,
           application_count: ids.length,
-          force_reason:      forceMode ? forceReason.trim() : null,
         })
         .select().single()
       if (bErr) throw bErr
@@ -314,8 +268,6 @@ export default function FinanceDashboard() {
       setSelected(new Set())
       setShowBatchModal(false)
       setBatchForm({ transfer_ref:'', transfer_date:'', note:'' })
-      setForceMode(false)
-      setForceReason('')
       await load()
     } catch (err) {
       setBatchMsg(err.message || 'Failed to create batch')
@@ -369,19 +321,20 @@ export default function FinanceDashboard() {
         <input className="form-control" style={{minWidth:'220px',flex:'2'}}
           placeholder="🔍 Search ref, reason, applicant, payee…"
           value={search} onChange={e => setSearch(e.target.value)} />
-        <input className="form-control"
-          style={{width:'140px', MozAppearance:'textfield'}}
-          placeholder="💰 Amount e.g. 115.50"
-          type="text"
-          inputMode="decimal"
+        <input className="form-control" style={{width:'140px'}}
+          placeholder="💰 Amount e.g. 105"
+          type="number" step="0.01" min="0"
           value={amountSearch} onChange={e => setAmountSearch(e.target.value)} />
         <select className="form-control" style={{width:'auto'}} value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}>
           <option value="">All statuses</option>
           <option value="draft">Draft</option>
-          <option value="pending">Pending</option>
+          <option value="pending">Pending (grandfathered)</option>
+          <option value="mgr_approved">Mgr Approved — awaiting Finance</option>
+          <option value="fin_approved">Fin Approved — awaiting CFO</option>
           <option value="escalated">Escalated</option>
           <option value="approved">Approved</option>
+          <option value="mgr_rejected">Mgr Rejected</option>
           <option value="rejected">Rejected</option>
           <option value="returned">Returned</option>
           <option value="withdrawn">Withdrawn</option>
@@ -416,21 +369,15 @@ export default function FinanceDashboard() {
           borderRadius:'var(--radius-sm)', fontSize:'13px',
         }}>
           <span style={{fontWeight:600, color: canCreateBatch ? '#065f46' : '#9a3412'}}>
-            {selected.size} application{selected.size>1?'s':''} selected (AED {formatCurrency(batchTotal)})
+            {selected.size} application{selected.size>1?'s':''} selected
+            {canCreateBatch && ` · Total: AED ${formatCurrency(batchTotal)}`}
           </span>
           {batchError && <span style={{color:'#c2410c',fontSize:'12px'}}>⚠ {batchError}</span>}
-          {selected.size >= 2 && (
-              <button className="btn btn-sm" disabled={creatingBatch}
-                style={{
-                  background: batchError ? '#fff7ed' : '#f0fdf4',
-                  border: `1px solid ${batchError ? '#fed7aa' : '#bbf7d0'}`,
-                  color: batchError ? '#9a3412' : '#065f46',
-                  fontWeight: 500,
-                }}
-                onClick={() => { setForceMode(!!batchError); setShowBatchModal(true) }}>
-                ⧉ {batchError ? 'Force Batch…' : 'Create Payment Batch'}
-              </button>
-            )}
+          {canCreateBatch && (
+            <button className="btn btn-success btn-sm" onClick={() => setShowBatchModal(true)}>
+              ⧉ Create Payment Batch
+            </button>
+          )}
           <button className="btn btn-outline btn-sm" onClick={() => setSelected(new Set())}>
             ✕ Clear selection
           </button>
@@ -546,21 +493,15 @@ export default function FinanceDashboard() {
                               opacity:0, transition:'opacity 0.2s', whiteSpace:'nowrap',
                             }}>✓</span>
                           </div>
-                          {app.batch_number && (() => {
-                            const bc = batchColor(app.batch_number)
-                            return (
-                              <div style={{marginTop:'3px'}}>
-                                <span style={{
-                                  fontSize:'9px',fontWeight:600,padding:'1px 6px',
-                                  borderRadius:'20px',
-                                  background: bc.bg,
-                                  color: bc.accent,
-                                  border: `1px solid ${bc.accent}`,
-                                  fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',
-                                }}>⧉ {app.batch_number}</span>
-                              </div>
-                            )
-                          })()}
+                          {app.batch_number && (
+                            <div style={{marginTop:'3px'}}>
+                              <span style={{
+                                fontSize:'9px',fontWeight:600,padding:'1px 6px',
+                                borderRadius:'20px',background:'#dbeafe',color:'#1e40af',
+                                fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',
+                              }}>⧉ {app.batch_number}</span>
+                            </div>
+                          )}
                         </td>
 
                         {/* Company — 1 line ellipsis */}
@@ -782,49 +723,11 @@ export default function FinanceDashboard() {
                   value={batchForm.note}
                   onChange={e => setBatchForm(f => ({...f,note:e.target.value}))} />
               </div>
-              {/* Force mode — shown when mismatch detected */}
-              {batchError && !forceMode && (
-                <div style={{marginBottom:'12px',padding:'10px 14px',background:'#fff7ed',
-                  border:'1px solid #fed7aa',borderRadius:'var(--radius-sm)'}}>
-                  <div style={{fontSize:'12px',color:'#9a3412',marginBottom:'8px'}}>
-                    ⚠ {batchError}
-                  </div>
-                  <button className="btn btn-warning btn-sm"
-                    onClick={() => setForceMode(true)}>
-                    Force Batch Anyway
-                  </button>
-                </div>
-              )}
-              {forceMode && (
-                <div className="form-group">
-                  <label className="form-label" style={{color:'#c2410c'}}>
-                    Force Override Reason <span style={{color:'#dc2626'}}>*</span>
-                  </label>
-                  <input className="form-control"
-                    placeholder="Required: explain why different payees/methods are being batched…"
-                    value={forceReason}
-                    onChange={e => setForceReason(e.target.value)}
-                    style={{borderColor:'#fed7aa'}}
-                    autoFocus
-                  />
-                  <p className="form-hint" style={{color:'#9a3412'}}>
-                    This reason will be permanently recorded with the batch.
-                  </p>
-                </div>
-              )}
               {batchMsg && <div className="alert alert-error" style={{marginBottom:'12px'}}>{batchMsg}</div>}
               <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
-                <button className="btn btn-outline" onClick={() => {
-                  setShowBatchModal(false); setBatchMsg('');
-                  setForceMode(false); setForceReason('')
-                }}>Cancel</button>
-                <button className="btn btn-primary"
-                  disabled={creatingBatch || (forceMode && !forceReason.trim())}
-                  onClick={() => {
-                    if (forceMode && !forceReason.trim()) return setBatchMsg('Override reason is required')
-                    createBatch()
-                  }}>
-                  {creatingBatch ? 'Creating…' : forceMode ? '⚠ Force Create Batch' : '⧉ Create Batch'}
+                <button className="btn btn-outline" onClick={() => {setShowBatchModal(false);setBatchMsg('')}}>Cancel</button>
+                <button className="btn btn-primary" disabled={creatingBatch} onClick={createBatch}>
+                  {creatingBatch ? 'Creating…' : '⧉ Create Batch'}
                 </button>
               </div>
             </div>

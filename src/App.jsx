@@ -7,6 +7,8 @@ import NewApplication from './pages/NewApplication'
 import FinanceDashboard from './pages/FinanceDashboard'
 import ApplicationDetail from './pages/ApplicationDetail'
 import SettingsPage from './pages/SettingsPage'
+import MyProfile from './pages/MyProfile'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -29,6 +31,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/" replace />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<HomeRedirect />} />
         <Route path="my-applications" element={<MyApplications />} />
@@ -39,6 +42,7 @@ export default function App() {
             <FinanceDashboard />
           </PrivateRoute>
         } />
+        <Route path="profile" element={<PrivateRoute><MyProfile /></PrivateRoute>} />
         <Route path="settings" element={
           <PrivateRoute allowedRoles={['superadmin']}>
             <SettingsPage />

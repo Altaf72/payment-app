@@ -6,24 +6,6 @@ import StatusBadge from '../components/StatusBadge'
 import { formatCurrency } from '../lib/utils'
 import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
 
-// Batch colour palette — must match FinanceDashboard
-const BATCH_PALETTE = [
-  { accent:'#1d4ed8', bg:'#dbeafe', light:'#eff6ff' },
-  { accent:'#065f46', bg:'#d1fae5', light:'#f0fdf4' },
-  { accent:'#7c3aed', bg:'#ede9fe', light:'#f5f3ff' },
-  { accent:'#c2410c', bg:'#ffedd5', light:'#fff7ed' },
-  { accent:'#be123c', bg:'#ffe4e6', light:'#fff1f2' },
-  { accent:'#0e7490', bg:'#cffafe', light:'#ecfeff' },
-  { accent:'#92400e', bg:'#fef3c7', light:'#fefce8' },
-  { accent:'#4d7c0f', bg:'#ecfccb', light:'#f7fee7' },
-]
-function batchColor(batchNumber) {
-  if (!batchNumber) return BATCH_PALETTE[0]
-  const parts = batchNumber.split('-')
-  const seq = parseInt(parts[parts.length - 1] || '0', 10)
-  return BATCH_PALETTE[seq % BATCH_PALETTE.length]
-}
-
 function toProperCase(str) {
   if (!str) return ''
   return str.replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase())
@@ -74,15 +56,20 @@ function AuditTimeline({ log }) {
 }
 
 // ── Print/PDF layout — original table format + colour strip ─
-function PrintView({ app, companyColor, auditLog = [] }) {
-  const date      = fmtDate(app.submitted_at || app.created_at)
-  const accent    = companyColor?.accent || '#8b6914'
-  const pastel    = companyColor?.pastel || '#fef3c7'
+function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null, finance:null, cfo:null } }) {
+  const date   = fmtDate(app.submitted_at || app.created_at)
+  const accent = companyColor?.accent || '#8b6914'
+  const pastel = companyColor?.pastel || '#fef3c7'
 
-  // Find approved-by from audit log
-  const approvedEntry = auditLog.find(l => l.action === 'approved')
-  const approvedBy    = approvedEntry?.actor || null
-  const approvedDate  = approvedEntry ? fmtDate(approvedEntry.created_at) : date
+  const mgrEntry = auditLog.find(l => l.action === 'mgr_approved')
+  const finEntry = auditLog.find(l => l.action === 'fin_approved')
+  const cfoEntry = auditLog.find(l => l.action === 'approved')
+  const mgrBy    = mgrEntry?.actor || app.manager_name || null
+  const mgrDate  = mgrEntry ? fmtDate(mgrEntry.created_at) : date
+  const finBy    = finEntry?.actor || app.fin_approved_by_name || null
+  const finDate  = finEntry ? fmtDate(finEntry.created_at) : date
+  const cfoBy    = cfoEntry?.actor || app.cfo_approved_by_name || null
+  const cfoDate  = cfoEntry ? fmtDate(cfoEntry.created_at) : date
 
   const s = {
     wrap: {
@@ -177,14 +164,14 @@ function PrintView({ app, companyColor, auditLog = [] }) {
               申请部门
               <span style={s.sub}>Application<br/>Department</span>
             </td>
-            <td style={{ ...s.vc, width:'45%', fontWeight:'bold' }}>
+            <td style={{ ...s.vc, width:'28%', fontWeight:'bold' }}>
               {toProperCase(app.company_name)}
             </td>
-            <td style={{ ...s.lc, borderLeft:'1.5px solid #8b6914', width:'90px' }}>
+            <td style={{ ...s.lc, borderLeft:'1.5px solid #8b6914' }}>
               申请人
               <span style={s.sub}>Applicant</span>
             </td>
-            <td style={{ ...s.vc, width:'15%' }}>
+            <td style={s.vc}>
               {toProperCase(app.submitted_by_name)}
             </td>
           </tr>
@@ -277,35 +264,37 @@ function PrintView({ app, companyColor, auditLog = [] }) {
             </td>
           </tr>
 
-          {/* Row 10: Signatures */}
+          {/* Row 10: Signatures — 4-stage approval chain */}
           <tr>
             <td colSpan={4} style={{ border:'1px solid #c8b99a', padding:'0' }}>
               <div style={{ display:'flex' }}>
                 {[
-                  ['部门主管审批签字', 'Department Head Signature', null, date],
-                  ['财务部审批签字',   'Department Finance Signature', approvedBy, approvedDate],
-                  ['总经理审批签字',   'General Manager Signature', null, date],
-                ].map(([cn, en, signedBy, signedDate], i) => (
+                  { cn:'申请部门主管签字', en:'Dept Head / Manager',    by: mgrBy, dt: mgrDate, sigKey: 'manager' },
+                  { cn:'财务部审批签字',   en:'Finance Officer',        by: finBy, dt: finDate, sigKey: 'finance' },
+                  { cn:'CFO / 总经理签字', en:'CFO / General Manager',  by: cfoBy, dt: cfoDate, sigKey: 'cfo'     },
+                ].map((sig, i) => (
                   <div key={i} style={{
-                    flex:1,
-                    borderRight: i < 2 ? '1px solid #c8b99a' : 'none',
-                    padding:'10px 10px 8px',
-                    textAlign:'center',
+                    flex:1, borderRight: i < 2 ? '1px solid #c8b99a' : 'none',
+                    padding:'8px 8px 6px', textAlign:'center',
                   }}>
-                    <div style={{ fontSize:'11px', fontFamily:"Georgia, serif", fontWeight:'bold', color:'#2a1500', marginBottom:'2px' }}>{cn}</div>
-                    <div style={{ fontSize:'10px', color:'#666', marginBottom:'6px', fontFamily:"Georgia, serif" }}>{en}</div>
-                    {signedBy && app.status === 'approved' ? (
-                      <div style={{ fontSize:'11px', fontWeight:'bold', color:'#1a0800',
-                        fontFamily:"Georgia, serif", borderBottom:'1px solid #aaa',
-                        margin:'0 10px', paddingBottom:'4px', minHeight:'28px',
-                        display:'flex', alignItems:'flex-end', justifyContent:'center' }}>
-                        {signedBy}
+                    <div style={{ fontSize:'10px', fontFamily:"Georgia, serif", fontWeight:'bold', color:'#2a1500', marginBottom:'1px' }}>{sig.cn}</div>
+                    <div style={{ fontSize:'9px', color:'#888', marginBottom:'4px', fontFamily:"Georgia, serif" }}>{sig.en}</div>
+                    {/* Signature image — per slot */}
+                    {sig.sigKey && sigFile?.[sig.sigKey] && app.status === 'approved' ? (
+                      <div style={{ margin:'0 6px', height:'40px', borderBottom:'1px solid #aaa', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        <img src={sigFile[sig.sigKey]} alt="signature" style={{ maxHeight:'36px', maxWidth:'100%', objectFit:'contain' }} />
                       </div>
                     ) : (
-                      <div style={{ height:'36px', borderBottom:'1px solid #aaa', margin:'0 10px' }} />
+                      <div style={{ height:'40px', borderBottom:'1px solid #aaa', margin:'0 6px', position:'relative' }}>
+                        {sig.by && ['approved','fin_approved','mgr_approved'].includes(app.status) && (
+                          <div style={{ position:'absolute', bottom:'4px', left:0, right:0, fontSize:'10px', fontWeight:'bold', color:'#1a0800', fontFamily:"Georgia, serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', padding:'0 4px' }}>
+                            {sig.by}
+                          </div>
+                        )}
+                      </div>
                     )}
-                    <div style={{ fontSize:'10px', color:'#555', marginTop:'6px', fontFamily:"Georgia, serif" }}>
-                      DATE: {signedBy && app.status === 'approved' ? signedDate : date}
+                    <div style={{ fontSize:'9px', color:'#555', marginTop:'4px', fontFamily:"Georgia, serif" }}>
+                      DATE: {sig.by ? sig.dt : date}
                     </div>
                   </div>
                 ))}
@@ -366,6 +355,8 @@ export default function ApplicationDetail() {
   const { id }      = useParams()
   const navigate    = useNavigate()
   const { user, profile, isFinanceOrAbove, isSuperAdmin } = useAuth()
+  const isManager = profile?.role === 'manager'
+  const isCFO     = profile?.role === 'cfo'
   const printRef    = useRef()
 
   const [app, setApp]               = useState(null)
@@ -378,9 +369,9 @@ export default function ApplicationDetail() {
   const [managers, setManagers]     = useState([])
   const [attachmentUrl, setAttachmentUrl] = useState(null)
   const [companyColor, setCompanyColor]   = useState(null)
-  const [batchApps, setBatchApps]         = useState([])
   const [allCompanies, setAllCompanies]   = useState([])
   const [downloading, setDownloading]     = useState(false)
+  const [sigFile,     setSigFile]         = useState({ manager:null, finance:null, cfo:null })
   const [showDuplicate,    setShowDuplicate]    = useState(false)
   const [showReturnInline, setShowReturnInline] = useState(false)
   const [showRejectInline, setShowRejectInline] = useState(false)
@@ -430,19 +421,6 @@ export default function ApplicationDetail() {
         .from('attachments').createSignedUrl(appData.attachment_path, 3600)
       setAttachmentUrl(signed?.signedUrl || null)
     }
-
-    // Load all applications in same batch
-    if (appData?.batch_id) {
-      const { data: linked } = await supabase
-        .from('applications_full')
-        .select('id, ref_number, payment_reason, amount, status, submitted_by_name')
-        .eq('batch_id', appData.batch_id)
-        .order('created_at')
-      setBatchApps(linked || [])
-    } else {
-      setBatchApps([])
-    }
-
     setLoading(false)
   }
 
@@ -467,20 +445,70 @@ export default function ApplicationDetail() {
   }
 
   // ── Download — silent PDF via html2pdf.js ───────────────────
+  // Load signature from localStorage or Supabase for current user
+  async function loadMySig() {
+    const localKey = `sig_${user.id}`
+    const local = localStorage.getItem(localKey)
+    if (local) return local
+    try {
+      const { data } = await supabase.storage
+        .from('signatures')
+        .createSignedUrl(`${user.id}/signature.png`, 300)
+      if (data?.signedUrl) {
+        const res  = await fetch(data.signedUrl)
+        const blob = await res.blob()
+        return await new Promise(r => {
+          const reader = new FileReader()
+          reader.onload = e => r(e.target.result)
+          reader.readAsDataURL(blob)
+        })
+      }
+    } catch { }
+    return null
+  }
+
   async function handleDownload() {
     setDownloading(true)
     try {
+      // Load signature for current user
+      let sigs = { manager: null, finance: null, cfo: null }
+      if (['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && app.status === 'approved') {
+        const mySig = await loadMySig()
+        if (mySig) {
+          if (profile?.role === 'manager')                             sigs.manager = mySig
+          else if (profile?.role === 'finance')                        sigs.finance = mySig
+          else if (['cfo','ceo','superadmin'].includes(profile?.role)) sigs.cfo     = mySig
+        }
+      }
+
+      // Render PrintView to a fresh off-screen div with sigFile already set
+      // This avoids the React state timing issue entirely
+      const { createRoot } = await import('react-dom/client')
+      const { createElement } = await import('react')
+      const container = document.createElement('div')
+      container.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;background:#fff'
+      document.body.appendChild(container)
+
+      await new Promise(resolve => {
+        const root = createRoot(container)
+        root.render(
+          createElement(PrintView, { app, companyColor, auditLog, sigFile: sigs })
+        )
+        // Wait for render
+        setTimeout(resolve, 400)
+      })
+
       const html2pdf = (await import('html2pdf.js')).default
-      const element  = printRef.current
       const filename = buildFilename(app.ref_number)
       const opt = {
-        margin:       [10, 10, 10, 10],
+        margin:      [10, 10, 10, 10],
         filename,
-        image:        { type: 'jpeg', quality: 0.92 },
-        html2canvas:  { scale: 2, useCORS: true, logging: false },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        image:       { type: 'jpeg', quality: 0.92 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
       }
-      await html2pdf().set(opt).from(element).save()
+      await html2pdf().set(opt).from(container.firstChild).save()
+      document.body.removeChild(container)
     } catch (err) {
       alert('Download failed: ' + err.message)
     } finally {
@@ -491,16 +519,43 @@ export default function ApplicationDetail() {
   async function doAction(action, extra = {}) {
     setActionLoading(true)
     try {
-      const statusMap = { approve:'approved', reject:'rejected', return:'returned', escalate:'escalated' }
+      const now = new Date().toISOString()
+      // Determine new status and extra fields based on role + action
+      let newStatus, auditAction, extraFields = {}
+
+      if (action === 'mgr_approve') {
+        newStatus = 'mgr_approved'; auditAction = 'mgr_approved'
+        extraFields = { manager_id: user.id, manager_note: note || null, manager_acted_at: now }
+      } else if (action === 'mgr_reject') {
+        newStatus = 'mgr_rejected'; auditAction = 'mgr_rejected'
+        extraFields = { manager_id: user.id, manager_note: note || null, manager_acted_at: now }
+      } else if (action === 'fin_approve') {
+        newStatus = 'fin_approved'; auditAction = 'fin_approved'
+        extraFields = { fin_approved_by: user.id, fin_approved_at: now }
+      } else if (action === 'approve') {
+        newStatus = 'approved'; auditAction = 'approved'
+        extraFields = { cfo_approved_by: user.id, cfo_approved_at: now, processed_at: now }
+      } else if (action === 'reject') {
+        newStatus = 'rejected'; auditAction = 'rejected'
+        extraFields = { processed_at: now }
+      } else if (action === 'return') {
+        newStatus = 'returned'; auditAction = 'returned'
+      } else if (action === 'escalate') {
+        newStatus = 'escalated'; auditAction = 'escalated'
+      } else {
+        newStatus = action; auditAction = action
+      }
+
       await supabase.from('applications').update({
-        status: statusMap[action],
-        outcome_note: ['reject','return'].includes(action) ? note : null,
-        processed_at: new Date().toISOString(),
+        status: newStatus,
+        outcome_note: ['reject','return','mgr_reject'].includes(action) ? note : app.outcome_note,
+        ...extraFields,
         ...extra,
       }).eq('id', id)
+
       await supabase.from('audit_log').insert({
         application_id: id, action_by: user.id,
-        action: statusMap[action] || action,
+        action: auditAction,
         note: note || null,
       })
       setNote('')
@@ -571,7 +626,14 @@ export default function ApplicationDetail() {
   if (loading) return <div className="empty-state"><p>Loading…</p></div>
   if (!app)    return <div className="empty-state"><h3>Application not found</h3></div>
 
-  const canAct  = isFinanceOrAbove && ['pending','escalated'].includes(app.status)
+  // Each role acts on specific statuses
+  const canActManager = isManager && app.status === 'pending'
+  const canActFinance = profile?.role === 'finance' && ['pending','mgr_approved'].includes(app.status)
+  // CFO and CEO can override at ANY stage
+  const canActCFO     = ['cfo','ceo'].includes(profile?.role) &&
+    ['pending','mgr_approved','fin_approved','escalated'].includes(app.status)
+  const canAct        = canActManager || canActFinance || canActCFO ||
+    (isSuperAdmin && ['pending','mgr_approved','fin_approved','escalated'].includes(app.status))
   const isOwner = app.submitted_by === user?.id
   const canEdit = isOwner && ['draft','returned'].includes(app.status)
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
@@ -583,7 +645,7 @@ export default function ApplicationDetail() {
     <div>
       {/* Hidden print/download target */}
       <div style={{ position: 'fixed', left: '-9999px', top: 0, width: '800px' }}>
-        <div ref={printRef}><PrintView app={app} companyColor={companyColor} auditLog={auditLog} /></div>
+        <div ref={printRef}><PrintView app={app} companyColor={companyColor} auditLog={auditLog} sigFile={sigFile} /></div>
       </div>
 
       {/* Header */}
@@ -620,50 +682,67 @@ export default function ApplicationDetail() {
         {/* Company colour accent bar */}
         <div style={{ height:'3px', borderRadius:'2px', background:pastelColor, border:`1px solid ${accentColor}`, opacity:0.8, marginBottom:'10px' }} />
 
-        {/* Row 2: Quick action buttons — Finance only, shown when actionable */}
+        {/* Quick action bar — role and status aware */}
         {canAct && (
           <div style={{
-            background: 'var(--cream-2)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)',
-            padding: '12px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            flexWrap: 'wrap',
+            background:'var(--cream-2)', border:'1px solid var(--border)',
+            borderRadius:'var(--radius)', padding:'12px 16px',
+            display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap',
           }}>
-            <span style={{ fontSize:'12px', fontWeight:600, color:'var(--ink-3)', marginRight:'4px' }}>
-              Quick actions:
+            {/* Stage indicator */}
+            <span style={{ fontSize:'11px', fontWeight:600, color:'var(--ink-3)', marginRight:'4px' }}>
+              {canActManager && '👔 Manager review:'}
+              {canActFinance && '💼 Finance review:'}
+              {canActCFO     && '🏦 CFO final approval:'}
+              {isSuperAdmin && !canActManager && !canActFinance && !canActCFO && '⚙ Admin action:'}
             </span>
 
-            {/* Approve */}
-            <button className="btn btn-success btn-sm" disabled={actionLoading}
-              onClick={() => doAction('approve')}>
-              ✓ Approve
-            </button>
-
-            {/* Return — inline note */}
-            {!showReturnInline && !showRejectInline && !showEscalate && (
-              <button className="btn btn-warning btn-sm" disabled={actionLoading}
-                onClick={() => { setShowReturnInline(true); setShowRejectInline(false) }}>
-                ↩ Return for Edit
-              </button>
+            {/* Manager actions */}
+            {(canActManager || isSuperAdmin) && app.status === 'pending' && !showReturnInline && !showRejectInline && (
+              <>
+                <button className="btn btn-success btn-sm" disabled={actionLoading}
+                  onClick={() => doAction('mgr_approve')}>✓ Approve → Finance</button>
+                <button className="btn btn-warning btn-sm" disabled={actionLoading}
+                  onClick={() => { setShowReturnInline(true); setShowRejectInline(false) }}>↩ Return for Edit</button>
+                <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                  onClick={() => { setShowRejectInline(true); setShowReturnInline(false) }}>✕ Reject</button>
+              </>
             )}
 
-            {/* Reject — inline note */}
-            {!showReturnInline && !showRejectInline && !showEscalate && (
-              <button className="btn btn-danger btn-sm" disabled={actionLoading}
-                onClick={() => { setShowRejectInline(true); setShowReturnInline(false) }}>
-                ✕ Reject
-              </button>
+            {/* Finance actions */}
+            {(canActFinance || isSuperAdmin) && ['pending','mgr_approved'].includes(app.status) && !showReturnInline && !showRejectInline && (
+              <>
+                <button className="btn btn-success btn-sm" disabled={actionLoading}
+                  onClick={() => doAction('fin_approve')}>✓ Approve → CFO</button>
+                <button className="btn btn-warning btn-sm" disabled={actionLoading}
+                  onClick={() => { setShowReturnInline(true); setShowRejectInline(false) }}>↩ Return for Edit</button>
+                <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                  onClick={() => { setShowRejectInline(true); setShowReturnInline(false) }}>✕ Reject</button>
+                {!showEscalate && (
+                  <button className="btn btn-outline btn-sm" disabled={actionLoading}
+                    onClick={() => setShowEscalate(true)}>↑ Escalate</button>
+                )}
+              </>
             )}
 
-            {/* Escalate */}
-            {!showReturnInline && !showRejectInline && !showEscalate && (
-              <button className="btn btn-outline btn-sm" disabled={actionLoading}
-                onClick={() => setShowEscalate(true)}>
-                ↑ Escalate
-              </button>
+            {/* CFO/CEO — can override at ANY stage */}
+            {canActCFO && !showRejectInline && !showReturnInline && (
+              <>
+                <button className="btn btn-success btn-sm" disabled={actionLoading}
+                  onClick={() => doAction('approve')}>
+                  ✓ {app.status === 'fin_approved' ? 'Final Approve' : 'Override & Approve'}
+                </button>
+                <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                  onClick={() => { setShowRejectInline(true); setShowReturnInline(false) }}>✕ Reject</button>
+                <button className="btn btn-warning btn-sm" disabled={actionLoading}
+                  onClick={() => { setShowReturnInline(true); setShowRejectInline(false) }}>↩ Return</button>
+                {app.status !== 'fin_approved' && (
+                  <span style={{fontSize:'10px',color:'#c2410c',background:'#fff7ed',
+                    padding:'2px 8px',borderRadius:'20px',border:'1px solid #fed7aa'}}>
+                    ⚡ Override — skipping pending stages
+                  </span>
+                )}
+              </>
             )}
 
             {/* Inline Return note */}
@@ -672,12 +751,9 @@ export default function ApplicationDetail() {
                 <input className="form-control" style={{ fontSize:'12px', padding:'5px 10px' }}
                   placeholder="Note to applicant (optional)…"
                   value={note} onChange={e => setNote(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && doAction('return')}
-                  autoFocus />
+                  onKeyDown={e => e.key === 'Enter' && doAction('return')} autoFocus />
                 <button className="btn btn-warning btn-sm" disabled={actionLoading}
-                  onClick={() => doAction('return')}>
-                  {actionLoading ? '…' : '↩ Confirm Return'}
-                </button>
+                  onClick={() => doAction('return')}>{actionLoading ? '…' : '↩ Confirm'}</button>
                 <button className="btn btn-outline btn-sm"
                   onClick={() => { setShowReturnInline(false); setNote('') }}>✕</button>
               </div>
@@ -689,12 +765,9 @@ export default function ApplicationDetail() {
                 <input className="form-control" style={{ fontSize:'12px', padding:'5px 10px' }}
                   placeholder="Reason for rejection (optional)…"
                   value={note} onChange={e => setNote(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && doAction('reject')}
-                  autoFocus />
+                  onKeyDown={e => e.key === 'Enter' && doAction('reject')} autoFocus />
                 <button className="btn btn-danger btn-sm" disabled={actionLoading}
-                  onClick={() => doAction('reject')}>
-                  {actionLoading ? '…' : '✕ Confirm Reject'}
-                </button>
+                  onClick={() => doAction('reject')}>{actionLoading ? '…' : '✕ Confirm'}</button>
                 <button className="btn btn-outline btn-sm"
                   onClick={() => { setShowRejectInline(false); setNote('') }}>✕</button>
               </div>
@@ -705,7 +778,7 @@ export default function ApplicationDetail() {
               <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1, minWidth:'280px', flexWrap:'wrap' }}>
                 <select className="form-control" style={{ fontSize:'12px', padding:'5px 10px', width:'auto' }}
                   value={escalateTo} onChange={e => setEscalateTo(e.target.value)}>
-                  <option value="">Select CEO / CFO…</option>
+                  <option value="">Select CFO…</option>
                   {managers.map(m => <option key={m.id} value={m.id}>{m.full_name} ({m.role.toUpperCase()})</option>)}
                 </select>
                 <button className="btn btn-warning btn-sm" disabled={actionLoading || !escalateTo}
@@ -719,33 +792,28 @@ export default function ApplicationDetail() {
           </div>
         )}
 
-        {/* CEO/CFO quick actions */}
-        {isMgr && app.status === 'escalated' && app.escalated_to === user?.id && (
+        {/* Approval chain status — visible to all */}
+        {['mgr_approved','fin_approved','approved'].includes(app.status) && (
           <div style={{
-            background:'#fef3c7', border:'1px solid #fcd34d',
-            borderRadius:'var(--radius)', padding:'12px 16px',
-            display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap',
+            display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'center',
+            padding:'8px 12px', background:'var(--cream-2)',
+            border:'1px solid var(--border)', borderRadius:'var(--radius-sm)',
           }}>
-            <span style={{ fontSize:'12px', fontWeight:600, color:'#92400e' }}>
-              ↑ Escalated to you for approval:
-            </span>
-            <button className="btn btn-success btn-sm" disabled={actionLoading}
-              onClick={() => doAction('approve')}>✓ Approve</button>
-            {!showRejectInline && (
-              <button className="btn btn-danger btn-sm" disabled={actionLoading}
-                onClick={() => setShowRejectInline(true)}>✕ Reject</button>
+            <span style={{fontSize:'11px',color:'var(--ink-3)',fontWeight:600}}>Approvals:</span>
+            {app.manager_name && (
+              <span style={{fontSize:'11px',background:'#e0f2fe',color:'#0369a1',padding:'2px 8px',borderRadius:'20px'}}>
+                👔 {app.manager_name}
+              </span>
             )}
-            {showRejectInline && (
-              <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1, minWidth:'260px' }}>
-                <input className="form-control" style={{ fontSize:'12px', padding:'5px 10px' }}
-                  placeholder="Reason for rejection…"
-                  value={note} onChange={e => setNote(e.target.value)}
-                  autoFocus />
-                <button className="btn btn-danger btn-sm" disabled={actionLoading}
-                  onClick={() => doAction('reject')}>Confirm</button>
-                <button className="btn btn-outline btn-sm"
-                  onClick={() => { setShowRejectInline(false); setNote('') }}>✕</button>
-              </div>
+            {app.fin_approved_by_name && (
+              <span style={{fontSize:'11px',background:'#dcfce7',color:'#166534',padding:'2px 8px',borderRadius:'20px'}}>
+                💼 {app.fin_approved_by_name}
+              </span>
+            )}
+            {app.cfo_approved_by_name && (
+              <span style={{fontSize:'11px',background:'#fef9c3',color:'#854d0e',padding:'2px 8px',borderRadius:'20px'}}>
+                🏦 {app.cfo_approved_by_name}
+              </span>
             )}
           </div>
         )}
@@ -887,114 +955,53 @@ export default function ApplicationDetail() {
           {/* Quick actions moved to top header bar */}
 
           {/* Batch panel — shown when app belongs to a batch */}
-          {app.batch_number && (() => {
-            const bc = batchColor(app.batch_number)
-            return (
-              <div className="card" style={{ marginBottom:'20px', border:`1.5px solid ${bc.accent}` }}>
-                <div className="card-header" style={{ background: bc.light }}>
-                  <h2 style={{ color: bc.accent, display:'flex', alignItems:'center', gap:'8px' }}>
-                    <span>⧉</span> Payment Batch
-                  </h2>
-                  <span style={{
-                    fontFamily:"'JetBrains Mono',monospace", fontSize:'13px',
-                    fontWeight:700, color: bc.accent,
-                    background: bc.bg, padding:'2px 10px', borderRadius:'20px',
-                    border:`1px solid ${bc.accent}`,
-                  }}>{app.batch_number}</span>
+          {app.batch_number && (
+            <div className="card" style={{ marginBottom:'20px', border:'1px solid #bfdbfe' }}>
+              <div className="card-header" style={{ background:'#eff6ff' }}>
+                <h2 style={{ color:'#1e40af', display:'flex', alignItems:'center', gap:'8px' }}>
+                  <span>⧉</span> Payment Batch
+                </h2>
+                <span style={{
+                  fontFamily:"'JetBrains Mono',monospace", fontSize:'13px',
+                  fontWeight:700, color:'#1d4ed8',
+                }}>{app.batch_number}</span>
+              </div>
+              <div className="card-body">
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'16px', marginBottom:'16px' }}>
+                  <div>
+                    <div className="form-label">Transfer Reference</div>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontWeight:600 }}>
+                      {app.batch_transfer_ref}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="form-label">Transfer Date</div>
+                    <div style={{ fontWeight:500 }}>
+                      {app.batch_transfer_date ? fmtDate(app.batch_transfer_date) : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="form-label">Batch Total</div>
+                    <div style={{ fontWeight:700, fontSize:'15px', color:'var(--ink)' }}>
+                      AED {formatCurrency(app.batch_total_amount)}
+                      <span style={{ fontSize:'11px', fontWeight:400, color:'var(--ink-3)', marginLeft:'6px' }}>
+                        ({app.batch_app_count} applications)
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="card-body">
-                  {/* Batch header info */}
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'16px', marginBottom:'16px' }}>
-                    <div>
-                      <div className="form-label">Transfer Reference</div>
-                      <div style={{ fontFamily:"'JetBrains Mono',monospace", fontWeight:600 }}>
-                        {app.batch_transfer_ref}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="form-label">Transfer Date</div>
-                      <div style={{ fontWeight:500 }}>
-                        {app.batch_transfer_date ? fmtDate(app.batch_transfer_date) : '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="form-label">Batch Total</div>
-                      <div style={{ fontWeight:700, fontSize:'15px' }}>
-                        AED {formatCurrency(app.batch_total_amount)}
-                        <span style={{ fontSize:'11px', fontWeight:400, color:'var(--ink-3)', marginLeft:'6px' }}>
-                          ({app.batch_app_count} applications)
-                        </span>
-                      </div>
-                    </div>
+                {app.batch_note && (
+                  <div style={{ fontSize:'12px', color:'var(--ink-2)', fontStyle:'italic', marginBottom:'12px' }}>
+                    Note: {app.batch_note}
                   </div>
-
-                  {app.batch_note && (
-                    <div style={{ fontSize:'12px', color:'var(--ink-2)', fontStyle:'italic', marginBottom:'12px' }}>
-                      📝 {app.batch_note}
-                    </div>
-                  )}
-
-                  {/* Force reason if applicable */}
-                  {app.batch_force_reason && (
-                    <div style={{ fontSize:'12px', color:'#c2410c', background:'#fff7ed',
-                      border:'1px solid #fed7aa', borderRadius:'6px',
-                      padding:'8px 12px', marginBottom:'12px' }}>
-                      ⚠ Force override reason: <em>{app.batch_force_reason}</em>
-                    </div>
-                  )}
-
-                  {/* Linked transactions */}
-                  <div style={{ fontSize:'12px', fontWeight:600, color:'var(--ink-3)',
-                    textTransform:'uppercase', letterSpacing:'.06em', marginBottom:'8px' }}>
-                    All Applications in This Batch
-                  </div>
-                  <div style={{ border:`1px solid ${bc.bg}`, borderRadius:'8px', overflow:'hidden' }}>
-                    {batchApps.map((a, i) => (
-                      <div key={a.id}
-                        onClick={() => navigate(`/application/${a.id}`)}
-                        style={{
-                          display:'flex', alignItems:'center', gap:'12px',
-                          padding:'9px 12px', cursor:'pointer',
-                          background: a.id === id ? bc.light : i % 2 === 0 ? '#fff' : '#fafafa',
-                          borderBottom: i < batchApps.length-1 ? `1px solid ${bc.bg}` : 'none',
-                          transition:'background .12s',
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.background = bc.light}
-                        onMouseLeave={e => e.currentTarget.style.background = a.id === id ? bc.light : i%2===0?'#fff':'#fafafa'}
-                      >
-                        <span style={{
-                          fontFamily:"'JetBrains Mono',monospace", fontSize:'11px',
-                          fontWeight: a.id===id ? 700 : 500, color: bc.accent,
-                          flexShrink:0,
-                        }}>{a.ref_number}</span>
-                        {a.id === id && (
-                          <span style={{ fontSize:'10px', background: bc.bg,
-                            color: bc.accent, padding:'1px 6px', borderRadius:'20px',
-                            fontWeight:600, flexShrink:0 }}>current</span>
-                        )}
-                        <span style={{ fontSize:'12px', color:'var(--ink-2)', flex:1,
-                          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                          {a.payment_reason}
-                        </span>
-                        <span style={{ fontSize:'12px', color:'var(--ink-3)', flexShrink:0 }}>
-                          {a.submitted_by_name}
-                        </span>
-                        <span style={{ fontSize:'13px', fontWeight:600, flexShrink:0 }}>
-                          AED {formatCurrency(a.amount)}
-                        </span>
-                        <StatusBadge status={a.status} />
-                        <span style={{ fontSize:'11px', color: bc.accent, flexShrink:0 }}>→</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ fontSize:'11px', color:'var(--ink-3)', marginTop:'10px' }}>
-                    Use transfer reference <strong>{app.batch_transfer_ref}</strong> for bank reconciliation.
-                  </div>
+                )}
+                <div style={{ fontSize:'12px', color:'var(--ink-3)' }}>
+                  This application was processed as part of a grouped bank transfer.
+                  Use the batch reference <strong>{app.batch_transfer_ref}</strong> for bank reconciliation.
                 </div>
               </div>
-            )
-          })()}
+            </div>
+          )}
 
           {isFinanceOrAbove && ['approved','rejected'].includes(app.status) && (
             <div className="card" style={{ marginBottom:'20px' }}>

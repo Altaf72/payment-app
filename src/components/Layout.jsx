@@ -15,6 +15,7 @@ export default function Layout() {
 
   const roleLabel = {
     staff: 'Staff',
+    manager: 'Manager',
     finance: 'Finance Officer',
     ceo: 'CEO',
     cfo: 'CFO',
@@ -58,6 +59,16 @@ export default function Layout() {
           </>
         )}
 
+        {['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && (
+          <>
+            <div className="sidebar-section">Account</div>
+            <button className={`sidebar-link ${isActive('/profile') ? 'active' : ''}`}
+              onClick={() => navigate('/profile')}>
+              <span className="icon">✍</span> My Signature
+            </button>
+          </>
+        )}
+
         <div className="sidebar-bottom">
           <div className="sidebar-user">
             <strong>{profile?.full_name}</strong>
@@ -66,13 +77,6 @@ export default function Layout() {
           <button className="btn btn-outline w-full" style={{fontSize:'12px',justifyContent:'center'}} onClick={handleSignOut}>
             Sign out
           </button>
-          <div style={{
-            marginTop:'10px', textAlign:'center',
-            fontSize:'10px', color:'rgba(255,255,255,0.2)',
-            letterSpacing:'.08em', fontFamily:"'JetBrains Mono',monospace",
-          }}>
-            v1.4.2
-          </div>
         </div>
       </aside>
 

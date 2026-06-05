@@ -301,6 +301,15 @@ export default function SettingsPage() {
     }
   }
 
+  async function resetUserPassword(email) {
+    if (!confirm(`Send password reset email to ${email}?`)) return
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    })
+    if (error) flash('error', error.message)
+    else flash('success', `Reset email sent to ${email}`)
+  }
+
   async function saveCompanyColor(id, accent, pastel) {
     setSavingColor(id)
     await supabase.from('companies').update({ accent_color: accent, pastel_color: pastel }).eq('id', id)
@@ -504,6 +513,7 @@ export default function SettingsPage() {
                             value={u.role} onChange={e=>updateUserRole(u.id,e.target.value)}
                             disabled={isMerged}>
                             <option value="staff">Staff</option>
+                            <option value="manager">Manager</option>
                             <option value="finance">Finance Officer</option>
                             <option value="ceo">CEO</option>
                             <option value="cfo">CFO</option>
@@ -565,6 +575,12 @@ export default function SettingsPage() {
                             ⇄ Merge into…
                           </button>
                         )}
+                        <button className="btn btn-outline btn-sm"
+                          onClick={() => resetUserPassword(u.email)}
+                          style={{whiteSpace:'nowrap',fontSize:'11px'}}
+                          title="Send password reset email — you cannot see their password">
+                          🔑 Reset Password
+                        </button>
                       </div>
 
                     </div>
