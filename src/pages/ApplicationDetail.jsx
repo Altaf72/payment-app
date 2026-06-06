@@ -425,23 +425,68 @@ export default function ApplicationDetail() {
   }
 
   // ── Print — direct system dialog ────────────────────────────
+  // Unified: load sig, inject into state, wait for render, then act
+  async function prepareAndAct(action) {
+    // Load signature for current user
+    let sigs = { manager: null, finance: null, cfo: null }
+    if (['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && app.status === 'approved') {
+      const mySig = await loadMySig()
+      if (mySig) {
+        if (profile?.role === 'manager')                             sigs.manager = mySig
+        else if (profile?.role === 'finance')                        sigs.finance = mySig
+        else if (['cfo','ceo','superadmin'].includes(profile?.role)) sigs.cfo     = mySig
+      }
+    }
+
+    // Set sigFile state so PrintView re-renders with signature
+    setSigFile(sigs)
+
+    // Wait two animation frames to ensure React has re-rendered the hidden PrintView
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+    await new Promise(r => setTimeout(r, 300))
+
+    if (action === 'print') {
+      const html = printRef.current?.innerHTML || ''
+      const printWindow = window.open('', '_blank', 'width=900,height=700')
+      printWindow.document.write(`<!DOCTYPE html><html><head>
+        <meta charset="UTF-8"/>
+        <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"/>
+        <style>
+          body { margin:0; padding:0; font-family:'Cormorant Garamond',serif; }
+          @media print { @page { margin:10mm; } }
+          img { display:block !important; }
+        </style>
+        </head><body>${html}</body></html>`)
+      printWindow.document.close()
+      printWindow.focus()
+      // Wait for fonts/images to load in new window before printing
+      setTimeout(() => { printWindow.print() }, 1200)
+    }
+
+    if (action === 'pdf') {
+      try {
+        const html2pdf = (await import('html2pdf.js')).default
+        const element  = printRef.current
+        const filename = buildFilename(app.ref_number)
+        const opt = {
+          margin:      [10, 10, 10, 10],
+          filename,
+          image:       { type: 'jpeg', quality: 0.95 },
+          html2canvas: { scale: 2, useCORS: true, logging: false, allowTaint: true },
+          jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        }
+        await html2pdf().set(opt).from(element).save()
+      } catch (err) {
+        alert('Download failed: ' + err.message)
+      }
+    }
+
+    // Reset sigFile after action
+    setTimeout(() => setSigFile({ manager: null, finance: null, cfo: null }), 500)
+  }
+
   function handlePrint() {
-    const printWindow = window.open('', '_blank', 'width=900,height=700')
-    const html = printRef.current?.innerHTML || ''
-    printWindow.document.write(`
-      <!DOCTYPE html><html><head>
-      <meta charset="UTF-8"/>
-      <link rel="preconnect" href="https://fonts.googleapis.com"/>
-      <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"/>
-      <style>
-        body { margin: 0; padding: 0; font-family: 'Cormorant Garamond', serif; }
-        @media print { @page { margin: 10mm; } }
-      </style>
-      </head><body>${html}</body></html>
-    `)
-    printWindow.document.close()
-    printWindow.focus()
-    setTimeout(() => { printWindow.print(); printWindow.close() }, 800)
+    prepareAndAct('print')
   }
 
   // ── Download — silent PDF via html2pdf.js ───────────────────
@@ -469,51 +514,8 @@ export default function ApplicationDetail() {
 
   async function handleDownload() {
     setDownloading(true)
-    try {
-      // Load signature for current user
-      let sigs = { manager: null, finance: null, cfo: null }
-      if (['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && app.status === 'approved') {
-        const mySig = await loadMySig()
-        if (mySig) {
-          if (profile?.role === 'manager')                             sigs.manager = mySig
-          else if (profile?.role === 'finance')                        sigs.finance = mySig
-          else if (['cfo','ceo','superadmin'].includes(profile?.role)) sigs.cfo     = mySig
-        }
-      }
-
-      // Render PrintView to a fresh off-screen div with sigFile already set
-      // This avoids the React state timing issue entirely
-      const { createRoot } = await import('react-dom/client')
-      const { createElement } = await import('react')
-      const container = document.createElement('div')
-      container.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;background:#fff'
-      document.body.appendChild(container)
-
-      await new Promise(resolve => {
-        const root = createRoot(container)
-        root.render(
-          createElement(PrintView, { app, companyColor, auditLog, sigFile: sigs })
-        )
-        // Wait for render
-        setTimeout(resolve, 400)
-      })
-
-      const html2pdf = (await import('html2pdf.js')).default
-      const filename = buildFilename(app.ref_number)
-      const opt = {
-        margin:      [10, 10, 10, 10],
-        filename,
-        image:       { type: 'jpeg', quality: 0.92 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
-        jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      }
-      await html2pdf().set(opt).from(container.firstChild).save()
-      document.body.removeChild(container)
-    } catch (err) {
-      alert('Download failed: ' + err.message)
-    } finally {
-      setDownloading(false)
-    }
+    await prepareAndAct('pdf')
+    setDownloading(false)
   }
 
   async function doAction(action, extra = {}) {
