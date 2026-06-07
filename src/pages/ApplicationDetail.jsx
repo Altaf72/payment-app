@@ -269,9 +269,9 @@ function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null,
             <td colSpan={4} style={{ border:'1px solid #c8b99a', padding:'0' }}>
               <div style={{ display:'flex' }}>
                 {[
-                  { cn:'申请部门主管签字', en:'Dept Head / Manager',    by: mgrBy, dt: mgrDate, sigKey: 'manager' },
-                  { cn:'财务部审批签字',   en:'Finance Officer',        by: finBy, dt: finDate, sigKey: 'finance' },
-                  { cn:'CFO / 总经理签字', en:'CFO / General Manager',  by: cfoBy, dt: cfoDate, sigKey: 'cfo'     },
+                  { cn:'申请部门主管签字', en:'Dept Head / Manager',    by: mgrBy, dt: mgrDate, sigKey: 'manager', showSig: ['mgr_approved','fin_approved','approved'].includes(app.status) },
+                  { cn:'财务部审批签字',   en:'Finance Officer',        by: finBy, dt: finDate, sigKey: 'finance', showSig: ['fin_approved','approved'].includes(app.status) },
+                  { cn:'CFO / 总经理签字', en:'CFO / General Manager',  by: cfoBy, dt: cfoDate, sigKey: 'cfo',     showSig: app.status === 'approved' },
                 ].map((sig, i) => (
                   <div key={i} style={{
                     flex:1, borderRight: i < 2 ? '1px solid #c8b99a' : 'none',
@@ -280,13 +280,25 @@ function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null,
                     <div style={{ fontSize:'10px', fontFamily:"Georgia, serif", fontWeight:'bold', color:'#2a1500', marginBottom:'1px' }}>{sig.cn}</div>
                     <div style={{ fontSize:'9px', color:'#888', marginBottom:'4px', fontFamily:"Georgia, serif" }}>{sig.en}</div>
                     {/* Signature image — per slot */}
-                    {sig.sigKey && sigFile?.[sig.sigKey] && app.status === 'approved' ? (
+                    {sig.sigKey && sigFile?.[sig.sigKey] && sig.showSig ? (
                       <div style={{ margin:'0 6px', height:'40px', borderBottom:'1px solid #aaa', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                        <img src={sigFile[sig.sigKey]} alt="signature" style={{ maxHeight:'36px', maxWidth:'100%', objectFit:'contain' }} />
+                        <img
+                          data-sig={sig.sigKey}
+                          src={sigFile[sig.sigKey]}
+                          alt="signature"
+                          style={{ maxHeight:'36px', maxWidth:'100%', objectFit:'contain', display:'block' }}
+                        />
                       </div>
                     ) : (
                       <div style={{ height:'40px', borderBottom:'1px solid #aaa', margin:'0 6px', position:'relative' }}>
-                        {sig.by && ['approved','fin_approved','mgr_approved'].includes(app.status) && (
+                        {/* Placeholder img with data-sig so DOM injection can find it */}
+                        <img
+                          data-sig={sig.sigKey}
+                          src=""
+                          alt=""
+                          style={{ display:'none', maxHeight:'36px', maxWidth:'100%', objectFit:'contain', position:'absolute', bottom:'4px', left:'6px' }}
+                        />
+                        {sig.by && sig.showSig && (
                           <div style={{ position:'absolute', bottom:'4px', left:0, right:0, fontSize:'10px', fontWeight:'bold', color:'#1a0800', fontFamily:"Georgia, serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', padding:'0 4px' }}>
                             {sig.by}
                           </div>
@@ -427,9 +439,10 @@ export default function ApplicationDetail() {
   // ── Print — direct system dialog ────────────────────────────
   // Unified: load sig, inject into state, wait for render, then act
   async function prepareAndAct(action) {
-    // Load signature for current user
+    // Load signature for current user — show on any approved/signed stage
     let sigs = { manager: null, finance: null, cfo: null }
-    if (['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && app.status === 'approved') {
+    const sigStatuses = ['mgr_approved','fin_approved','approved']
+    if (['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && sigStatuses.includes(app.status)) {
       const mySig = await loadMySig()
       if (mySig) {
         if (profile?.role === 'manager')                             sigs.manager = mySig
@@ -441,9 +454,27 @@ export default function ApplicationDetail() {
     // Set sigFile state so PrintView re-renders with signature
     setSigFile(sigs)
 
-    // Wait two animation frames to ensure React has re-rendered the hidden PrintView
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
-    await new Promise(r => setTimeout(r, 300))
+    // Wait for React to commit the re-render — use a longer reliable timeout
+    // requestAnimationFrame is not enough; React batches and may not flush immediately
+    await new Promise(r => setTimeout(r, 600))
+
+    // Double-check: manually inject signature images into the hidden div as fallback
+    // This guarantees the image is in the DOM regardless of React timing
+    if (printRef.current) {
+      const sigSlots = {
+        manager: printRef.current.querySelector('[data-sig="manager"]'),
+        finance: printRef.current.querySelector('[data-sig="finance"]'),
+        cfo:     printRef.current.querySelector('[data-sig="cfo"]'),
+      }
+      Object.entries(sigs).forEach(([key, dataUrl]) => {
+        if (dataUrl && sigSlots[key]) {
+          sigSlots[key].src = dataUrl
+          sigSlots[key].style.display = 'block'
+        }
+      })
+      // Wait a bit more for images to paint
+      await new Promise(r => setTimeout(r, 200))
+    }
 
     if (action === 'print') {
       const html = printRef.current?.innerHTML || ''
@@ -454,13 +485,12 @@ export default function ApplicationDetail() {
         <style>
           body { margin:0; padding:0; font-family:'Cormorant Garamond',serif; }
           @media print { @page { margin:10mm; } }
-          img { display:block !important; }
+          img { display:block !important; max-height:36px; }
         </style>
         </head><body>${html}</body></html>`)
       printWindow.document.close()
       printWindow.focus()
-      // Wait for fonts/images to load in new window before printing
-      setTimeout(() => { printWindow.print() }, 1200)
+      setTimeout(() => { printWindow.print() }, 1500)
     }
 
     if (action === 'pdf') {
