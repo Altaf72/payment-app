@@ -439,16 +439,21 @@ export default function ApplicationDetail() {
   // ── Print — direct system dialog ────────────────────────────
   // Unified: load sig, inject into state, wait for render, then act
   async function prepareAndAct(action) {
-    // Load signature for current user — show on any approved/signed stage
+    // Fetch ALL approver signatures dynamically using stored user IDs on the application
+    // Each signature is fetched from the approver's private Supabase folder
     let sigs = { manager: null, finance: null, cfo: null }
+
     const sigStatuses = ['mgr_approved','fin_approved','approved']
-    if (['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && sigStatuses.includes(app.status)) {
-      const mySig = await loadMySig()
-      if (mySig) {
-        if (profile?.role === 'manager')                             sigs.manager = mySig
-        else if (profile?.role === 'finance')                        sigs.finance = mySig
-        else if (['cfo','ceo','superadmin'].includes(profile?.role)) sigs.cfo     = mySig
-      }
+    if (sigStatuses.includes(app.status)) {
+      // Fetch in parallel for speed
+      const [mgrSig, finSig, cfoSig] = await Promise.all([
+        app.manager_id      ? loadSigForUser(app.manager_id)      : Promise.resolve(null),
+        app.fin_approved_by ? loadSigForUser(app.fin_approved_by) : Promise.resolve(null),
+        app.cfo_approved_by ? loadSigForUser(app.cfo_approved_by) : Promise.resolve(null),
+      ])
+      sigs.manager = mgrSig
+      sigs.finance = finSig
+      sigs.cfo     = cfoSig
     }
 
     // Set sigFile state so PrintView re-renders with signature
@@ -520,26 +525,34 @@ export default function ApplicationDetail() {
   }
 
   // ── Download — silent PDF via html2pdf.js ───────────────────
-  // Load signature from localStorage or Supabase for current user
-  async function loadMySig() {
-    const localKey = `sig_${user.id}`
+  // Load signature for a specific user by their ID
+  // Checks localStorage first (fast), then Supabase (cross-device)
+  async function loadSigForUser(userId) {
+    if (!userId) return null
+    // Check localStorage cache first
+    const localKey = `sig_${userId}`
     const local = localStorage.getItem(localKey)
     if (local) return local
+    // Fetch from Supabase — any authenticated user can read any signature
     try {
-      const { data } = await supabase.storage
+      const { data, error } = await supabase.storage
         .from('signatures')
-        .createSignedUrl(`${user.id}/signature.png`, 300)
-      if (data?.signedUrl) {
-        const res  = await fetch(data.signedUrl)
-        const blob = await res.blob()
-        return await new Promise(r => {
-          const reader = new FileReader()
-          reader.onload = e => r(e.target.result)
-          reader.readAsDataURL(blob)
-        })
-      }
-    } catch { }
-    return null
+        .createSignedUrl(`${userId}/signature.png`, 300)
+      if (error || !data?.signedUrl) return null
+      const res  = await fetch(data.signedUrl)
+      if (!res.ok) return null
+      const blob = await res.blob()
+      return await new Promise(r => {
+        const reader = new FileReader()
+        reader.onload = e => r(e.target.result)
+        reader.readAsDataURL(blob)
+      })
+    } catch { return null }
+  }
+
+  // Keep loadMySig for profile page compatibility
+  async function loadMySig() {
+    return loadSigForUser(user.id)
   }
 
   async function handleDownload() {

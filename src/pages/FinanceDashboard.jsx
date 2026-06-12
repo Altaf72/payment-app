@@ -105,11 +105,12 @@ export default function FinanceDashboard() {
     try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}') } catch { return {} }
   }
   const saved = getSaved()
+  const isManager = profile?.role === 'manager'
 
   // Filters — restored from session
   const [search,           setSearch]           = useState(saved.search           || '')
   const [amountSearch,     setAmountSearch]     = useState(saved.amountSearch     || '')
-  const [filterStatus,     setFilterStatus]     = useState(saved.filterStatus     || '')
+  const [filterStatus,     setFilterStatus]     = useState(saved.filterStatus     || (isManager ? 'pending' : ''))
   const [filterCompany,    setFilterCompany]    = useState(saved.filterCompany    || '')
   const [filterAttachment, setFilterAttachment] = useState(saved.filterAttachment || '')
 
@@ -241,11 +242,12 @@ export default function FinanceDashboard() {
   async function createBatch() {
     if (!batchForm.transfer_ref.trim()) return setBatchMsg('Transfer reference is required')
     if (!batchForm.transfer_date)       return setBatchMsg('Transfer date is required')
+    if (forceMode && !forceReason.trim()) return setBatchMsg('Override reason is required')
     setCreatingBatch(true)
     setBatchMsg('')
     try {
-      // Generate batch number via RPC
-      const { data: batchNum } = await supabase.rpc('generate_batch_number')
+      const { data: batchNum, error: rpcErr } = await supabase.rpc('generate_batch_number')
+      if (rpcErr) throw new Error('Could not generate batch number: ' + rpcErr.message)
       const ids = selectedApps.map(a => a.id)
       const { data: batch, error: bErr } = await supabase
         .from('payment_batches')
@@ -254,19 +256,22 @@ export default function FinanceDashboard() {
           transfer_ref:      batchForm.transfer_ref.trim(),
           transfer_date:     batchForm.transfer_date,
           note:              batchForm.note.trim() || null,
+          force_reason:      forceMode ? forceReason.trim() : null,
           total_amount:      batchTotal,
           application_count: ids.length,
+          created_by:        (await supabase.auth.getUser()).data.user?.id,
         })
         .select().single()
-      if (bErr) throw bErr
-      // Link all selected applications to this batch
+      if (bErr) throw new Error('Batch insert failed: ' + bErr.message)
       const { error: lErr } = await supabase
         .from('applications')
         .update({ batch_id: batch.id })
         .in('id', ids)
-      if (lErr) throw lErr
+      if (lErr) throw new Error('Linking applications failed: ' + lErr.message)
       setSelected(new Set())
       setShowBatchModal(false)
+      setForceMode(false)
+      setForceReason('')
       setBatchForm({ transfer_ref:'', transfer_date:'', note:'' })
       await load()
     } catch (err) {
@@ -283,8 +288,14 @@ export default function FinanceDashboard() {
     <div>
       <div className="page-header flex justify-between items-center">
         <div>
-          <h1>Finance Dashboard</h1>
-          <p>All payment applications · {profile?.full_name}</p>
+          <h1>{profile?.role === 'manager' ? 'Manager Dashboard' : 'Finance Dashboard'}</h1>
+          <p>
+            {profile?.role === 'manager'
+              ? 'Applications pending your approval · '
+              : 'All payment applications · '
+            }
+            {profile?.full_name}
+          </p>
         </div>
         <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
       </div>
