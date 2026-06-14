@@ -18,6 +18,123 @@ function fmtDate(dateStr) {
   })
 }
 
+function parseAttachmentNote(note) {
+  if (!note) return null
+  try {
+    const data = JSON.parse(note)
+    if (data?.type === 'finance_attachment' && data.path && data.name) return data
+  } catch {}
+  return null
+}
+
+function parseDeletedAttachmentNote(note) {
+  if (!note) return null
+  try {
+    const data = JSON.parse(note)
+    if (data?.type === 'finance_attachment_deleted' && data.path) return data
+  } catch {}
+  return null
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return ''
+  const mb = bytes / 1024 / 1024
+  if (mb >= 1) return `${mb.toFixed(2)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function getRoleColor(role) {
+  const colors = {
+    manager:    { bg:'#e0f2fe', border:'#7dd3fc', text:'#0369a1', label:'Manager' },
+    finance:    { bg:'#dcfce7', border:'#86efac', text:'#166534', label:'Finance' },
+    cfo:        { bg:'#fef9c3', border:'#fde047', text:'#854d0e', label:'CFO' },
+    ceo:        { bg:'#fef3c7', border:'#fbbf24', text:'#92400e', label:'CEO' },
+    superadmin: { bg:'#ede9fe', border:'#c4b5fd', text:'#5b21b6', label:'Admin' },
+  }
+  return colors[role] || { bg:'#f3f4f6', border:'#d1d5db', text:'#374151', label: role || 'User' }
+}
+
+function AttachmentPreview({ path, name, onClose }) {
+  const [url, setUrl]         = useState(null)
+  const [loading, setLoading] = useState(true)
+  const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
+  const isPDF   = /\.pdf$/i.test(name || '')
+
+  useEffect(() => {
+    let active = true
+    supabase.storage.from('attachments').createSignedUrl(path, 3600)
+      .then(({ data }) => {
+        if (active) {
+          setUrl(data?.signedUrl || null)
+          setLoading(false)
+        }
+      })
+    const fn = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', fn)
+    return () => {
+      active = false
+      window.removeEventListener('keydown', fn)
+    }
+  }, [path])
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{ position:'fixed', inset:0, zIndex:2000, background:'rgba(10,10,20,0.75)',
+        display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+      <div style={{ background:'#fff', borderRadius:'12px', boxShadow:'0 24px 64px rgba(0,0,0,0.4)',
+        width:'100%', maxWidth:'780px', maxHeight:'90vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+          padding:'14px 18px', borderBottom:'1px solid #e5e7eb', background:'#f9fafb', flexShrink:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', minWidth:0 }}>
+            <span>{isPDF ? 'PDF' : isImage ? 'IMG' : 'DOC'}</span>
+            <span style={{ fontSize:'13px', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</span>
+          </div>
+          <div style={{ display:'flex', gap:'8px', flexShrink:0 }}>
+            {url && <a href={url} download={name} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize:'12px', padding:'5px 12px', background:'#1e40af', color:'#fff',
+                borderRadius:'6px', textDecoration:'none', fontWeight:500 }}>Download</a>}
+            <button onClick={onClose} style={{ background:'#f3f4f6', border:'1px solid #d1d5db',
+              borderRadius:'6px', padding:'5px 12px', cursor:'pointer', fontSize:'12px' }}>Close</button>
+          </div>
+        </div>
+        <div style={{ flex:1, overflow:'auto', display:'flex', alignItems:'center',
+          justifyContent:'center', background:'#f3f4f6', minHeight:'300px' }}>
+          {loading && <div style={{ textAlign:'center', color:'#6b7280' }}><p>Loading...</p></div>}
+          {!loading && url && isImage && <img src={url} alt={name} style={{ maxWidth:'100%', maxHeight:'70vh', objectFit:'contain' }} />}
+          {!loading && url && isPDF && <iframe src={url} title={name} style={{ width:'100%', height:'70vh', border:'none' }} />}
+          {!loading && url && !isImage && !isPDF && (
+            <div style={{ textAlign:'center', padding:'40px' }}>
+              <div style={{ fontSize:'13px', color:'#4b5563', marginBottom:'14px' }}>Preview is not available for this file type.</div>
+              <a href={url} download={name} style={{ padding:'8px 20px', background:'#1e40af', color:'#fff', borderRadius:'6px', textDecoration:'none' }}>
+                Download {name}
+              </a>
+            </div>
+          )}
+          {!loading && !url && <div style={{ textAlign:'center', color:'#991b1b', padding:'40px' }}>Could not open this attachment.</div>}
+        </div>
+        <div style={{ padding:'8px 18px', background:'#f9fafb', borderTop:'1px solid #e5e7eb', flexShrink:0 }}>
+          <p style={{ fontSize:'11px', color:'#9ca3af' }}>Click outside or press Escape to close</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DetailAttachmentLink({ path, name }) {
+  const [show, setShow] = useState(false)
+
+  return (
+    <>
+      <button type="button" onClick={() => setShow(true)}
+        className="btn btn-outline btn-sm"
+        style={{ maxWidth:'100%', overflow:'hidden', textOverflow:'ellipsis' }}>
+        View / Download {name}
+      </button>
+      {show && <AttachmentPreview path={path} name={name} onClose={() => setShow(false)} />}
+    </>
+  )
+}
+
 function AuditTimeline({ log }) {
   const cfg = {
     submitted:        { bg:'#dbeafe', border:'#3b82f6', text:'#1e40af', icon:'→' },
@@ -46,7 +163,12 @@ function AuditTimeline({ log }) {
                 {e.action.charAt(0).toUpperCase() + e.action.slice(1).replace(/_/g, ' ')}
               </div>
               <div className="timeline-meta">{e.actor} · {fmtDate(e.created_at)}</div>
-              {e.note && <div className="timeline-note">{e.note}</div>}
+              {e.note && <div className="timeline-note">
+                {parseAttachmentNote(e.note)?.name
+                  ? `Added document: ${parseAttachmentNote(e.note).name}`
+                  : e.note
+                }
+              </div>}
             </div>
           </div>
         )
@@ -370,6 +492,11 @@ export default function ApplicationDetail() {
   const isManager = profile?.role === 'manager'
   const isCFO     = profile?.role === 'cfo'
   const printRef    = useRef()
+  const financeFileRef = useRef()
+  const cameraVideoRef = useRef()
+  const cameraCanvasRef = useRef()
+  const lastSavedFinanceCommentRef = useRef('')
+  const savedFinanceCommentIdRef = useRef(null)
 
   const [app, setApp]               = useState(null)
   const [auditLog, setAuditLog]     = useState([])
@@ -391,15 +518,79 @@ export default function ApplicationDetail() {
   const [showDelete,   setShowDelete]     = useState(false)
   const [deleteReason, setDeleteReason]   = useState('')
   const [actionNote2,  setActionNote2]    = useState('')
+  const [financeAttachment, setFinanceAttachment] = useState(null)
+  const [financeAttLabel, setFinanceAttLabel]     = useState('')
+  const [financeAttError, setFinanceAttError]     = useState('')
+  const [uploadingFinanceAtt, setUploadingFinanceAtt] = useState(false)
+  const [hasClipboardImage, setHasClipboardImage] = useState(false)
+  const [financeComment, setFinanceComment]       = useState('')
+  const [financeCommentStatus, setFinanceCommentStatus] = useState('')
+  const [showCameraModal, setShowCameraModal] = useState(false)
+  const [cameraStream, setCameraStream] = useState(null)
+  const [cameraError, setCameraError] = useState('')
 
   useEffect(() => { load() }, [id])
+
+  useEffect(() => {
+    const key = `finance_comment_draft_${id}`
+    setFinanceComment(localStorage.getItem(key) || '')
+    lastSavedFinanceCommentRef.current = ''
+  }, [id])
+
+  useEffect(() => {
+    if (!id) return
+    const key = `finance_comment_draft_${id}`
+    if (financeComment) localStorage.setItem(key, financeComment)
+    else localStorage.removeItem(key)
+  }, [id, financeComment])
+
+  useEffect(() => {
+    if (!['finance','superadmin'].includes(profile?.role)) return
+
+    async function checkClipboardForImage() {
+      if (!navigator.clipboard?.read) {
+        setHasClipboardImage(false)
+        return
+      }
+      try {
+        const items = await navigator.clipboard.read()
+        setHasClipboardImage(items.some(item => item.types.some(type => type.startsWith('image/'))))
+      } catch {
+        setHasClipboardImage(false)
+      }
+    }
+
+    checkClipboardForImage()
+    window.addEventListener('focus', checkClipboardForImage)
+    window.addEventListener('paste', checkClipboardForImage)
+    window.addEventListener('copy', checkClipboardForImage)
+    return () => {
+      window.removeEventListener('focus', checkClipboardForImage)
+      window.removeEventListener('paste', checkClipboardForImage)
+      window.removeEventListener('copy', checkClipboardForImage)
+    }
+  }, [profile?.role])
+
+  useEffect(() => {
+    return () => {
+      cameraStream?.getTracks().forEach(track => track.stop())
+    }
+  }, [cameraStream])
+
+  useEffect(() => {
+    if (!showCameraModal || !cameraStream || !cameraVideoRef.current) return
+    cameraVideoRef.current.srcObject = cameraStream
+    cameraVideoRef.current.play?.().catch(() => {
+      setCameraError('Camera opened, but preview could not start. Try closing and reopening camera.')
+    })
+  }, [showCameraModal, cameraStream])
 
   async function load() {
     setLoading(true)
     const [{ data: appData }, { data: logData }, { data: mgrs }, { data: cos }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
       supabase.from('audit_log')
-        .select('id, action, note, created_at, users!action_by(full_name)')
+        .select('id, action, note, created_at, action_by, users!action_by(full_name,role)')
         .eq('application_id', id).order('created_at'),
       supabase.from('users').select('id,full_name,role').in('role', ['ceo','cfo']),
       supabase.from('companies').select('*').order('created_at'),
@@ -412,7 +603,21 @@ export default function ApplicationDetail() {
     }
 
     setApp(appData ? { ...appData, logo_url: logoUrl } : null)
-    setAuditLog((logData || []).map(l => ({ ...l, actor: l.users?.full_name || 'System' })))
+    const mappedLog = (logData || []).map(l => ({
+      ...l,
+      actor: l.users?.full_name || 'System',
+      actorRole: l.users?.role || '',
+    }))
+    setAuditLog(mappedLog)
+    const myLatestComment = [...mappedLog]
+      .reverse()
+      .find(l => l.action_by === user?.id && l.note?.startsWith('Comment: '))
+    const localDraft = localStorage.getItem(`finance_comment_draft_${id}`)
+    if (myLatestComment && (!localDraft || localDraft === myLatestComment.note.slice(9))) {
+      savedFinanceCommentIdRef.current = myLatestComment.id
+      lastSavedFinanceCommentRef.current = myLatestComment.note.slice(9)
+      setFinanceComment(myLatestComment.note.slice(9))
+    }
     setManagers(mgrs || [])
     setAllCompanies(cos || [])
 
@@ -626,6 +831,266 @@ export default function ApplicationDetail() {
     } finally { setActionLoading(false) }
   }
 
+  async function reverseHierarchyApproval(targetStatus, fieldsToClear, defaultNote) {
+    const reason = window.prompt('Reason for reversing this approval?')
+    if (reason === null) return
+    setActionLoading(true)
+    try {
+      const cleared = Object.fromEntries(fieldsToClear.map(f => [f, null]))
+      await supabase.from('applications').update({
+        status: targetStatus,
+        processed_at: null,
+        outcome_note: null,
+        ...cleared,
+      }).eq('id', id)
+      await supabase.from('audit_log').insert({
+        application_id: id, action_by: user.id, action: 'reverted',
+        note: reason.trim() || defaultNote,
+      })
+      await load()
+    } finally { setActionLoading(false) }
+  }
+
+  function handleFinanceAttachmentFile(e) {
+    const file = e.target.files[0]
+    setFinanceAttError('')
+    setFinanceAttLabel('')
+    if (!file) { setFinanceAttachment(null); return }
+    if (!['application/pdf','image/jpeg','image/png'].includes(file.type)) {
+      setFinanceAttError('Only PDF, JPG and PNG')
+      e.target.value = ''
+      return
+    }
+    if (file.size > 5*1024*1024) {
+      setFinanceAttError('File must be under 5MB')
+      e.target.value = ''
+      return
+    }
+    setFinanceAttachment(file)
+    setFinanceAttLabel(`${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`)
+  }
+
+  async function openCameraCapture() {
+    setCameraError('')
+    setShowCameraModal(true)
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError('Camera capture is not supported in this browser.')
+        return
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      })
+      setCameraStream(stream)
+    } catch (err) {
+      setCameraError('Could not access camera. Allow camera permission, then try again.')
+    }
+  }
+
+  function closeCameraCapture() {
+    cameraStream?.getTracks().forEach(track => track.stop())
+    setCameraStream(null)
+    setShowCameraModal(false)
+    setCameraError('')
+  }
+
+  async function captureCameraPhoto() {
+    const video = cameraVideoRef.current
+    const canvas = cameraCanvasRef.current
+    if (!video || !canvas || !video.videoWidth) {
+      setCameraError('Camera preview is not ready yet.')
+      return
+    }
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+    if (!blob) {
+      setCameraError('Could not capture photo.')
+      return
+    }
+    if (blob.size > 5*1024*1024) {
+      setCameraError('Photo must be under 5MB.')
+      return
+    }
+    const file = new File([blob], `camera-document-${Date.now()}.jpg`, { type: 'image/jpeg' })
+    closeCameraCapture()
+    await uploadFinanceAttachment(file)
+  }
+
+  async function pasteFinanceScreenshot() {
+    setFinanceAttError('')
+    setFinanceAttLabel('')
+    try {
+      if (!navigator.clipboard?.read) {
+        setFinanceAttError('Clipboard image paste is not supported in this browser')
+        return
+      }
+
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const imageType = item.types.find(type => type.startsWith('image/'))
+        if (!imageType) continue
+
+        const blob = await item.getType(imageType)
+        if (blob.size > 5*1024*1024) {
+          setFinanceAttError('Screenshot must be under 5MB')
+          return
+        }
+
+        const ext = imageType === 'image/jpeg' ? 'jpg' : 'png'
+        const file = new File([blob], `screenshot-${Date.now()}.${ext}`, { type: imageType })
+        await uploadFinanceAttachment(file)
+        return
+      }
+
+      setFinanceAttError('No screenshot image found in clipboard. Press PrtSc or copy an image first.')
+    } catch (err) {
+      setFinanceAttError('Could not read clipboard. Allow clipboard access, then try again.')
+    }
+  }
+
+  async function uploadFinanceAttachment(fileOverride = null) {
+    const fileToUpload = fileOverride?.name ? fileOverride : financeAttachment
+    if (!fileToUpload) return
+    setUploadingFinanceAtt(true)
+    setFinanceAttError('')
+    try {
+      const ext = fileToUpload.name.split('.').pop()
+      const path = `${user.id}/${id}/finance-${Date.now()}.${ext}`
+      const { error } = await supabase.storage.from('attachments').upload(path, fileToUpload)
+      if (error) throw error
+      await supabase.from('audit_log').insert({
+        application_id: id,
+        action_by: user.id,
+        action: 'attachment_added',
+        note: JSON.stringify({
+          type: 'finance_attachment',
+          path,
+          name: fileToUpload.name,
+          size: fileToUpload.size,
+        }),
+      })
+      setFinanceAttachment(null)
+      setFinanceAttLabel('')
+      await load()
+    } catch (err) {
+      setFinanceAttError(err.message || 'Could not upload document')
+    } finally {
+      setUploadingFinanceAtt(false)
+    }
+  }
+
+  async function deleteFinanceAttachment(att) {
+    if (!window.confirm(`Remove ${att.name}?`)) return
+    setActionLoading(true)
+    try {
+      const { error } = await supabase.storage.from('attachments').remove([att.path])
+      if (error) throw error
+      await supabase.from('audit_log').insert({
+        application_id: id,
+        action_by: user.id,
+        action: 'attachment_deleted',
+        note: JSON.stringify({
+          type: 'finance_attachment_deleted',
+          path: att.path,
+          name: att.name,
+        }),
+      })
+      await load()
+    } catch (err) {
+      alert(err.message || 'Could not delete attachment')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function addFinanceComment() {
+    const text = financeComment.trim()
+    if (!text && savedFinanceCommentIdRef.current) {
+      await deleteFinanceCommentById(savedFinanceCommentIdRef.current, lastSavedFinanceCommentRef.current)
+      return
+    }
+    if (!text || text === lastSavedFinanceCommentRef.current) return
+    setActionLoading(true)
+    try {
+      setFinanceCommentStatus('Saving...')
+      let error
+      if (savedFinanceCommentIdRef.current) {
+        ;({ error } = await supabase.from('audit_log')
+          .update({ note: `Comment: ${text}` })
+          .eq('id', savedFinanceCommentIdRef.current)
+          .eq('action_by', user.id))
+      } else {
+        const result = await supabase.from('audit_log').insert({
+          application_id: id,
+          action_by: user.id,
+          action: 'edited',
+          note: `Comment: ${text}`,
+        }).select('id').single()
+        error = result.error
+        if (result.data?.id) savedFinanceCommentIdRef.current = result.data.id
+      }
+      if (error) throw error
+      lastSavedFinanceCommentRef.current = text
+      setFinanceCommentStatus('Saved to Activity')
+      if (savedFinanceCommentIdRef.current) {
+        setAuditLog(log => {
+          const existing = log.find(e => e.id === savedFinanceCommentIdRef.current)
+          if (existing) {
+            return log.map(e => e.id === savedFinanceCommentIdRef.current
+              ? { ...e, note: `Comment: ${text}` }
+              : e
+            )
+          }
+          return [
+            ...log,
+            {
+              id: savedFinanceCommentIdRef.current,
+              action: 'edited',
+              note: `Comment: ${text}`,
+              created_at: new Date().toISOString(),
+              action_by: user.id,
+              actor: profile?.full_name || 'You',
+              actorRole: profile?.role || '',
+            },
+          ]
+        })
+      }
+    } catch (err) {
+      setFinanceCommentStatus(err.message || 'Could not save comment')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function deleteFinanceCommentById(commentId, commentText = '') {
+    setActionLoading(true)
+    try {
+      const { error } = await supabase.from('audit_log')
+        .update({ note: `CommentDeleted: ${commentText}` })
+        .eq('id', commentId)
+        .eq('action_by', user.id)
+      if (error) throw error
+      if (savedFinanceCommentIdRef.current === commentId) {
+        savedFinanceCommentIdRef.current = null
+        lastSavedFinanceCommentRef.current = ''
+        setFinanceComment('')
+        localStorage.removeItem(`finance_comment_draft_${id}`)
+      }
+      setFinanceCommentStatus('Comment deleted')
+      setAuditLog(log => log.map(e => e.id === commentId
+        ? { ...e, note: `CommentDeleted: ${commentText}` }
+        : e
+      ))
+    } catch (err) {
+      setFinanceCommentStatus(err.message || 'Could not delete comment')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   async function softDelete() {
     if (!deleteReason.trim()) return alert('A reason is required.')
     setActionLoading(true)
@@ -682,6 +1147,30 @@ export default function ApplicationDetail() {
   const isOwner = app.submitted_by === user?.id
   const canEdit = isOwner && ['draft','returned'].includes(app.status)
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
+  const canAddFinanceAttachment = ['finance','superadmin'].includes(profile?.role) &&
+    ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
+  const canAddFinancePostApprovalComment = ['finance','superadmin'].includes(profile?.role) && app.status !== 'draft'
+  const deletedFinanceAttachmentPaths = new Set(
+    auditLog.map(e => parseDeletedAttachmentNote(e.note)?.path).filter(Boolean)
+  )
+  const additionalAttachments = auditLog
+    .map(e => ({ ...parseAttachmentNote(e.note), id: e.id, created_at: e.created_at, actor: e.actor }))
+    .filter(a => a.path && a.name && !deletedFinanceAttachmentPaths.has(a.path))
+  const roleComments = auditLog.filter(e =>
+    e.note &&
+    !e.note.startsWith('CommentDeleted: ') &&
+    !(e.note.startsWith('Comment: ') && e.action_by === user?.id) &&
+    (
+      e.note.startsWith('Comment: ') ||
+      ['mgr_approved','mgr_rejected','fin_approved','approved','rejected','returned','escalated'].includes(e.action)
+    )
+  )
+  const canReverseManager = (isManager || isSuperAdmin) && app.status === 'mgr_approved' &&
+    (isSuperAdmin || app.manager_id === user?.id)
+  const canReverseFinance = (profile?.role === 'finance' || isSuperAdmin) && app.status === 'fin_approved' &&
+    (isSuperAdmin || app.fin_approved_by === user?.id)
+  const canReverseCFO = (['cfo','ceo'].includes(profile?.role) || isSuperAdmin) && app.status === 'approved' &&
+    (isSuperAdmin || app.cfo_approved_by === user?.id)
 
   const accentColor = companyColor?.accent || '#1d4ed8'
   const pastelColor = companyColor?.pastel || '#dbeafe'
@@ -741,6 +1230,15 @@ export default function ApplicationDetail() {
               {canActCFO     && '🏦 CFO final approval:'}
               {isSuperAdmin && !canActManager && !canActFinance && !canActCFO && '⚙ Admin action:'}
             </span>
+
+            {!showReturnInline && !showRejectInline && !showEscalate && (
+              <input className="form-control"
+                style={{ fontSize:'12px', padding:'5px 10px', minWidth:'240px', maxWidth:'340px', flex:'1 1 240px' }}
+                placeholder="Optional approval note / comment..."
+                value={note}
+                onChange={e => setNote(e.target.value)}
+              />
+            )}
 
             {/* Manager actions */}
             {(canActManager || isSuperAdmin) && app.status === 'pending' && !showReturnInline && !showRejectInline && (
@@ -860,9 +1358,66 @@ export default function ApplicationDetail() {
                 🏦 {app.cfo_approved_by_name}
               </span>
             )}
+            {canReverseManager && (
+              <button className="btn btn-outline btn-sm" disabled={actionLoading}
+                onClick={() => reverseHierarchyApproval(
+                  'pending',
+                  ['manager_id','manager_note','manager_acted_at'],
+                  'Manager approval reversed'
+                )}>Reverse Manager</button>
+            )}
+            {canReverseFinance && (
+              <button className="btn btn-outline btn-sm" disabled={actionLoading}
+                onClick={() => reverseHierarchyApproval(
+                  'mgr_approved',
+                  ['fin_approved_by','fin_approved_at'],
+                  'Finance approval reversed'
+                )}>Reverse Finance</button>
+            )}
+            {canReverseCFO && (
+              <button className="btn btn-outline btn-sm" disabled={actionLoading}
+                onClick={() => reverseHierarchyApproval(
+                  'fin_approved',
+                  ['cfo_approved_by','cfo_approved_at'],
+                  'CFO approval reversed'
+                )}>Reverse CFO</button>
+            )}
           </div>
         )}
       </div>
+
+      {showCameraModal && (
+        <div style={{ position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.75)',
+          display:'flex',alignItems:'center',justifyContent:'center',padding:'20px' }}>
+          <div style={{ background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'620px',
+            boxShadow:'0 24px 64px rgba(0,0,0,0.4)',overflow:'hidden' }}>
+            <div style={{ background:'var(--ink)',padding:'14px 18px',display:'flex',
+              alignItems:'center',justifyContent:'space-between',gap:'10px' }}>
+              <h3 style={{ color:'#fff',fontSize:'15px',fontWeight:600 }}>Capture Document Photo</h3>
+              <button className="btn btn-outline btn-sm" onClick={closeCameraCapture}>Close</button>
+            </div>
+            <div style={{ padding:'18px' }}>
+              {cameraError && <div className="alert alert-error">{cameraError}</div>}
+              <div style={{ background:'#111',borderRadius:'8px',overflow:'hidden',
+                minHeight:'260px',display:'flex',alignItems:'center',justifyContent:'center' }}>
+                <video ref={cameraVideoRef} autoPlay playsInline muted
+                  style={{ width:'100%',maxHeight:'420px',objectFit:'contain',display:cameraStream ? 'block' : 'none' }} />
+                {!cameraStream && !cameraError && (
+                  <div style={{ color:'#fff',fontSize:'13px',padding:'40px' }}>Starting camera...</div>
+                )}
+              </div>
+              <canvas ref={cameraCanvasRef} style={{ display:'none' }} />
+              <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'14px' }}>
+                <button className="btn btn-outline" onClick={closeCameraCapture}>Cancel</button>
+                <button className="btn btn-primary" disabled={!cameraStream || uploadingFinanceAtt}
+                  onClick={captureCameraPhoto}>
+                  Capture & Save
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Duplicate confirmation modal */}
       {showDuplicate && (
@@ -986,12 +1541,108 @@ export default function ApplicationDetail() {
                 <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:'13px' }}>{app.bank_account || '—'}</div>
               </div>
               {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
-              {attachmentUrl && (
+              {app.attachment_path && (
                 <div className="form-group">
                   <div className="form-label">📎 Attachment</div>
-                  <a href={attachmentUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm">
-                    View / Download {app.attachment_name}
-                  </a>
+                  <DetailAttachmentLink path={app.attachment_path} name={app.attachment_name} />
+                </div>
+              )}
+              {(canAddFinanceAttachment || additionalAttachments.length > 0) && (
+                <div className="form-group">
+                  <div className="form-label">Finance Documents</div>
+                  {additionalAttachments.length > 0 && (
+                    <div style={{ display:'flex', flexDirection:'column', gap:'8px', marginBottom: canAddFinanceAttachment ? '12px' : 0 }}>
+                      {additionalAttachments.map((att, index) => (
+                        <div key={`${att.path}-${index}`} style={{
+                          display:'flex', alignItems:'center', justifyContent:'space-between',
+                          gap:'10px', padding:'8px 10px', border:'1px solid var(--border-2)',
+                          borderRadius:'var(--radius-sm)', background:'var(--cream)',
+                        }}>
+                          <div style={{ minWidth:0 }}>
+                            <div style={{ fontSize:'12px', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              {att.name}{att.size ? ` (${formatFileSize(att.size)})` : ''}
+                            </div>
+                            <div style={{ fontSize:'11px', color:'var(--ink-3)' }}>
+                              {att.actor} · {fmtDate(att.created_at)}
+                            </div>
+                          </div>
+                          <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
+                            <DetailAttachmentLink path={att.path} name={att.name} />
+                            {canAddFinanceAttachment && (
+                              <button className="btn btn-danger btn-sm" disabled={actionLoading}
+                                onClick={() => deleteFinanceAttachment(att)}>
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {canAddFinanceAttachment && (
+                    <div style={{ display:'flex', gap:'8px', alignItems:'flex-start', flexWrap:'wrap' }}>
+                      <input ref={financeFileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                        onChange={handleFinanceAttachmentFile} style={{ display:'none' }} />
+                      <button className="btn btn-outline btn-sm" type="button" title="Choose document"
+                        disabled={uploadingFinanceAtt}
+                        onClick={() => financeFileRef.current?.click()}>
+                        📎
+                      </button>
+                      <button className="btn btn-outline btn-sm" type="button" title="Capture document photo"
+                        disabled={uploadingFinanceAtt}
+                        onClick={openCameraCapture}>
+                        📷
+                      </button>
+                      <button className="btn btn-outline btn-sm" type="button" title="Save screenshot from clipboard"
+                        disabled={uploadingFinanceAtt || !hasClipboardImage}
+                        onClick={pasteFinanceScreenshot}>
+                        ▣
+                      </button>
+                      <button className="btn btn-primary btn-sm" title="Upload selected document"
+                        disabled={!financeAttachment || uploadingFinanceAtt}
+                        onClick={() => uploadFinanceAttachment()}>
+                        {uploadingFinanceAtt ? '…' : '↑'}
+                      </button>
+                      {financeAttLabel && <p className="form-hint" style={{color:'var(--status-approved)',width:'100%'}}>✓ {financeAttLabel}</p>}
+                      {financeAttError && <p className="form-error" style={{width:'100%'}}>{financeAttError}</p>}
+                      <p className="form-hint" style={{width:'100%'}}>Icons: attach file, camera photo, clipboard screenshot, then upload selected file. Camera and screenshot save immediately.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              {canAddFinancePostApprovalComment && (
+                <div className="form-group">
+                  <div className="form-label">Comments</div>
+                  {roleComments.length > 0 && (
+                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginBottom:'8px' }}>
+                      {roleComments.map(c => {
+                        const roleColor = getRoleColor(c.actorRole)
+                        return (
+                          <div key={c.id} style={{
+                            background:roleColor.bg, border:`1px solid ${roleColor.border}`,
+                            borderRadius:'var(--radius-sm)', padding:'8px 10px',
+                          }}>
+                            <div style={{ fontSize:'11px', color:roleColor.text, marginBottom:'3px', fontWeight:600 }}>
+                              {roleColor.label} · {c.actor} · {fmtDate(c.created_at)}
+                            </div>
+                            <div style={{ fontSize:'12px', whiteSpace:'pre-wrap' }}>
+                              {c.note.startsWith('Comment: ') ? c.note.slice(9) : c.note}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <textarea className="form-control" rows={3}
+                    placeholder="Type a comment... it is remembered and saved when you leave this field."
+                    value={financeComment}
+                    onChange={e => setFinanceComment(e.target.value)}
+                    onBlur={addFinanceComment}
+                  />
+                  <p className="form-hint">
+                    Saved locally while typing. Leave the field to save. Clear the box and leave it to remove your comment.
+                    {financeCommentStatus && ` ${financeCommentStatus}`}
+                  </p>
                 </div>
               )}
             </div>

@@ -61,19 +61,27 @@ function AttachmentPreview({ path, name, onClose }) {
   )
 }
 
-function AttachmentPill({ path, name }) {
+function formatFileSize(bytes) {
+  if (!bytes) return ''
+  const mb = bytes / 1024 / 1024
+  if (mb >= 1) return `${mb.toFixed(2)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function AttachmentPill({ path, name, size }) {
   const [show, setShow] = useState(false)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
   const isPDF   = /\.pdf$/i.test(name || '')
+  const displayName = size ? `${name} (${formatFileSize(size)})` : name
   return (
     <>
-      <button onClick={() => setShow(true)} title={`Preview: ${name}`}
+      <button onClick={() => setShow(true)} title={`Preview: ${displayName}`}
         style={{ display:'inline-flex',alignItems:'center',gap:'4px',padding:'3px 8px',
           borderRadius:'20px',cursor:'pointer',background:'#eff6ff',border:'1px solid #bfdbfe',
           color:'#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
         {isPDF ? '📄' : isImage ? '🖼' : '📎'}
         <span style={{ overflow:'hidden',textOverflow:'ellipsis',maxWidth:'60px',fontSize:'11px' }}>
-          {name && name.length > 9 ? name.slice(0,8)+'…' : name}
+          {displayName && displayName.length > 9 ? displayName.slice(0,8)+'…' : displayName}
         </span>
         <span style={{ opacity:0.6,fontSize:'10px' }}>👁</span>
       </button>
@@ -82,10 +90,28 @@ function AttachmentPill({ path, name }) {
   )
 }
 
+function parseFinanceAttachment(note) {
+  if (!note) return null
+  try {
+    const data = JSON.parse(note)
+    if (data?.type === 'finance_attachment' && data.path && data.name) return data
+  } catch {}
+  return null
+}
+
+function parseDeletedFinanceAttachment(note) {
+  if (!note) return null
+  try {
+    const data = JSON.parse(note)
+    if (data?.type === 'finance_attachment_deleted' && data.path) return data
+  } catch {}
+  return null
+}
+
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 
 export default function FinanceDashboard() {
-  const { profile }   = useAuth()
+  const { user, profile } = useAuth()
   const navigate      = useNavigate()
 
   const [applications, setApplications]       = useState([])
@@ -98,6 +124,7 @@ export default function FinanceDashboard() {
   const [batchForm, setBatchForm]       = useState({ transfer_ref:'', transfer_date:'', note:'' })
   const [creatingBatch, setCreatingBatch] = useState(false)
   const [batchMsg, setBatchMsg]         = useState('')
+  const [quickActionLoading, setQuickActionLoading] = useState(null)
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = 'finance_dashboard_filters'
@@ -179,6 +206,39 @@ export default function FinanceDashboard() {
       rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
     }
 
+    if (rows.length > 0) {
+      const ids = rows.map(a => a.id)
+      const { data: financeLogs, error: logError } = await supabase
+        .from('audit_log')
+        .select('application_id,action,note,created_at')
+        .in('application_id', ids)
+        .in('action', ['attachment_added','attachment_deleted'])
+        .order('created_at', { ascending: true })
+
+      if (logError) {
+        console.error(logError)
+      } else {
+        const byApp = {}
+        const deletedByApp = {}
+        ;(financeLogs || []).forEach(log => {
+          const deleted = parseDeletedFinanceAttachment(log.note)
+          if (deleted) {
+            if (!deletedByApp[log.application_id]) deletedByApp[log.application_id] = new Set()
+            deletedByApp[log.application_id].add(deleted.path)
+            return
+          }
+          const attachment = parseFinanceAttachment(log.note)
+          if (!attachment) return
+          if (!byApp[log.application_id]) byApp[log.application_id] = []
+          byApp[log.application_id].push(attachment)
+        })
+        rows = rows.map(app => ({
+          ...app,
+          finance_attachments: (byApp[app.id] || []).filter(att => !deletedByApp[app.id]?.has(att.path)),
+        }))
+      }
+    }
+
     setApplications(rows)
     // When searching, show actual result count not paginated count
     setTotal(isSearching ? rows.length : (count || 0))
@@ -238,6 +298,72 @@ export default function FinanceDashboard() {
   const batchError     = batchCompatible(selectedApps)
   const batchTotal     = selectedApps.reduce((s,a) => s + Number(a.amount), 0)
   const canCreateBatch = selectedApps.length >= 2 && !batchError
+
+  function getQuickActions(app) {
+    if (!profile?.role) return null
+    if (profile.role === 'manager' && app.status === 'pending') {
+      return { approve:'mgr_approve', reject:'mgr_reject', label:'Manager' }
+    }
+    if (profile.role === 'finance' && ['pending','mgr_approved'].includes(app.status)) {
+      return { approve:'fin_approve', reject:'reject', label:'Finance' }
+    }
+    if (['cfo','ceo'].includes(profile.role) && ['pending','mgr_approved','fin_approved','escalated'].includes(app.status)) {
+      return { approve:'approve', reject:'reject', label:'CFO' }
+    }
+    if (profile.role === 'superadmin' && ['pending','mgr_approved','fin_approved','escalated'].includes(app.status)) {
+      if (app.status === 'pending') return { approve:'mgr_approve', reject:'mgr_reject', label:'Admin' }
+      if (app.status === 'mgr_approved') return { approve:'fin_approve', reject:'reject', label:'Admin' }
+      return { approve:'approve', reject:'reject', label:'Admin' }
+    }
+    return null
+  }
+
+  async function doQuickAction(app, action) {
+    const isReject = ['reject','mgr_reject'].includes(action)
+    const note = isReject ? window.prompt('Reason for rejection (optional)') : ''
+    if (isReject && note === null) return
+    if (!isReject && !window.confirm(`Approve ${app.ref_number || 'this application'}?`)) return
+
+    setQuickActionLoading(`${app.id}:${action}`)
+    try {
+      const now = new Date().toISOString()
+      let newStatus, auditAction, extraFields = {}
+
+      if (action === 'mgr_approve') {
+        newStatus = 'mgr_approved'; auditAction = 'mgr_approved'
+        extraFields = { manager_id: user.id, manager_note: null, manager_acted_at: now }
+      } else if (action === 'mgr_reject') {
+        newStatus = 'mgr_rejected'; auditAction = 'mgr_rejected'
+        extraFields = { manager_id: user.id, manager_note: note || null, manager_acted_at: now }
+      } else if (action === 'fin_approve') {
+        newStatus = 'fin_approved'; auditAction = 'fin_approved'
+        extraFields = { fin_approved_by: user.id, fin_approved_at: now }
+      } else if (action === 'approve') {
+        newStatus = 'approved'; auditAction = 'approved'
+        extraFields = { cfo_approved_by: user.id, cfo_approved_at: now, processed_at: now }
+      } else {
+        newStatus = 'rejected'; auditAction = 'rejected'
+        extraFields = { processed_at: now }
+      }
+
+      await supabase.from('applications').update({
+        status: newStatus,
+        outcome_note: isReject ? note : app.outcome_note,
+        ...extraFields,
+      }).eq('id', app.id)
+
+      await supabase.from('audit_log').insert({
+        application_id: app.id,
+        action_by: user.id,
+        action: auditAction,
+        note: note || null,
+      })
+
+      await load()
+    } finally {
+      setQuickActionLoading(null)
+    }
+  }
 
   async function createBatch() {
     if (!batchForm.transfer_ref.trim()) return setBatchMsg('Transfer reference is required')
@@ -463,6 +589,7 @@ export default function FinanceDashboard() {
                   const dbColor = companiesSorted[idx]?.accent_color
                   const col = COMPANY_PALETTE[Math.max(0,idx) % COMPANY_PALETTE.length]
                   const dotColor = dbColor || col?.accent || '#999'
+                  const quickActions = getQuickActions(app)
                   const totalCols = 10
                   return (
                     <React.Fragment key={app.id}>
@@ -572,16 +699,52 @@ export default function FinanceDashboard() {
                         {/* Attachment — icon + 8 char filename */}
                         <td style={{verticalAlign:'middle',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          {app.attachment_path
-                            ? <AttachmentPill path={app.attachment_path} name={app.attachment_name} />
-                            : <span style={{fontSize:'11px',color:'var(--ink-3)'}}>—</span>
-                          }
+                          {(app.attachment_path || app.finance_attachments?.length > 0) ? (
+                            <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', maxWidth:'170px' }}>
+                              {app.attachment_path && (
+                                <AttachmentPill path={app.attachment_path} name={app.attachment_name} />
+                              )}
+                              {(app.finance_attachments || []).map((att, index) => (
+                                <AttachmentPill key={`${att.path}-${index}`} path={att.path} name={att.name} size={att.size} />
+                              ))}
+                            </div>
+                          ) : (
+                            <span style={{fontSize:'11px',color:'var(--ink-3)'}}>—</span>
+                          )}
                         </td>
 
                         {/* Status */}
                         <td style={{verticalAlign:'middle',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <StatusBadge status={app.status} />
+                          {quickActions && (
+                            <div style={{ display:'flex', gap:'3px', marginTop:'4px', flexWrap:'wrap', maxWidth:'86px' }}>
+                              <button
+                                title={`${quickActions.label} approve`}
+                                disabled={!!quickActionLoading}
+                                onClick={() => doQuickAction(app, quickActions.approve)}
+                                style={{
+                                  border:'1px solid #86efac', background:'#dcfce7', color:'#166534',
+                                  borderRadius:'20px', padding:'1px 6px', fontSize:'10px',
+                                  fontWeight:700, cursor: quickActionLoading ? 'not-allowed' : 'pointer',
+                                  lineHeight:'16px',
+                                }}>
+                                OK
+                              </button>
+                              <button
+                                title={`${quickActions.label} reject`}
+                                disabled={!!quickActionLoading}
+                                onClick={() => doQuickAction(app, quickActions.reject)}
+                                style={{
+                                  border:'1px solid #fecaca', background:'#fee2e2', color:'#991b1b',
+                                  borderRadius:'20px', padding:'1px 6px', fontSize:'10px',
+                                  fontWeight:700, cursor: quickActionLoading ? 'not-allowed' : 'pointer',
+                                  lineHeight:'16px',
+                                }}>
+                                NO
+                              </button>
+                            </div>
+                          )}
                         </td>
 
                         {/* Action */}
