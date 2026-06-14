@@ -125,6 +125,7 @@ export default function FinanceDashboard() {
   const [creatingBatch, setCreatingBatch] = useState(false)
   const [batchMsg, setBatchMsg]         = useState('')
   const [quickActionLoading, setQuickActionLoading] = useState(null)
+  const [undoBatchLoading, setUndoBatchLoading] = useState(null)
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = 'finance_dashboard_filters'
@@ -285,19 +286,110 @@ export default function FinanceDashboard() {
   function batchCompatible(apps) {
     if (apps.length < 2) return null
     const first = apps[0]
-    const mismatch = apps.find(a =>
-      a.payee_name !== first.payee_name ||
-      a.payment_method_name !== first.payment_method_name ||
-      a.bank_account !== first.bank_account
-    )
-    if (mismatch) return 'Selected applications must have the same Payee, Payment Method, and Bank Account.'
+    const mismatch = apps.find(a => a.company_name !== first.company_name)
+    if (mismatch) return 'Selected applications must belong to the same company.'
     return null
   }
 
   const selectedApps   = getSelected()
   const batchError     = batchCompatible(selectedApps)
   const batchTotal     = selectedApps.reduce((s,a) => s + Number(a.amount), 0)
+  const selectedCompany = selectedApps[0]?.company_name || ''
+  const hasMixedBatchDetails = selectedApps.length > 1 && selectedApps.some(a =>
+    a.payee_name !== selectedApps[0].payee_name ||
+    a.payment_method_name !== selectedApps[0].payment_method_name ||
+    a.bank_account !== selectedApps[0].bank_account
+  )
   const canCreateBatch = selectedApps.length >= 2 && !batchError
+  const canUndoBatch = ['finance','superadmin'].includes(profile?.role)
+
+  function safeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+  }
+
+  function printBatchReport(batchNumber = 'Draft') {
+    if (selectedApps.length === 0) return
+    const win = window.open('', '_blank', 'width=1100,height=800')
+    if (!win) {
+      setBatchMsg('Could not open print window. Please allow popups for this site.')
+      return
+    }
+    const rowsHtml = selectedApps.map((a, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${safeHtml(a.ref_number)}</td>
+        <td>${safeHtml(a.submitted_by_name)}</td>
+        <td>${safeHtml(a.payee_name)}</td>
+        <td>${safeHtml(a.payment_method_name)}</td>
+        <td>${safeHtml(a.bank_account)}</td>
+        <td>${safeHtml(a.payment_reason)}</td>
+        <td class="amount">AED ${safeHtml(formatCurrency(a.amount))}</td>
+        <td>${safeHtml(a.status)}</td>
+      </tr>
+    `).join('')
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <title>Batch Payment Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; color:#111827; margin:24px; }
+            h1 { font-size:22px; margin:0 0 4px; }
+            .sub { color:#6b7280; font-size:12px; margin-bottom:18px; }
+            .grid { display:grid; grid-template-columns: 160px 1fr 160px 1fr; gap:8px 14px; font-size:12px; margin-bottom:18px; }
+            .label { color:#6b7280; font-weight:700; text-transform:uppercase; font-size:10px; letter-spacing:.05em; }
+            table { width:100%; border-collapse:collapse; font-size:11px; }
+            th { background:#f3f4f6; text-align:left; border:1px solid #d1d5db; padding:7px; }
+            td { border:1px solid #d1d5db; padding:7px; vertical-align:top; }
+            .amount { text-align:right; white-space:nowrap; font-weight:700; }
+            .total { margin-top:14px; text-align:right; font-size:14px; font-weight:700; }
+            .note { margin-top:8px; color:#4b5563; font-size:12px; white-space:pre-wrap; }
+            @media print { body { margin:12mm; } button { display:none; } }
+          </style>
+        </head>
+        <body>
+          <button onclick="window.print()" style="float:right;padding:7px 14px;margin-bottom:12px;">Print</button>
+          <h1>Batch Payment Report</h1>
+          <div class="sub">Generated ${safeHtml(new Date().toLocaleString('en-GB'))}</div>
+          <div class="grid">
+            <div class="label">Company</div><div>${safeHtml(selectedCompany)}</div>
+            <div class="label">Batch No.</div><div>${safeHtml(batchNumber)}</div>
+            <div class="label">Payment Ref.</div><div>${safeHtml(batchForm.transfer_ref || '-')}</div>
+            <div class="label">Payment Date</div><div>${safeHtml(batchForm.transfer_date || '-')}</div>
+            <div class="label">Prepared By</div><div>${safeHtml(profile?.full_name || '')}</div>
+            <div class="label">Applications</div><div>${selectedApps.length}</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Ref</th>
+                <th>Applicant</th>
+                <th>Payee</th>
+                <th>Method</th>
+                <th>Bank Account</th>
+                <th>Reason</th>
+                <th>Amount</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <div class="total">Total: AED ${safeHtml(formatCurrency(batchTotal))}</div>
+          ${batchForm.note ? `<div class="note"><strong>Note:</strong> ${safeHtml(batchForm.note)}</div>` : ''}
+        </body>
+      </html>
+    `
+    win.document.open()
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+  }
 
   function getQuickActions(app) {
     if (!profile?.role) return null
@@ -368,7 +460,6 @@ export default function FinanceDashboard() {
   async function createBatch() {
     if (!batchForm.transfer_ref.trim()) return setBatchMsg('Transfer reference is required')
     if (!batchForm.transfer_date)       return setBatchMsg('Transfer date is required')
-    if (forceMode && !forceReason.trim()) return setBatchMsg('Override reason is required')
     setCreatingBatch(true)
     setBatchMsg('')
     try {
@@ -382,7 +473,7 @@ export default function FinanceDashboard() {
           transfer_ref:      batchForm.transfer_ref.trim(),
           transfer_date:     batchForm.transfer_date,
           note:              batchForm.note.trim() || null,
-          force_reason:      forceMode ? forceReason.trim() : null,
+          force_reason:      null,
           total_amount:      batchTotal,
           application_count: ids.length,
           created_by:        (await supabase.auth.getUser()).data.user?.id,
@@ -396,8 +487,6 @@ export default function FinanceDashboard() {
       if (lErr) throw new Error('Linking applications failed: ' + lErr.message)
       setSelected(new Set())
       setShowBatchModal(false)
-      setForceMode(false)
-      setForceReason('')
       setBatchForm({ transfer_ref:'', transfer_date:'', note:'' })
       await load()
     } catch (err) {
@@ -408,6 +497,64 @@ export default function FinanceDashboard() {
   }
 
   // Derived — are we in search mode?
+  async function undoBatch(app) {
+    let batchId = app.batch_id
+    if (!batchId && app.batch_number) {
+      const { data: batch, error: batchErr } = await supabase
+        .from('payment_batches')
+        .select('id')
+        .eq('batch_number', app.batch_number)
+        .single()
+      if (batchErr) {
+        alert('Could not find batch: ' + batchErr.message)
+        return
+      }
+      batchId = batch?.id
+    }
+    if (!batchId) {
+      alert('This row does not have a batch available to undo.')
+      return
+    }
+
+    const { data: linked, error: fetchErr } = await supabase
+      .from('applications')
+      .select('id')
+      .eq('batch_id', batchId)
+    if (fetchErr) {
+      alert('Could not check batch applications: ' + fetchErr.message)
+      return
+    }
+
+    const linkedIds = (linked || []).map(row => row.id)
+    const count = linkedIds.length || 1
+    if (!window.confirm(`Undo batch ${app.batch_number || ''} for ${count} application${count > 1 ? 's' : ''}?`)) return
+
+    setUndoBatchLoading(batchId)
+    try {
+      const { error: updateErr } = await supabase
+        .from('applications')
+        .update({ batch_id: null })
+        .eq('batch_id', batchId)
+      if (updateErr) throw updateErr
+
+      if (linkedIds.length > 0) {
+        await supabase.from('audit_log').insert(linkedIds.map(id => ({
+          application_id: id,
+          action_by: user.id,
+          action: 'edited',
+          note: `Batch undone: ${app.batch_number || batchId}`,
+        })))
+      }
+
+      setSelected(new Set())
+      await load()
+    } catch (err) {
+      alert(err.message || 'Failed to undo batch')
+    } finally {
+      setUndoBatchLoading(null)
+    }
+  }
+
   const isSearching = !!(search.trim() || amountSearch.trim())
 
   return (
@@ -507,9 +654,15 @@ export default function FinanceDashboard() {
         }}>
           <span style={{fontWeight:600, color: canCreateBatch ? '#065f46' : '#9a3412'}}>
             {selected.size} application{selected.size>1?'s':''} selected
+            {selectedCompany && ` · ${selectedCompany}`}
             {canCreateBatch && ` · Total: AED ${formatCurrency(batchTotal)}`}
           </span>
           {batchError && <span style={{color:'#c2410c',fontSize:'12px'}}>⚠ {batchError}</span>}
+          {canCreateBatch && hasMixedBatchDetails && (
+            <span style={{color:'#047857',fontSize:'12px'}}>
+              Mixed payees/payment methods/bank accounts will be grouped under one company batch.
+            </span>
+          )}
           {canCreateBatch && (
             <button className="btn btn-success btn-sm" onClick={() => setShowBatchModal(true)}>
               ⧉ Create Payment Batch
@@ -632,12 +785,26 @@ export default function FinanceDashboard() {
                             }}>✓</span>
                           </div>
                           {app.batch_number && (
-                            <div style={{marginTop:'3px'}}>
+                            <div style={{marginTop:'3px',display:'flex',alignItems:'center',gap:'4px',flexWrap:'wrap'}}>
                               <span style={{
                                 fontSize:'9px',fontWeight:600,padding:'1px 6px',
                                 borderRadius:'20px',background:'#dbeafe',color:'#1e40af',
                                 fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',
-                              }}>⧉ {app.batch_number}</span>
+                              }}>Batch {app.batch_number}</span>
+                              {canUndoBatch && (app.batch_id || app.batch_number) && (
+                                <button
+                                  title={`Undo batch ${app.batch_number}`}
+                                  disabled={undoBatchLoading === app.batch_id}
+                                  onClick={() => undoBatch(app)}
+                                  style={{
+                                    border:'1px solid #fecaca', background:'#fee2e2', color:'#991b1b',
+                                    borderRadius:'20px', padding:'1px 6px', fontSize:'9px',
+                                    fontWeight:700, cursor: undoBatchLoading === app.batch_id ? 'not-allowed' : 'pointer',
+                                    lineHeight:'14px',
+                                  }}>
+                                  {undoBatchLoading === app.batch_id ? 'Undoing' : 'Undo'}
+                                </button>
+                              )}
                             </div>
                           )}
                         </td>
@@ -863,6 +1030,9 @@ export default function FinanceDashboard() {
                 <div style={{fontSize:'12px',fontWeight:600,color:'var(--ink-3)',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'.05em'}}>
                   Included Applications
                 </div>
+                <div style={{fontSize:'12px',color:'var(--ink-3)',marginBottom:'8px'}}>
+                  Company: {selectedCompany}
+                </div>
                 {selectedApps.map(a => (
                   <div key={a.id} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0',borderBottom:'1px solid var(--border-2)'}}>
                     <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:500}}>{a.ref_number}</span>
@@ -875,18 +1045,20 @@ export default function FinanceDashboard() {
                   <span>AED {formatCurrency(batchTotal)}</span>
                 </div>
                 <div style={{fontSize:'12px',color:'var(--ink-3)',marginTop:'4px'}}>
-                  Payee: {selectedApps[0]?.payee_name} · {selectedApps[0]?.payment_method_name} · {selectedApps[0]?.bank_account}
+                  {hasMixedBatchDetails
+                    ? 'Mixed payees/payment methods/bank accounts selected. They will remain separate in the report.'
+                    : `${selectedApps[0]?.payee_name} · ${selectedApps[0]?.payment_method_name} · ${selectedApps[0]?.bank_account}`}
                 </div>
               </div>
               {/* Form */}
               <div className="form-group">
-                <label className="form-label">Bank Transfer Reference <span style={{color:'#dc2626'}}>*</span></label>
-                <input className="form-control" placeholder="e.g. TT2026051234"
+                <label className="form-label">Payment / Batch Reference <span style={{color:'#dc2626'}}>*</span></label>
+                <input className="form-control" placeholder="e.g. TT2026051234 or CASH-JUN-01"
                   value={batchForm.transfer_ref}
                   onChange={e => setBatchForm(f => ({...f,transfer_ref:e.target.value}))} />
               </div>
               <div className="form-group">
-                <label className="form-label">Transfer Date <span style={{color:'#dc2626'}}>*</span></label>
+                <label className="form-label">Payment Date <span style={{color:'#dc2626'}}>*</span></label>
                 <input type="date" className="form-control"
                   value={batchForm.transfer_date}
                   onChange={e => setBatchForm(f => ({...f,transfer_date:e.target.value}))} />
@@ -900,6 +1072,9 @@ export default function FinanceDashboard() {
               {batchMsg && <div className="alert alert-error" style={{marginBottom:'12px'}}>{batchMsg}</div>}
               <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
                 <button className="btn btn-outline" onClick={() => {setShowBatchModal(false);setBatchMsg('')}}>Cancel</button>
+                <button className="btn btn-outline" onClick={() => printBatchReport()}>
+                  Print Report
+                </button>
                 <button className="btn btn-primary" disabled={creatingBatch} onClick={createBatch}>
                   {creatingBatch ? 'Creating…' : '⧉ Create Batch'}
                 </button>
