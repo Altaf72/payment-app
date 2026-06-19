@@ -264,3 +264,130 @@ tbody tr:last-child { border-bottom: none; }
 .badge-mgr_approved { background: #e0f2fe; color: #0369a1; }
 .badge-mgr_rejected { background: #fef9c3; color: #854d0e; }
 .badge-fin_approved { background: #dcfce7; color: #166534; }
+
+/* Payment voucher */
+.voucher-print { display: none; }
+.voucher-stats .stat-value { font-size: 18px; }
+.voucher-cheques {
+  margin-top: 6px;
+  padding: 16px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--cream);
+}
+.voucher-cheques td { padding: 6px; }
+.voucher-cheques .form-control { min-width: 110px; padding: 7px 8px; font-size: 12px; }
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+  html, body, #root {
+    width: auto;
+    height: auto;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .app-shell,
+  .main-content {
+    display: block;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    background: #fff;
+  }
+  .voucher-screen { display: none !important; }
+  .voucher-print {
+    display: block !important;
+    width: 100%;
+    max-width: 190mm;
+    margin: 0;
+    padding: 0;
+    color: #111827;
+    background: #fff;
+    font-family: Arial, sans-serif;
+    position: relative;
+  }
+  .voucher-print-status {
+    position: absolute;
+    top: 7mm;
+    right: 8mm;
+    border: 2px solid #15803d;
+    color: #15803d;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .12em;
+  }
+  .voucher-print-header {
+    min-height: 28mm;
+    display: grid;
+    grid-template-columns: 30mm 1fr 42mm;
+    align-items: center;
+    gap: 5mm;
+    border-bottom: 2px solid #8b6914;
+    padding-bottom: 5mm;
+  }
+  .voucher-print-logo img {
+    display: block;
+    max-width: 28mm;
+    max-height: 22mm;
+    object-fit: contain;
+  }
+  .voucher-logo-placeholder {
+    width: 22mm;
+    height: 18mm;
+    border: 1px solid #d1d5db;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: #6b7280;
+  }
+  .voucher-print-header h1 { font-size: 18px; text-align: center; text-transform: uppercase; }
+  .voucher-print-header p { font-size: 12px; font-weight: 800; letter-spacing: .18em; text-align: center; margin-top: 3px; }
+  .voucher-print-number { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 800; text-align: right; margin-top: 16mm; }
+  .voucher-print-summary {
+    margin-top: 6mm;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border: 1px solid #d1d5db;
+  }
+  .voucher-print-summary > div { padding: 3mm; border-right: 1px solid #d1d5db; }
+  .voucher-print-summary > div:last-child { border-right: none; }
+  .voucher-print-summary span,
+  .voucher-paid-to span {
+    display: block;
+    color: #6b7280;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .voucher-print-summary strong { display: block; font-size: 11px; margin-top: 1mm; }
+  .voucher-print-summary .voucher-total { grid-column: span 4; border-top: 1px solid #d1d5db; text-align: right; }
+  .voucher-print-summary .voucher-total strong { font-size: 16px; color: #8b6914; }
+  .voucher-amount-words { background: #f9fafb; border: 1px solid #d1d5db; border-top: none; padding: 3mm; font-size: 11px; font-weight: 700; }
+  .voucher-paid-to { display: grid; grid-template-columns: 32mm 1fr; align-items: center; margin-top: 5mm; padding: 3mm; border: 1px solid #d1d5db; }
+  .voucher-paid-to strong { font-size: 13px; text-transform: uppercase; }
+  .voucher-print-section { margin-top: 5mm; }
+  .voucher-print-section h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2mm; }
+  .voucher-print-section table { font-size: 9px; }
+  .voucher-print-section th,
+  .voucher-print-section td { border: 1px solid #d1d5db; padding: 2mm; }
+  .voucher-print-section th { background: #f3f4f6; }
+  .voucher-print-section .number { text-align: right; white-space: nowrap; }
+  .voucher-print-section p { border: 1px solid #d1d5db; padding: 3mm; min-height: 13mm; font-size: 10px; white-space: pre-wrap; }
+  .voucher-print-section .voucher-print-remarks { border-top: none; min-height: auto; color: #4b5563; }
+  .voucher-signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8mm; margin-top: 14mm; }
+  .voucher-signatures > div { text-align: center; }
+  .voucher-signatures span { display: block; font-size: 9px; color: #6b7280; text-transform: uppercase; }
+  .voucher-signatures strong { display: block; min-height: 12mm; padding-top: 2mm; font-size: 10px; }
+  .voucher-signatures i { display: block; border-top: 1px solid #111827; padding-top: 2mm; font-size: 8px; font-style: normal; color: #6b7280; }
+  .voucher-print footer { margin-top: 8mm; border-top: 1px solid #e5e7eb; padding-top: 2mm; text-align: center; font-size: 8px; color: #9ca3af; }
+}

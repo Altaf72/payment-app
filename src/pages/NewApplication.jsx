@@ -202,6 +202,7 @@ export default function NewApplication() {
   const duplicateId        = searchParams.get('duplicate')
   const isEditing          = !!editId
   const submittingRef      = useRef(false)
+  const attachmentsRef     = useRef([])
 
   const [companies,       setCompanies]       = useState([])
   const [paymentMethods,  setPaymentMethods]  = useState([])
@@ -218,9 +219,11 @@ export default function NewApplication() {
   const [form, setForm]               = useState(emptyForm)
   const [savedForm, setSavedForm]     = useState(null)   // for back-navigation restore
   const [existingAtt, setExistingAtt] = useState(null)
-  const [attachment, setAttachment]   = useState(null)
-  const [attLabel, setAttLabel]       = useState('')
+  const [existingAttachments, setExistingAttachments] = useState([])
+  const [attachments, setAttachments] = useState([])
+  const [previewAttachment, setPreviewAttachment] = useState(null)
   const [attError, setAttError]       = useState('')
+  const [pastingScreenshot, setPastingScreenshot] = useState(false)
   const [loading, setLoading]         = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [pageLoading, setPageLoading] = useState(true)
@@ -242,6 +245,14 @@ export default function NewApplication() {
   }, [form])
 
   useEffect(() => { loadAll() }, [])
+
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
+
+  useEffect(() => () => {
+    attachmentsRef.current.forEach(item => item.previewUrl && URL.revokeObjectURL(item.previewUrl))
+  }, [])
 
   async function loadAll() {
     setPageLoading(true)
@@ -297,6 +308,14 @@ export default function NewApplication() {
 
     const app = appResult?.data
     if (app) {
+      if (editId) {
+        const { data: savedAttachments } = await supabase
+          .from('application_attachments')
+          .select('*')
+          .eq('application_id', editId)
+          .order('created_at')
+        setExistingAttachments(savedAttachments || [])
+      }
       const method = (pm || []).find(m => m.id === app.payment_method_id)
       const bank   = (bk || []).find(b => b.name === app.bank_name)
       const reason = (pr || []).find(r =>
@@ -351,18 +370,76 @@ export default function NewApplication() {
     })
   }
 
-  function handleFile(e) {
-    const file = e.target.files[0]
-    setAttError(''); setAttLabel('')
+  function acceptAttachment(file, source = 'file', clearInput) {
+    setAttError('')
     if (!file) return
     if (!['application/pdf','image/jpeg','image/png'].includes(file.type)) {
-      setAttError('Only PDF, JPG and PNG'); e.target.value = ''; return
+      setAttError('Only PDF, JPG and PNG')
+      if (clearInput) clearInput()
+      return
     }
     if (file.size > 5*1024*1024) {
-      setAttError('File must be under 5MB'); e.target.value = ''; return
+      setAttError('File must be under 5MB')
+      if (clearInput) clearInput()
+      return
     }
-    setAttLabel(`${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`)
-    setAttachment(file)
+    setAttachments(current => {
+      const duplicate = current.some(item =>
+        item.file.name === file.name &&
+        item.file.size === file.size &&
+        item.file.lastModified === file.lastModified
+      )
+      if (duplicate) {
+        setAttError(`${file.name} is already added`)
+        return current
+      }
+      return [...current, {
+        id: `${Date.now()}-${Math.random()}`,
+        file,
+        source,
+        previewUrl: URL.createObjectURL(file),
+      }]
+    })
+  }
+
+  function handleFile(e) {
+    Array.from(e.target.files || []).forEach(file => acceptAttachment(file, 'file'))
+    e.target.value = ''
+  }
+
+  async function pasteScreenshot() {
+    setPastingScreenshot(true)
+    setAttError('')
+    try {
+      if (!navigator.clipboard?.read) {
+        throw new Error('Clipboard image access is not supported in this browser.')
+      }
+      const items = await navigator.clipboard.read()
+      const supportedTypes = ['image/png', 'image/jpeg']
+      const imageItem = items.find(item => item.types.some(type => supportedTypes.includes(type)))
+      const imageType = imageItem?.types.find(type => supportedTypes.includes(type))
+      if (!imageItem || !imageType) {
+        throw new Error('No screenshot found in the clipboard.')
+      }
+      const blob = await imageItem.getType(imageType)
+      const extension = imageType === 'image/jpeg' ? 'jpg' : 'png'
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const file = new File([blob], `screenshot-${stamp}.${extension}`, { type: imageType })
+      acceptAttachment(file, 'screenshot')
+    } catch (clipboardError) {
+      setAttError(clipboardError.message || 'Could not read screenshot from clipboard.')
+    } finally {
+      setPastingScreenshot(false)
+    }
+  }
+
+  function removePendingAttachment(id) {
+    if (previewAttachment?.id === id) setPreviewAttachment(null)
+    setAttachments(current => {
+      const removed = current.find(item => item.id === id)
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+      return current.filter(item => item.id !== id)
+    })
   }
 
   // Add-new handlers return the new ID
@@ -395,13 +472,40 @@ export default function NewApplication() {
     return data?.id || null
   }
 
-  async function uploadAttachment(appId) {
-    if (!attachment) return { path: null, name: null }
-    const ext = attachment.name.split('.').pop()
-    const path = `${user.id}/${appId}/${Date.now()}.${ext}`
-    const { error } = await supabase.storage.from('attachments').upload(path, attachment)
-    if (error) throw error
-    return { path, name: attachment.name }
+  async function uploadAttachments(appId) {
+    const uploaded = []
+    for (let index = 0; index < attachments.length; index += 1) {
+      const item = attachments[index]
+      const fallbackExt = item.file.type === 'application/pdf'
+        ? 'pdf'
+        : item.file.type === 'image/jpeg' ? 'jpg' : 'png'
+      const nameParts = item.file.name.split('.')
+      const ext = nameParts.length > 1 ? nameParts.pop() : fallbackExt
+      const path = `${user.id}/${appId}/${Date.now()}-${index}.${ext}`
+      const { error: uploadError } = await supabase.storage
+        .from('attachments')
+        .upload(path, item.file)
+      if (uploadError) throw uploadError
+      uploaded.push({
+        application_id: appId,
+        storage_path: path,
+        file_name: item.file.name,
+        file_size: item.file.size,
+        mime_type: item.file.type,
+        source: item.source,
+        uploaded_by: user.id,
+      })
+    }
+
+    if (uploaded.length > 0) {
+      const { error: rowError } = await supabase
+        .from('application_attachments')
+        .insert(uploaded)
+      if (rowError) {
+        throw new Error(`Could not save attachment list. Run sql/application_attachments.sql in Supabase. ${rowError.message}`)
+      }
+    }
+    return uploaded
   }
 
   async function submit(asDraft = false) {
@@ -441,9 +545,14 @@ export default function NewApplication() {
         if (e) throw e
         appId = app.id
       }
-      if (attachment) {
-        const { path, name } = await uploadAttachment(appId)
-        await supabase.from('applications').update({ attachment_path: path, attachment_name: name }).eq('id', appId)
+      if (attachments.length > 0) {
+        const uploaded = await uploadAttachments(appId)
+        if (!existingAtt && uploaded[0]) {
+          await supabase.from('applications').update({
+            attachment_path: uploaded[0].storage_path,
+            attachment_name: uploaded[0].file_name,
+          }).eq('id', appId)
+        }
       }
       await supabase.from('audit_log').insert({
         application_id: appId, action_by: user.id,
@@ -623,17 +732,72 @@ export default function NewApplication() {
 
           {/* Attachment */}
           <div className="form-group">
-            <label className="form-label">Supporting Document <span className="cn">附件</span></label>
+            <label className="form-label">Supporting Documents <span className="cn">附件</span></label>
             {existingAtt && (
               <div className="alert alert-info" style={{marginBottom:'8px'}}>
-                Current: <strong>{existingAtt.name}</strong> — upload below to replace
+                Existing attachment: <strong>{existingAtt.name}</strong>
+              </div>
+            )}
+            {existingAttachments.filter(item => item.storage_path !== existingAtt?.path).length > 0 && (
+              <div style={{display:'flex',flexDirection:'column',gap:'5px',marginBottom:'8px'}}>
+                {existingAttachments
+                  .filter(item => item.storage_path !== existingAtt?.path)
+                  .map(item => (
+                    <div key={item.id} style={{
+                      padding:'7px 10px',border:'1px solid var(--border-2)',
+                      borderRadius:'var(--radius-sm)',fontSize:'12px',background:'var(--cream)',
+                    }}>
+                      Saved: <strong>{item.file_name}</strong>
+                      {item.file_size ? ` (${(item.file_size/1024/1024).toFixed(2)} MB)` : ''}
+                    </div>
+                  ))}
               </div>
             )}
             <input type="file" className="form-control" accept=".pdf,.jpg,.jpeg,.png"
-              onChange={handleFile} style={{padding:'7px'}} />
-            {attLabel && <p className="form-hint" style={{color:'var(--status-approved)'}}>✓ {attLabel}</p>}
+              multiple onChange={handleFile} style={{padding:'7px'}} />
+            <div style={{marginTop:'8px'}}>
+              <button type="button" className="btn btn-outline"
+                disabled={pastingScreenshot}
+                onClick={pasteScreenshot}>
+                {pastingScreenshot ? 'Reading...' : 'Paste Screenshot'}
+              </button>
+            </div>
+            {attachments.length > 0 && (
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))',gap:'8px',marginTop:'10px'}}>
+                {attachments.map(item => (
+                  <div key={item.id} style={{
+                    display:'grid',gridTemplateColumns:'54px minmax(0,1fr)',gap:'9px',
+                    padding:'8px',border:'1px solid var(--border-2)',borderRadius:'var(--radius-sm)',
+                    background:'var(--cream)',
+                  }}>
+                    <div style={{
+                      width:'54px',height:'54px',border:'1px solid var(--border)',
+                      borderRadius:'4px',overflow:'hidden',background:'#fff',
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                    }}>
+                      {item.file.type.startsWith('image/')
+                        ? <img src={item.previewUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                        : <span style={{fontSize:'11px',fontWeight:700,color:'var(--ink-3)'}}>PDF</span>
+                      }
+                    </div>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:'12px',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={item.file.name}>
+                        {item.file.name}
+                      </div>
+                      <div style={{fontSize:'11px',color:'var(--ink-3)',margin:'2px 0 6px'}}>
+                        {(item.file.size/1024/1024).toFixed(2)} MB · {item.source === 'screenshot' ? 'Screenshot' : 'File'}
+                      </div>
+                      <div style={{display:'flex',gap:'5px'}}>
+                        <button type="button" className="btn btn-outline btn-sm" onClick={() => setPreviewAttachment(item)}>View</button>
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => removePendingAttachment(item.id)}>Remove</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {attError && <p className="form-error">{attError}</p>}
-            <p className="form-hint">PDF, JPG or PNG · Max 5MB · Optional</p>
+            <p className="form-hint">Choose one or more PDF/JPG/PNG files, or paste screenshots one at a time · Max 5MB each · Optional</p>
           </div>
 
           <hr className="divider" />
@@ -654,6 +818,27 @@ export default function NewApplication() {
 
         </div>
       </div>
+      {previewAttachment && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setPreviewAttachment(null)}>
+          <div className="modal" style={{maxWidth:'900px'}}>
+            <div className="modal-header">
+              <h3 style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{previewAttachment.file.name}</h3>
+              <button type="button" className="modal-close" onClick={() => setPreviewAttachment(null)}>x</button>
+            </div>
+            <div style={{
+              minHeight:'360px',maxHeight:'72vh',overflow:'auto',background:'#f3f4f6',
+              display:'flex',alignItems:'center',justifyContent:'center',
+            }}>
+              {previewAttachment.file.type.startsWith('image/')
+                ? <img src={previewAttachment.previewUrl} alt={previewAttachment.file.name}
+                    style={{maxWidth:'100%',maxHeight:'70vh',objectFit:'contain'}} />
+                : <iframe src={previewAttachment.previewUrl} title={previewAttachment.file.name}
+                    style={{width:'100%',height:'70vh',border:'none'}} />
+              }
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

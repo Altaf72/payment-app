@@ -500,6 +500,7 @@ export default function ApplicationDetail() {
 
   const [app, setApp]               = useState(null)
   const [auditLog, setAuditLog]     = useState([])
+  const [applicantAttachments, setApplicantAttachments] = useState([])
   const [loading, setLoading]       = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [note, setNote]             = useState('')
@@ -587,13 +588,14 @@ export default function ApplicationDetail() {
 
   async function load() {
     setLoading(true)
-    const [{ data: appData }, { data: logData }, { data: mgrs }, { data: cos }] = await Promise.all([
+    const [{ data: appData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
       supabase.from('audit_log')
         .select('id, action, note, created_at, action_by, users!action_by(full_name,role)')
         .eq('application_id', id).order('created_at'),
       supabase.from('users').select('id,full_name,role').in('role', ['ceo','cfo']),
       supabase.from('companies').select('*').order('created_at'),
+      supabase.from('application_attachments').select('*').eq('application_id', id).order('created_at'),
     ])
 
     let logoUrl = null
@@ -603,6 +605,7 @@ export default function ApplicationDetail() {
     }
 
     setApp(appData ? { ...appData, logo_url: logoUrl } : null)
+    setApplicantAttachments(applicantFiles || [])
     const mappedLog = (logData || []).map(l => ({
       ...l,
       actor: l.users?.full_name || 'System',
@@ -1147,6 +1150,7 @@ export default function ApplicationDetail() {
   const isOwner = app.submitted_by === user?.id
   const canEdit = isOwner && ['draft','returned'].includes(app.status)
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
+  const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
   const canAddFinanceAttachment = ['finance','superadmin'].includes(profile?.role) &&
     ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
   const canAddFinancePostApprovalComment = ['finance','superadmin'].includes(profile?.role) && app.status !== 'draft'
@@ -1156,6 +1160,18 @@ export default function ApplicationDetail() {
   const additionalAttachments = auditLog
     .map(e => ({ ...parseAttachmentNote(e.note), id: e.id, created_at: e.created_at, actor: e.actor }))
     .filter(a => a.path && a.name && !deletedFinanceAttachmentPaths.has(a.path))
+  const savedApplicationAttachments = [
+    ...(app.attachment_path && !applicantAttachments.some(item => item.storage_path === app.attachment_path)
+      ? [{
+          id: 'legacy',
+          storage_path: app.attachment_path,
+          file_name: app.attachment_name,
+          file_size: null,
+          source: 'file',
+        }]
+      : []),
+    ...applicantAttachments,
+  ]
   const roleComments = auditLog.filter(e =>
     e.note &&
     !e.note.startsWith('CommentDeleted: ') &&
@@ -1205,6 +1221,11 @@ export default function ApplicationDetail() {
             <button className="btn btn-gold btn-sm" onClick={handleDownload} disabled={downloading}>
               {downloading ? '⏳…' : '↓ PDF'}
             </button>
+            {canCreatePaymentVoucher && (
+              <button className="btn btn-success btn-sm" onClick={() => navigate(`/application/${id}/payment-voucher`)}>
+                Create Payment Voucher
+              </button>
+            )}
             {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
             <button className="btn btn-outline btn-sm" onClick={() => setShowDuplicate(true)}>⧉ Duplicate</button>
             {isSuperAdmin && !app.deleted_at && (
@@ -1512,7 +1533,17 @@ export default function ApplicationDetail() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px' }}>
         <div>
           <div className="card" style={{ marginBottom: '20px' }}>
-            <div className="card-header"><h2>Payment Details</h2></div>
+            <div className="card-header">
+              <h2>Payment Details</h2>
+              <span style={{
+                fontFamily:"'JetBrains Mono',monospace",
+                fontSize:'12px',
+                fontWeight:700,
+                color:'var(--ink-2)',
+              }}>
+                Application: {app.ref_number}
+              </span>
+            </div>
             <div className="card-body">
               <div className="form-row">
                 <div>
@@ -1541,10 +1572,29 @@ export default function ApplicationDetail() {
                 <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:'13px' }}>{app.bank_account || '—'}</div>
               </div>
               {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
-              {app.attachment_path && (
+              {savedApplicationAttachments.length > 0 && (
                 <div className="form-group">
-                  <div className="form-label">📎 Attachment</div>
-                  <DetailAttachmentLink path={app.attachment_path} name={app.attachment_name} />
+                  <div className="form-label">Supporting Documents ({savedApplicationAttachments.length})</div>
+                  <div style={{display:'flex',flexDirection:'column',gap:'7px'}}>
+                    {savedApplicationAttachments.map((attachment, index) => (
+                      <div key={attachment.id || attachment.storage_path} style={{
+                        display:'flex',alignItems:'center',justifyContent:'space-between',
+                        gap:'10px',padding:'8px 10px',border:'1px solid var(--border-2)',
+                        borderRadius:'var(--radius-sm)',background:'var(--cream)',
+                      }}>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:'12px',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                            {index + 1}. {attachment.file_name || 'Attachment'}
+                          </div>
+                          <div style={{fontSize:'11px',color:'var(--ink-3)'}}>
+                            {attachment.file_size ? formatFileSize(attachment.file_size) : 'Saved attachment'}
+                            {attachment.source === 'screenshot' ? ' · Screenshot' : ''}
+                          </div>
+                        </div>
+                        <DetailAttachmentLink path={attachment.storage_path} name={attachment.file_name || 'Attachment'} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               {(canAddFinanceAttachment || additionalAttachments.length > 0) && (

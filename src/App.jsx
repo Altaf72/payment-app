@@ -9,6 +9,7 @@ import ApplicationDetail from './pages/ApplicationDetail'
 import SettingsPage from './pages/SettingsPage'
 import MyProfile from './pages/MyProfile'
 import ResetPasswordPage from './pages/ResetPasswordPage'
+import PaymentVoucher from './pages/PaymentVoucher'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -37,6 +38,11 @@ export default function App() {
         <Route path="my-applications" element={<MyApplications />} />
         <Route path="new-application" element={<NewApplication />} />
         <Route path="application/:id" element={<ApplicationDetail />} />
+        <Route path="application/:applicationId/payment-voucher" element={
+          <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
+            <PaymentVoucher />
+          </PrivateRoute>
+        } />
         <Route path="dashboard" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
             <FinanceDashboard />
