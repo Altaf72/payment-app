@@ -495,6 +495,7 @@ export default function ApplicationDetail() {
   const financeFileRef = useRef()
   const cameraVideoRef = useRef()
   const cameraCanvasRef = useRef()
+  const cameraReviewCanvasRef = useRef()
   const lastSavedFinanceCommentRef = useRef('')
   const savedFinanceCommentIdRef = useRef(null)
 
@@ -529,6 +530,10 @@ export default function ApplicationDetail() {
   const [showCameraModal, setShowCameraModal] = useState(false)
   const [cameraStream, setCameraStream] = useState(null)
   const [cameraError, setCameraError] = useState('')
+  const [capturedPhoto, setCapturedPhoto] = useState('')
+  const [cameraRotation, setCameraRotation] = useState(0)
+  const [cameraCropX, setCameraCropX] = useState(0)
+  const [cameraCropY, setCameraCropY] = useState(0)
 
   useEffect(() => { load() }, [id])
 
@@ -585,6 +590,33 @@ export default function ApplicationDetail() {
       setCameraError('Camera opened, but preview could not start. Try closing and reopening camera.')
     })
   }, [showCameraModal, cameraStream])
+
+  useEffect(() => {
+    if (!capturedPhoto || !cameraReviewCanvasRef.current) return
+    const image = new Image()
+    image.onload = () => {
+      const sourceX = image.width * cameraCropX / 200
+      const sourceY = image.height * cameraCropY / 200
+      const sourceWidth = image.width * (1 - cameraCropX / 100)
+      const sourceHeight = image.height * (1 - cameraCropY / 100)
+      const rotated = Math.abs(cameraRotation % 180) === 90
+      const canvas = cameraReviewCanvasRef.current
+      canvas.width = rotated ? sourceHeight : sourceWidth
+      canvas.height = rotated ? sourceWidth : sourceHeight
+      const context = canvas.getContext('2d')
+      context.clearRect(0, 0, canvas.width, canvas.height)
+      context.save()
+      context.translate(canvas.width / 2, canvas.height / 2)
+      context.rotate(cameraRotation * Math.PI / 180)
+      context.drawImage(
+        image,
+        sourceX, sourceY, sourceWidth, sourceHeight,
+        -sourceWidth / 2, -sourceHeight / 2, sourceWidth, sourceHeight
+      )
+      context.restore()
+    }
+    image.src = capturedPhoto
+  }, [capturedPhoto, cameraRotation, cameraCropX, cameraCropY])
 
   async function load() {
     setLoading(true)
@@ -875,6 +907,10 @@ export default function ApplicationDetail() {
 
   async function openCameraCapture() {
     setCameraError('')
+    setCapturedPhoto('')
+    setCameraRotation(0)
+    setCameraCropX(0)
+    setCameraCropY(0)
     setShowCameraModal(true)
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -896,9 +932,13 @@ export default function ApplicationDetail() {
     setCameraStream(null)
     setShowCameraModal(false)
     setCameraError('')
+    setCapturedPhoto('')
+    setCameraRotation(0)
+    setCameraCropX(0)
+    setCameraCropY(0)
   }
 
-  async function captureCameraPhoto() {
+  function captureCameraPhoto() {
     const video = cameraVideoRef.current
     const canvas = cameraCanvasRef.current
     if (!video || !canvas || !video.videoWidth) {
@@ -908,6 +948,34 @@ export default function ApplicationDetail() {
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height)
+    setCapturedPhoto(canvas.toDataURL('image/jpeg', 0.94))
+    cameraStream?.getTracks().forEach(track => track.stop())
+    setCameraStream(null)
+  }
+
+  async function retakeCameraPhoto() {
+    setCapturedPhoto('')
+    setCameraRotation(0)
+    setCameraCropX(0)
+    setCameraCropY(0)
+    setCameraError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      })
+      setCameraStream(stream)
+    } catch {
+      setCameraError('Could not restart camera. Allow camera permission, then try again.')
+    }
+  }
+
+  async function useCameraPhoto() {
+    const canvas = cameraReviewCanvasRef.current
+    if (!canvas) {
+      setCameraError('Edited photo is not ready yet.')
+      return
+    }
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
     if (!blob) {
       setCameraError('Could not capture photo.')
@@ -1413,9 +1481,9 @@ export default function ApplicationDetail() {
       </div>
 
       {showCameraModal && (
-        <div style={{ position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.75)',
+        <div className="camera-overlay" style={{ position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.75)',
           display:'flex',alignItems:'center',justifyContent:'center',padding:'20px' }}>
-          <div style={{ background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'620px',
+          <div className="camera-dialog" style={{ background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'620px',
             boxShadow:'0 24px 64px rgba(0,0,0,0.4)',overflow:'hidden' }}>
             <div style={{ background:'var(--ink)',padding:'14px 18px',display:'flex',
               alignItems:'center',justifyContent:'space-between',gap:'10px' }}>
@@ -1426,20 +1494,62 @@ export default function ApplicationDetail() {
               {cameraError && <div className="alert alert-error">{cameraError}</div>}
               <div style={{ background:'#111',borderRadius:'8px',overflow:'hidden',
                 minHeight:'260px',display:'flex',alignItems:'center',justifyContent:'center' }}>
-                <video ref={cameraVideoRef} autoPlay playsInline muted
-                  style={{ width:'100%',maxHeight:'420px',objectFit:'contain',display:cameraStream ? 'block' : 'none' }} />
-                {!cameraStream && !cameraError && (
+                {!capturedPhoto && (
+                  <video ref={cameraVideoRef} autoPlay playsInline muted
+                    style={{ width:'100%',maxHeight:'420px',objectFit:'contain',display:cameraStream ? 'block' : 'none' }} />
+                )}
+                {capturedPhoto && (
+                  <canvas ref={cameraReviewCanvasRef}
+                    style={{width:'100%',maxHeight:'58vh',objectFit:'contain',display:'block'}} />
+                )}
+                {!capturedPhoto && !cameraStream && !cameraError && (
                   <div style={{ color:'#fff',fontSize:'13px',padding:'40px' }}>Starting camera...</div>
                 )}
               </div>
               <canvas ref={cameraCanvasRef} style={{ display:'none' }} />
-              <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'14px' }}>
-                <button className="btn btn-outline" onClick={closeCameraCapture}>Cancel</button>
-                <button className="btn btn-primary" disabled={!cameraStream || uploadingFinanceAtt}
-                  onClick={captureCameraPhoto}>
-                  Capture & Save
-                </button>
-              </div>
+              {capturedPhoto ? (
+                <>
+                  <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginTop:'12px'}}>
+                    <button className="btn btn-outline btn-sm" type="button"
+                      onClick={() => setCameraRotation(value => (value - 90 + 360) % 360)}>
+                      Rotate Left
+                    </button>
+                    <button className="btn btn-outline btn-sm" type="button"
+                      onClick={() => setCameraRotation(value => (value + 90) % 360)}>
+                      Rotate Right
+                    </button>
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginTop:'12px'}}>
+                    <label style={{fontSize:'11px',color:'var(--ink-3)'}}>
+                      Crop sides: {cameraCropX}%
+                      <input type="range" min="0" max="35" value={cameraCropX}
+                        onChange={e => setCameraCropX(Number(e.target.value))}
+                        style={{width:'100%',display:'block',marginTop:'4px'}} />
+                    </label>
+                    <label style={{fontSize:'11px',color:'var(--ink-3)'}}>
+                      Crop top/bottom: {cameraCropY}%
+                      <input type="range" min="0" max="35" value={cameraCropY}
+                        onChange={e => setCameraCropY(Number(e.target.value))}
+                        style={{width:'100%',display:'block',marginTop:'4px'}} />
+                    </label>
+                  </div>
+                  <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',flexWrap:'wrap',marginTop:'14px' }}>
+                    <button className="btn btn-outline" onClick={closeCameraCapture}>Cancel</button>
+                    <button className="btn btn-outline" onClick={retakeCameraPhoto}>Retake</button>
+                    <button className="btn btn-primary" disabled={uploadingFinanceAtt} onClick={useCameraPhoto}>
+                      {uploadingFinanceAtt ? 'Saving...' : 'Use Photo'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'14px' }}>
+                  <button className="btn btn-outline" onClick={closeCameraCapture}>Cancel</button>
+                  <button className="btn btn-primary" disabled={!cameraStream}
+                    onClick={captureCameraPhoto}>
+                    Capture
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
