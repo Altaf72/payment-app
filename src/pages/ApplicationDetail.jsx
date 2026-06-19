@@ -854,7 +854,7 @@ export default function ApplicationDetail() {
     } finally { setActionLoading(false) }
   }
 
-  function handleFinanceAttachmentFile(e) {
+  async function handleFinanceAttachmentFile(e) {
     const file = e.target.files[0]
     setFinanceAttError('')
     setFinanceAttLabel('')
@@ -869,8 +869,8 @@ export default function ApplicationDetail() {
       e.target.value = ''
       return
     }
-    setFinanceAttachment(file)
-    setFinanceAttLabel(`${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`)
+    e.target.value = ''
+    await uploadFinanceAttachment(file)
   }
 
   async function openCameraCapture() {
@@ -964,10 +964,10 @@ export default function ApplicationDetail() {
       const path = `${user.id}/${id}/finance-${Date.now()}.${ext}`
       const { error } = await supabase.storage.from('attachments').upload(path, fileToUpload)
       if (error) throw error
-      await supabase.from('audit_log').insert({
+      const { error: logError } = await supabase.from('audit_log').insert({
         application_id: id,
         action_by: user.id,
-        action: 'attachment_added',
+        action: 'edited',
         note: JSON.stringify({
           type: 'finance_attachment',
           path,
@@ -975,6 +975,10 @@ export default function ApplicationDetail() {
           size: fileToUpload.size,
         }),
       })
+      if (logError) {
+        await supabase.storage.from('attachments').remove([path])
+        throw logError
+      }
       setFinanceAttachment(null)
       setFinanceAttLabel('')
       await load()
@@ -991,16 +995,17 @@ export default function ApplicationDetail() {
     try {
       const { error } = await supabase.storage.from('attachments').remove([att.path])
       if (error) throw error
-      await supabase.from('audit_log').insert({
+      const { error: logError } = await supabase.from('audit_log').insert({
         application_id: id,
         action_by: user.id,
-        action: 'attachment_deleted',
+        action: 'edited',
         note: JSON.stringify({
           type: 'finance_attachment_deleted',
           path: att.path,
           name: att.name,
         }),
       })
+      if (logError) throw logError
       await load()
     } catch (err) {
       alert(err.message || 'Could not delete attachment')
@@ -1648,14 +1653,9 @@ export default function ApplicationDetail() {
                         onClick={pasteFinanceScreenshot}>
                         ▣
                       </button>
-                      <button className="btn btn-primary btn-sm" title="Upload selected document"
-                        disabled={!financeAttachment || uploadingFinanceAtt}
-                        onClick={() => uploadFinanceAttachment()}>
-                        {uploadingFinanceAtt ? '…' : '↑'}
-                      </button>
                       {financeAttLabel && <p className="form-hint" style={{color:'var(--status-approved)',width:'100%'}}>✓ {financeAttLabel}</p>}
                       {financeAttError && <p className="form-error" style={{width:'100%'}}>{financeAttError}</p>}
-                      <p className="form-hint" style={{width:'100%'}}>Icons: attach file, camera photo, clipboard screenshot, then upload selected file. Camera and screenshot save immediately.</p>
+                      <p className="form-hint" style={{width:'100%'}}>Choose file, camera photo, and clipboard screenshot all save immediately. Saved documents appear above with View and Delete.</p>
                     </div>
                   )}
                 </div>

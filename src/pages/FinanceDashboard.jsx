@@ -213,7 +213,7 @@ export default function FinanceDashboard() {
         .from('audit_log')
         .select('application_id,action,note,created_at')
         .in('application_id', ids)
-        .in('action', ['attachment_added','attachment_deleted'])
+        .in('action', ['attachment_added','attachment_deleted','edited'])
         .order('created_at', { ascending: true })
 
       if (logError) {
