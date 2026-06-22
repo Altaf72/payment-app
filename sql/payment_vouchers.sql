@@ -5,7 +5,7 @@ create extension if not exists pgcrypto;
 
 create table if not exists public.payment_vouchers (
   id uuid primary key default gen_random_uuid(),
-  application_id uuid not null references public.applications(id) on delete restrict,
+  application_id uuid references public.applications(id) on delete restrict,
   company_id uuid references public.companies(id) on delete restrict,
   voucher_number text not null unique,
   installment_no integer not null default 1 check (installment_no > 0),
@@ -29,6 +29,10 @@ create table if not exists public.payment_vouchers (
   updated_at timestamptz not null default now(),
   unique (application_id, installment_no)
 );
+
+-- Existing installations may still have application_id marked NOT NULL.
+alter table public.payment_vouchers
+  alter column application_id drop not null;
 
 create table if not exists public.voucher_cheques (
   id uuid primary key default gen_random_uuid(),

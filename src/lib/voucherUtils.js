@@ -23,3 +23,13 @@ export function nextPaymentVoucherNumber(prefix, refNumber, existingVouchers = [
     installmentNo,
   }
 }
+
+export function nextStandalonePaymentVoucherNumber(prefix, existingVouchers = []) {
+  const base = `${String(prefix || '').toUpperCase()}PV-`
+  const maxSequence = existingVouchers.reduce((max, voucher) => {
+    const number = String(voucher.voucher_number || '')
+    const match = number.match(new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)$`, 'i'))
+    return match ? Math.max(max, Number(match[1]) || 0) : max
+  }, 0)
+  return `${base}${String(maxSequence + 1).padStart(4, '0')}`
+}

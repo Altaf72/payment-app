@@ -628,7 +628,10 @@ export default function FinanceDashboard() {
             {profile?.full_name}
           </p>
         </div>
-        <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
+        <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+          <button className="btn btn-primary" onClick={() => navigate('/payment-voucher/new')}>Create Payment Voucher</button>
+          <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
+        </div>
       </div>
 
       {/* Stats — current page */}

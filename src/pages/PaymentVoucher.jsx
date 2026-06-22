@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { amountToWords, formatCurrency } from '../lib/utils'
-import { nextPaymentVoucherNumber } from '../lib/voucherUtils'
+import { nextPaymentVoucherNumber, nextStandalonePaymentVoucherNumber } from '../lib/voucherUtils'
 
 const emptyCheque = {
   cheque_no: '',
@@ -107,7 +107,10 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
       </section>
 
       <footer>
-        Linked application: {application?.ref_number || '-'} | Generated {new Date().toLocaleString('en-GB')}
+        {application?.ref_number
+          ? `Linked application: ${application.ref_number}`
+          : 'Standalone payment voucher'
+        } | Generated {new Date().toLocaleString('en-GB')}
       </footer>
     </div>
   )
@@ -115,12 +118,14 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
 
 export default function PaymentVoucher() {
   const { applicationId } = useParams()
+  const isStandalone = !applicationId
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user, profile } = useAuth()
 
   const [application, setApplication] = useState(null)
   const [company, setCompany] = useState(null)
+  const [companies, setCompanies] = useState([])
   const [existingVouchers, setExistingVouchers] = useState([])
   const [currentVoucherId, setCurrentVoucherId] = useState(null)
   const [cheques, setCheques] = useState([{ ...emptyCheque }])
@@ -155,6 +160,42 @@ export default function PaymentVoucher() {
   async function load() {
     setLoading(true)
     setError('')
+
+    if (isStandalone) {
+      const [companiesResult, vouchersResult] = await Promise.all([
+        supabase.from('companies').select('*').order('name'),
+        supabase.from('payment_vouchers').select('*').is('application_id', null).order('created_at'),
+      ])
+      if (vouchersResult.error) {
+        setSchemaReady(false)
+        setError(`Voucher tables are not ready. Run sql/payment_vouchers.sql and sql/standalone_payment_vouchers.sql in Supabase. ${vouchersResult.error.message}`)
+        setLoading(false)
+        return
+      }
+      if (companiesResult.error) {
+        setError(companiesResult.error.message || 'Could not load companies')
+        setLoading(false)
+        return
+      }
+
+      const companyRows = companiesResult.data || []
+      const vouchers = vouchersResult.data || []
+      setSchemaReady(true)
+      setCompanies(companyRows)
+      setExistingVouchers(vouchers)
+
+      const requestedVoucherId = searchParams.get('voucher')
+      const requestedVoucher = vouchers.find(v => v.id === requestedVoucherId)
+      if (requestedVoucher) {
+        const voucherCompany = companyRows.find(item => item.id === requestedVoucher.company_id) || null
+        setCompany(voucherCompany)
+        await editVoucher(requestedVoucher, false)
+      } else {
+        startStandaloneVoucher(null, vouchers)
+      }
+      setLoading(false)
+      return
+    }
 
     const { data: appData, error: appError } = await supabase
       .from('applications_full')
@@ -229,6 +270,43 @@ export default function PaymentVoucher() {
     setError('')
   }
 
+  function startStandaloneVoucher(companyData = company, vouchers = existingVouchers) {
+    const companyVouchers = companyData
+      ? vouchers.filter(voucher => voucher.company_id === companyData.id)
+      : []
+    setCurrentVoucherId(null)
+    setSearchParams({})
+    setCompany(companyData || null)
+    setForm({
+      voucher_number: companyData
+        ? nextStandalonePaymentVoucherNumber(companyData.prefix, companyVouchers)
+        : '',
+      installment_no: 1,
+      voucher_date: localDate(),
+      paid_to: '',
+      amount: '',
+      currency: 'AED',
+      receiving_company: '',
+      payment_reason: '',
+      remarks: '',
+      narration: '',
+      payment_mode: 'Cheque',
+      reference_no: '',
+      prepared_by_name: profile?.full_name || '',
+      approved_by_name: '',
+      received_by_name: '',
+      status: 'draft',
+    })
+    setCheques([{ ...emptyCheque }])
+    setMessage('')
+    setError('')
+  }
+
+  function selectStandaloneCompany(companyId) {
+    const selectedCompany = companies.find(item => item.id === companyId) || null
+    startStandaloneVoucher(selectedCompany, existingVouchers)
+  }
+
   async function editVoucher(voucher, updateUrl = true) {
     setCurrentVoucherId(voucher.id)
     if (updateUrl) setSearchParams({ voucher: voucher.id })
@@ -274,6 +352,9 @@ export default function PaymentVoucher() {
     [existingVouchers, currentVoucherId]
   )
   const availableBalance = Number(application?.amount || 0) - previouslyVouchered
+  const displayedVouchers = isStandalone && company
+    ? existingVouchers.filter(voucher => voucher.company_id === company.id)
+    : existingVouchers
   const chequeTotal = cheques.reduce((sum, cheque) => sum + Number(cheque.amount || 0), 0)
   const chequeMismatch = form.payment_mode === 'Cheque' &&
     cheques.some(row => row.cheque_no || row.amount) &&
@@ -304,6 +385,7 @@ export default function PaymentVoucher() {
   }
 
   function validate() {
+    if (isStandalone && !company?.id) return 'Company is required'
     if (!form.paid_to.trim()) return 'Payee name is required'
     if (!form.amount || Number(form.amount) <= 0) return 'Amount is required'
     if (!form.voucher_number.trim()) return 'Voucher number is required'
@@ -322,8 +404,8 @@ export default function PaymentVoucher() {
     setMessage('')
     try {
       const payload = {
-        application_id: applicationId,
-        company_id: application.company_id,
+        application_id: applicationId || null,
+        company_id: isStandalone ? company.id : application.company_id,
         voucher_number: form.voucher_number.trim(),
         installment_no: form.installment_no,
         voucher_date: form.voucher_date,
@@ -412,12 +494,12 @@ export default function PaymentVoucher() {
   }
 
   if (loading) return <div className="empty-state"><p>Loading payment voucher...</p></div>
-  if (error && !application) return <div className="alert alert-error">{error}</div>
+  if (error && !application && !isStandalone) return <div className="alert alert-error">{error}</div>
   if (!schemaReady) {
     return (
       <div>
-        <button className="btn btn-outline btn-sm" onClick={() => navigate(`/application/${applicationId}`)} style={{ marginBottom:'16px' }}>
-          Back to Application
+        <button className="btn btn-outline btn-sm" onClick={() => navigate(isStandalone ? '/dashboard' : `/application/${applicationId}`)} style={{ marginBottom:'16px' }}>
+          {isStandalone ? 'Back to Dashboard' : 'Back to Application'}
         </button>
         <div className="alert alert-warning">
           <strong>Payment Voucher database setup is required.</strong>
@@ -432,14 +514,21 @@ export default function PaymentVoucher() {
       <div className="voucher-screen">
         <div className="page-header flex justify-between items-center" style={{ gap:'16px', flexWrap:'wrap' }}>
           <div>
-            <button className="btn btn-outline btn-sm" onClick={() => navigate(`/application/${applicationId}`)} style={{ marginBottom:'8px' }}>
-              Back to Application
+            <button className="btn btn-outline btn-sm" onClick={() => navigate(isStandalone ? '/dashboard' : `/application/${applicationId}`)} style={{ marginBottom:'8px' }}>
+              {isStandalone ? 'Back to Dashboard' : 'Back to Application'}
             </button>
-            <h1>Payment Voucher</h1>
-            <p>{application.ref_number} | {application.company_name} | No approval-stage restriction</p>
+            <h1>{isStandalone ? 'Standalone Payment Voucher' : 'Payment Voucher'}</h1>
+            <p>
+              {isStandalone
+                ? `${company?.name || 'Select a company'} | No payment application required`
+                : `${application.ref_number} | ${application.company_name} | No approval-stage restriction`
+              }
+            </p>
           </div>
           <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-            <button className="btn btn-outline" onClick={() => startNewVoucher()}>New Partial Voucher</button>
+            <button className="btn btn-outline" onClick={() => isStandalone ? startStandaloneVoucher() : startNewVoucher()}>
+              {isStandalone ? 'New Standalone Voucher' : 'New Partial Voucher'}
+            </button>
             <button className="btn btn-outline" disabled={saving} onClick={() => saveVoucher('draft')}>Save Draft</button>
             <button className="btn btn-primary" disabled={saving} onClick={() => saveVoucher('saved')}>
               {saving ? 'Saving...' : 'Save'}
@@ -451,17 +540,39 @@ export default function PaymentVoucher() {
         {error && <div className="alert alert-error">{error}</div>}
         {message && <div className="alert alert-success">{message}</div>}
 
-        {existingVouchers.length > 0 && (
+        {isStandalone && (
+          <div className="card" style={{ marginBottom:'16px' }}>
+            <div className="card-body">
+              <div className="form-group" style={{ marginBottom:0, maxWidth:'420px' }}>
+                <label className="form-label">Company <span className="required">*</span></label>
+                <select
+                  className="form-control"
+                  value={company?.id || ''}
+                  disabled={!!currentVoucherId}
+                  onChange={event => selectStandaloneCompany(event.target.value)}
+                >
+                  <option value="">Select company</option>
+                  {companies.map(item => (
+                    <option key={item.id} value={item.id}>{item.name} ({item.prefix})</option>
+                  ))}
+                </select>
+                {currentVoucherId && <div className="form-hint">Company is fixed after the voucher is saved.</div>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {displayedVouchers.length > 0 && (
           <div className="card" style={{ marginBottom:'16px' }}>
             <div className="card-header">
-              <h2>Vouchers for {application.ref_number}</h2>
-              <span className="text-sm text-muted">{existingVouchers.length} saved</span>
+              <h2>{isStandalone ? `Standalone Vouchers - ${company?.name}` : `Vouchers for ${application.ref_number}`}</h2>
+              <span className="text-sm text-muted">{displayedVouchers.length} saved</span>
             </div>
             <div className="table-wrap">
               <table>
                 <thead><tr><th>Voucher</th><th>Date</th><th>Status</th><th>Amount</th><th></th></tr></thead>
                 <tbody>
-                  {existingVouchers.map(voucher => (
+                  {displayedVouchers.map(voucher => (
                     <tr key={voucher.id}>
                       <td style={{ fontFamily:"'JetBrains Mono',monospace", fontWeight:600 }}>{voucher.voucher_number}</td>
                       <td>{displayDate(voucher.voucher_date)}</td>
@@ -476,17 +587,27 @@ export default function PaymentVoucher() {
           </div>
         )}
 
-        <div className="stats-row voucher-stats">
-          <div className="stat-card"><div className="stat-label">Application Amount</div><div className="stat-value">AED {formatCurrency(application.amount)}</div></div>
-          <div className="stat-card"><div className="stat-label">Previously Vouchered</div><div className="stat-value">AED {formatCurrency(previouslyVouchered)}</div></div>
-          <div className="stat-card"><div className="stat-label">Available Balance</div><div className="stat-value">AED {formatCurrency(availableBalance)}</div></div>
-          <div className="stat-card"><div className="stat-label">Current Voucher</div><div className="stat-value">AED {formatCurrency(currentAmount)}</div></div>
-        </div>
-
-        {currentAmount > availableBalance && (
-          <div className="alert alert-warning">
-            Current voucher exceeds the available application balance by AED {formatCurrency(currentAmount - availableBalance)}. Saving remains allowed.
+        {isStandalone ? (
+          <div className="stats-row voucher-stats">
+            <div className="stat-card"><div className="stat-label">Company</div><div className="stat-value" style={{fontSize:'18px'}}>{company?.prefix || '-'}</div></div>
+            <div className="stat-card"><div className="stat-label">Standalone Vouchers</div><div className="stat-value">{displayedVouchers.length}</div></div>
+            <div className="stat-card"><div className="stat-label">Current Voucher</div><div className="stat-value">AED {formatCurrency(currentAmount)}</div></div>
           </div>
+        ) : (
+          <>
+            <div className="stats-row voucher-stats">
+              <div className="stat-card"><div className="stat-label">Application Amount</div><div className="stat-value">AED {formatCurrency(application.amount)}</div></div>
+              <div className="stat-card"><div className="stat-label">Previously Vouchered</div><div className="stat-value">AED {formatCurrency(previouslyVouchered)}</div></div>
+              <div className="stat-card"><div className="stat-label">Available Balance</div><div className="stat-value">AED {formatCurrency(availableBalance)}</div></div>
+              <div className="stat-card"><div className="stat-label">Current Voucher</div><div className="stat-value">AED {formatCurrency(currentAmount)}</div></div>
+            </div>
+
+            {currentAmount > availableBalance && (
+              <div className="alert alert-warning">
+                Current voucher exceeds the available application balance by AED {formatCurrency(currentAmount - availableBalance)}. Saving remains allowed.
+              </div>
+            )}
+          </>
         )}
 
         <div className="card">
