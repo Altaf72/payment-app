@@ -120,6 +120,7 @@ export default function FinanceDashboard() {
   const [companies, setCompanies]             = useState([])
   const [companiesSorted, setCompaniesSorted] = useState([])
   const [selected, setSelected]         = useState(new Set())
+  const [selectedRecords, setSelectedRecords] = useState(new Map())
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [batchForm, setBatchForm]       = useState({ transfer_ref:'', transfer_date:'', note:'' })
   const [creatingBatch, setCreatingBatch] = useState(false)
@@ -241,6 +242,13 @@ export default function FinanceDashboard() {
     }
 
     setApplications(rows)
+    setSelectedRecords(current => {
+      const updated = new Map(current)
+      rows.forEach(app => {
+        if (selected.has(app.id)) updated.set(app.id, app)
+      })
+      return updated
+    })
     // When searching, show actual result count not paginated count
     setTotal(isSearching ? rows.length : (count || 0))
     setLoading(false)
@@ -281,7 +289,42 @@ export default function FinanceDashboard() {
   }
 
   // Batch helpers
-  function getSelected() { return applications.filter(a => selected.has(a.id)) }
+  function getSelected() {
+    return Array.from(selected)
+      .map(id => selectedRecords.get(id))
+      .filter(Boolean)
+  }
+
+  function clearSelection() {
+    setSelected(new Set())
+    setSelectedRecords(new Map())
+  }
+
+  function setApplicationSelected(app, checked) {
+    setSelected(current => {
+      const updated = new Set(current)
+      checked ? updated.add(app.id) : updated.delete(app.id)
+      return updated
+    })
+    setSelectedRecords(current => {
+      const updated = new Map(current)
+      checked ? updated.set(app.id, app) : updated.delete(app.id)
+      return updated
+    })
+  }
+
+  function setCurrentPageSelected(checked) {
+    setSelected(current => {
+      const updated = new Set(current)
+      applications.forEach(app => checked ? updated.add(app.id) : updated.delete(app.id))
+      return updated
+    })
+    setSelectedRecords(current => {
+      const updated = new Map(current)
+      applications.forEach(app => checked ? updated.set(app.id, app) : updated.delete(app.id))
+      return updated
+    })
+  }
 
   function batchCompatible(apps) {
     if (apps.length < 2) return null
@@ -438,20 +481,35 @@ export default function FinanceDashboard() {
         extraFields = { processed_at: now }
       }
 
-      await supabase.from('applications').update({
+      const updatedFields = {
         status: newStatus,
         outcome_note: isReject ? note : app.outcome_note,
         ...extraFields,
-      }).eq('id', app.id)
+      }
+      const { error: updateError } = await supabase.from('applications')
+        .update(updatedFields)
+        .eq('id', app.id)
+      if (updateError) throw updateError
 
-      await supabase.from('audit_log').insert({
+      const { error: auditError } = await supabase.from('audit_log').insert({
         application_id: app.id,
         action_by: user.id,
         action: auditAction,
         note: note || null,
       })
+      if (auditError) throw auditError
 
-      await load()
+      setApplications(current => current.map(row =>
+        row.id === app.id ? { ...row, ...updatedFields } : row
+      ))
+      setSelectedRecords(current => {
+        if (!current.has(app.id)) return current
+        const updated = new Map(current)
+        updated.set(app.id, { ...current.get(app.id), ...updatedFields })
+        return updated
+      })
+    } catch (error) {
+      window.alert(error.message || 'Could not update application')
     } finally {
       setQuickActionLoading(null)
     }
@@ -485,10 +543,10 @@ export default function FinanceDashboard() {
         .update({ batch_id: batch.id })
         .in('id', ids)
       if (lErr) throw new Error('Linking applications failed: ' + lErr.message)
-      setSelected(new Set())
       setShowBatchModal(false)
       setBatchForm({ transfer_ref:'', transfer_date:'', note:'' })
       await load()
+      clearSelection()
     } catch (err) {
       setBatchMsg(err.message || 'Failed to create batch')
     } finally {
@@ -546,8 +604,8 @@ export default function FinanceDashboard() {
         })))
       }
 
-      setSelected(new Set())
       await load()
+      clearSelection()
     } catch (err) {
       alert(err.message || 'Failed to undo batch')
     } finally {
@@ -668,7 +726,7 @@ export default function FinanceDashboard() {
               ⧉ Create Payment Batch
             </button>
           )}
-          <button className="btn btn-outline btn-sm" onClick={() => setSelected(new Set())}>
+          <button className="btn btn-outline btn-sm" onClick={clearSelection}>
             ✕ Clear selection
           </button>
         </div>
@@ -717,11 +775,8 @@ export default function FinanceDashboard() {
                   <th style={{width:'32px'}}>
                     <input type="checkbox"
                       style={{width:'13px',height:'13px',cursor:'pointer'}}
-                      checked={selected.size === applications.length && applications.length > 0}
-                      onChange={e => {
-                        if (e.target.checked) setSelected(new Set(applications.map(a=>a.id)))
-                        else setSelected(new Set())
-                      }}
+                      checked={applications.length > 0 && applications.every(app => selected.has(app.id))}
+                      onChange={e => setCurrentPageSelected(e.target.checked)}
                     />
                   </th>
                   <th>Reference</th>
@@ -752,11 +807,7 @@ export default function FinanceDashboard() {
                           <input type="checkbox"
                             style={{width:'13px',height:'13px',cursor:'pointer'}}
                             checked={selected.has(app.id)}
-                            onChange={e => {
-                              const s = new Set(selected)
-                              e.target.checked ? s.add(app.id) : s.delete(app.id)
-                              setSelected(s)
-                            }}
+                            onChange={e => setApplicationSelected(app, e.target.checked)}
                           />
                         </td>
                         {/* Reference + copy button */}

@@ -74,8 +74,18 @@ export default function Layout() {
         {isFinanceOrAbove && (
           <button className={`sidebar-link ${isActive('/dashboard') ? 'active' : ''}`}
             onClick={() => go('/dashboard')}>
-            <span className="icon">📊</span> Dashboard
+              <span className="icon">📊</span> Dashboard
           </button>
+        )}
+
+        {['finance','cfo','ceo','superadmin'].includes(profile?.role) && (
+          <>
+            <div className="sidebar-section">Finance</div>
+            <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}
+              onClick={() => go('/qbo-settings')}>
+              <span className="icon">Q</span> QBO Settings
+            </button>
+          </>
         )}
 
         {isSuperAdmin && (
@@ -108,7 +118,7 @@ export default function Layout() {
           </button>
           <div style={{marginTop:'10px',textAlign:'center',fontSize:'10px',
             color:'rgba(255,255,255,0.2)',letterSpacing:'.08em',
-            fontFamily:"'JetBrains Mono',monospace"}}>v1.9.0</div>
+            fontFamily:"'JetBrains Mono',monospace"}}>v1.9.11</div>
         </div>
       </aside>
 

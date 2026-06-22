@@ -10,6 +10,7 @@ import SettingsPage from './pages/SettingsPage'
 import MyProfile from './pages/MyProfile'
 import ResetPasswordPage from './pages/ResetPasswordPage'
 import PaymentVoucher from './pages/PaymentVoucher'
+import QboSettings from './pages/QboSettings'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -49,6 +50,11 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="profile" element={<PrivateRoute><MyProfile /></PrivateRoute>} />
+        <Route path="qbo-settings" element={
+          <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
+            <QboSettings />
+          </PrivateRoute>
+        } />
         <Route path="settings" element={
           <PrivateRoute allowedRoles={['superadmin']}>
             <SettingsPage />

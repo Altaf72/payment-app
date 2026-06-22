@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency } from '../lib/utils'
 import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
+import { buildQboJournalCsv } from '../lib/qboExport'
 
 function toProperCase(str) {
   if (!str) return ''
@@ -527,6 +528,10 @@ export default function ApplicationDetail() {
   const [hasClipboardImage, setHasClipboardImage] = useState(false)
   const [financeComment, setFinanceComment]       = useState('')
   const [financeCommentStatus, setFinanceCommentStatus] = useState('')
+  const [showBankEdit, setShowBankEdit] = useState(false)
+  const [bankEditForm, setBankEditForm] = useState({ bank_name: '', bank_account: '' })
+  const [bankEditSaving, setBankEditSaving] = useState(false)
+  const [bankEditError, setBankEditError] = useState('')
   const [showCameraModal, setShowCameraModal] = useState(false)
   const [cameraStream, setCameraStream] = useState(null)
   const [cameraError, setCameraError] = useState('')
@@ -534,6 +539,23 @@ export default function ApplicationDetail() {
   const [cameraRotation, setCameraRotation] = useState(0)
   const [cameraCropX, setCameraCropX] = useState(0)
   const [cameraCropY, setCameraCropY] = useState(0)
+  const [showQboExport, setShowQboExport] = useState(false)
+  const [qboForm, setQboForm] = useState({
+    debitAccount: '',
+    creditAccount: '',
+    description: '',
+    name: '',
+    tax: '',
+    qboClass: '',
+  })
+  const [qboError, setQboError] = useState('')
+  const [qboMessage, setQboMessage] = useState('')
+  const [qboOptions, setQboOptions] = useState({
+    debitAccounts: [],
+    creditAccounts: [],
+    taxes: [],
+    classes: [],
+  })
 
   useEffect(() => { load() }, [id])
 
@@ -886,6 +908,72 @@ export default function ApplicationDetail() {
     } finally { setActionLoading(false) }
   }
 
+  function openBankDetailsEdit() {
+    setBankEditForm({
+      bank_name: app.bank_name || '',
+      bank_account: app.bank_account || '',
+    })
+    setBankEditError('')
+    setShowBankEdit(true)
+  }
+
+  async function saveBankDetails() {
+    const bankName = bankEditForm.bank_name.trim()
+    const bankAccount = bankEditForm.bank_account.trim()
+    const oldBankName = app.bank_name || ''
+    const oldBankAccount = app.bank_account || ''
+
+    if (bankName === oldBankName && bankAccount === oldBankAccount) {
+      setShowBankEdit(false)
+      return
+    }
+
+    setBankEditSaving(true)
+    setBankEditError('')
+    try {
+      const { error: updateError } = await supabase.from('applications').update({
+        bank_name: bankName || null,
+        bank_account: bankAccount || null,
+      }).eq('id', id)
+      if (updateError) throw updateError
+
+      const changes = []
+      if (bankName !== oldBankName) {
+        changes.push(`Bank: ${oldBankName || 'blank'} -> ${bankName || 'blank'}`)
+      }
+      if (bankAccount !== oldBankAccount) {
+        changes.push(`Account/IBAN: ${oldBankAccount || 'blank'} -> ${bankAccount || 'blank'}`)
+      }
+      const note = `Bank details updated by Finance. ${changes.join('; ')}`
+      const { data: logEntry, error: logError } = await supabase.from('audit_log').insert({
+        application_id: id,
+        action_by: user.id,
+        action: 'edited',
+        note,
+      }).select('id, action, note, created_at, action_by').single()
+      if (logError) throw logError
+
+      setApp(current => ({
+        ...current,
+        bank_name: bankName || null,
+        bank_account: bankAccount || null,
+      }))
+      setAuditLog(current => [
+        ...current,
+        {
+          ...logEntry,
+          actor: profile?.full_name || 'You',
+          actorRole: profile?.role || '',
+        },
+      ])
+      setShowBankEdit(false)
+    } catch (err) {
+      setBankEditError(err.message || 'Could not save bank details')
+    } finally {
+      setBankEditSaving(false)
+    }
+  }
+
   async function handleFinanceAttachmentFile(e) {
     const file = e.target.files[0]
     setFinanceAttError('')
@@ -1209,6 +1297,137 @@ export default function ApplicationDetail() {
     window.open(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`)
   }
 
+  function openQboExport() {
+    let savedDefaults = {}
+    let savedHistory = {}
+    try {
+      savedDefaults = JSON.parse(localStorage.getItem(`qbo_posting_defaults_${app.company_id}`) || '{}')
+      savedHistory = JSON.parse(localStorage.getItem(`qbo_posting_history_${app.company_id}`) || '{}')
+    } catch {}
+    const options = {
+      debitAccounts: savedHistory.debitAccounts || (savedDefaults.debitAccount ? [savedDefaults.debitAccount] : []),
+      creditAccounts: savedHistory.creditAccounts || (savedDefaults.creditAccount ? [savedDefaults.creditAccount] : []),
+      taxes: savedHistory.taxes || (savedDefaults.tax ? [savedDefaults.tax] : []),
+      classes: savedHistory.classes || (savedDefaults.qboClass ? [savedDefaults.qboClass] : []),
+    }
+    setQboOptions(options)
+    const description = [app.payment_reason, app.remarks]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .join(' - ')
+    setQboForm({
+      debitAccount: options.debitAccounts[0] || '',
+      creditAccount: options.creditAccounts[0] || '',
+      description,
+      name: app.payee_name || '',
+      tax: options.taxes[0] || '',
+      qboClass: options.classes[0] || '',
+    })
+    setQboError('')
+    setQboMessage('')
+    setShowQboExport(true)
+  }
+
+  function rememberQboValues(formValues = qboForm) {
+    if (!app?.company_id) return
+    const addRecent = (list, value) => {
+      const clean = String(value || '').trim()
+      if (!clean) return list || []
+      return [clean, ...(list || []).filter(item => item.toLowerCase() !== clean.toLowerCase())].slice(0, 25)
+    }
+    const updated = {
+      debitAccounts: addRecent(qboOptions.debitAccounts, formValues.debitAccount),
+      creditAccounts: addRecent(qboOptions.creditAccounts, formValues.creditAccount),
+      taxes: addRecent(qboOptions.taxes, formValues.tax),
+      classes: addRecent(qboOptions.classes, formValues.qboClass),
+    }
+    setQboOptions(updated)
+    localStorage.setItem(`qbo_posting_history_${app.company_id}`, JSON.stringify(updated))
+    localStorage.setItem(`qbo_posting_defaults_${app.company_id}`, JSON.stringify({
+      debitAccount: updated.debitAccounts[0] || '',
+      creditAccount: updated.creditAccounts[0] || '',
+      tax: updated.taxes[0] || '',
+      qboClass: updated.classes[0] || '',
+    }))
+  }
+
+  function exportQboJournal() {
+    if (!qboForm.debitAccount.trim()) {
+      setQboError('Debit / Expense Account is required')
+      return
+    }
+    if (!qboForm.creditAccount.trim()) {
+      setQboError('Credit / Bank or Cash Account is required')
+      return
+    }
+    if (!app.amount || Number(app.amount) <= 0) {
+      setQboError('Application amount is required')
+      return
+    }
+    rememberQboValues()
+
+    const defaultDescription = [app.payment_reason, app.remarks]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .join(' - ')
+    const csv = buildQboJournalCsv({
+      debitAccount: qboForm.debitAccount.trim(),
+      creditAccount: qboForm.creditAccount.trim(),
+      amount: Number(app.amount),
+      description: qboForm.description.trim() || defaultDescription,
+      name: qboForm.name.trim(),
+      tax: qboForm.tax.trim(),
+      qboClass: qboForm.qboClass.trim(),
+    })
+    const blob = new Blob(['\uFEFF' + csv], { type:'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `QBO-JV-${app.ref_number || app.id}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+    setShowQboExport(false)
+  }
+
+  async function copyQboExpense() {
+    setQboError('')
+    setQboMessage('')
+    if (!qboForm.debitAccount.trim()) {
+      setQboError('Expense Account is required')
+      return
+    }
+    if (!qboForm.creditAccount.trim()) {
+      setQboError('Payment Account is required')
+      return
+    }
+    rememberQboValues()
+
+    const defaultDescription = [app.payment_reason, app.remarks]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .join(' - ')
+    const expenseText = [
+      'QBO EXPENSE',
+      `Date: ${fmtDate(app.submitted_at || app.created_at)}`,
+      `Payee: ${qboForm.name.trim() || app.payee_name || ''}`,
+      `Payment Account: ${qboForm.creditAccount.trim()}`,
+      `Expense Account: ${qboForm.debitAccount.trim()}`,
+      `Amount: AED ${formatCurrency(app.amount)}`,
+      `Reference: ${app.ref_number || ''}`,
+      `Description: ${qboForm.description.trim() || defaultDescription}`,
+      `Payment Method: ${app.payment_method_name || ''}`,
+      `Tax: ${qboForm.tax.trim()}`,
+      `Class: ${qboForm.qboClass.trim()}`,
+    ].join('\n')
+
+    try {
+      await navigator.clipboard.writeText(expenseText)
+      setQboMessage('QBO Expense details copied to clipboard')
+    } catch {
+      setQboError('Could not copy to clipboard. Allow clipboard permission and try again.')
+    }
+  }
+
   if (loading) return <div className="empty-state"><p>Loading…</p></div>
   if (!app)    return <div className="empty-state"><h3>Application not found</h3></div>
 
@@ -1224,9 +1443,11 @@ export default function ApplicationDetail() {
   const canEdit = isOwner && ['draft','returned'].includes(app.status)
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
   const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
+  const canExportQbo = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
   const canAddFinanceAttachment = ['finance','superadmin'].includes(profile?.role) &&
     ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
   const canAddFinancePostApprovalComment = ['finance','superadmin'].includes(profile?.role) && app.status !== 'draft'
+  const canEditBankDetails = ['finance','superadmin'].includes(profile?.role)
   const deletedFinanceAttachmentPaths = new Set(
     auditLog.map(e => parseDeletedAttachmentNote(e.note)?.path).filter(Boolean)
   )
@@ -1294,6 +1515,16 @@ export default function ApplicationDetail() {
             <button className="btn btn-gold btn-sm" onClick={handleDownload} disabled={downloading}>
               {downloading ? '⏳…' : '↓ PDF'}
             </button>
+            {canExportQbo && (
+              <>
+                <button className="btn btn-outline btn-sm" onClick={openQboExport}>
+                  Export QBO JV
+                </button>
+                <button className="btn btn-outline btn-sm" onClick={openQboExport}>
+                  Copy QBO Expense
+                </button>
+              </>
+            )}
             {canCreatePaymentVoucher && (
               <button className="btn btn-success btn-sm" onClick={() => navigate(`/application/${id}/payment-voucher`)}>
                 Create Payment Voucher
@@ -1479,6 +1710,90 @@ export default function ApplicationDetail() {
           </div>
         )}
       </div>
+
+      {showQboExport && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowQboExport(false)}>
+          <div className="modal" style={{maxWidth:'680px'}}>
+            <div className="modal-header">
+              <div>
+                <h3>QBO Posting Helper</h3>
+                <div className="text-sm text-muted">{app.ref_number}</div>
+                <div className="text-sm text-muted">AED {formatCurrency(app.amount)}</div>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setShowQboExport(false)}>x</button>
+            </div>
+            <div className="modal-body">
+              <div className="alert alert-info" style={{fontSize:'12px'}}>
+                Download a balanced JV CSV or copy the same application details for manual QBO Expense entry. Account names must exactly match QBO.
+                <div style={{marginTop:'5px'}}>
+                  Suggestions are saved on this computer for {app.company_name}. Remembered: {qboOptions.debitAccounts.length} expense account(s), {qboOptions.creditAccounts.length} payment account(s).
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Debit / Expense Account <span className="required">*</span></label>
+                  <input className="form-control" placeholder="Type or select QBO account"
+                    list="qbo-debit-accounts"
+                    value={qboForm.debitAccount}
+                    onBlur={() => rememberQboValues()}
+                    onChange={e => setQboForm(form => ({...form,debitAccount:e.target.value}))} />
+                  <datalist id="qbo-debit-accounts">
+                    {qboOptions.debitAccounts.map(value => <option key={value} value={value} />)}
+                  </datalist>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Credit / Bank or Cash Account <span className="required">*</span></label>
+                  <input className="form-control" placeholder="Type or select QBO account"
+                    list="qbo-credit-accounts"
+                    value={qboForm.creditAccount}
+                    onBlur={() => rememberQboValues()}
+                    onChange={e => setQboForm(form => ({...form,creditAccount:e.target.value}))} />
+                  <datalist id="qbo-credit-accounts">
+                    {qboOptions.creditAccounts.map(value => <option key={value} value={value} />)}
+                  </datalist>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <input className="form-control" value={qboForm.description}
+                  onChange={e => setQboForm(form => ({...form,description:e.target.value}))} />
+              </div>
+              <div className="form-row-3">
+                <div className="form-group">
+                  <label className="form-label">Name</label>
+                  <input className="form-control" value={qboForm.name}
+                    onChange={e => setQboForm(form => ({...form,name:e.target.value}))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Tax</label>
+                  <input className="form-control" placeholder="Type or select" list="qbo-tax-options" value={qboForm.tax}
+                    onBlur={() => rememberQboValues()}
+                    onChange={e => setQboForm(form => ({...form,tax:e.target.value}))} />
+                  <datalist id="qbo-tax-options">
+                    {qboOptions.taxes.map(value => <option key={value} value={value} />)}
+                  </datalist>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Class</label>
+                  <input className="form-control" placeholder="Type or select" list="qbo-class-options" value={qboForm.qboClass}
+                    onBlur={() => rememberQboValues()}
+                    onChange={e => setQboForm(form => ({...form,qboClass:e.target.value}))} />
+                  <datalist id="qbo-class-options">
+                    {qboOptions.classes.map(value => <option key={value} value={value} />)}
+                  </datalist>
+                </div>
+              </div>
+              {qboError && <div className="alert alert-error">{qboError}</div>}
+              {qboMessage && <div className="alert alert-success">{qboMessage}</div>}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" type="button" onClick={() => setShowQboExport(false)}>Cancel</button>
+              <button className="btn btn-outline" type="button" onClick={copyQboExpense}>Copy QBO Expense</button>
+              <button className="btn btn-primary" type="button" onClick={exportQboJournal}>Download QBO JV</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCameraModal && (
         <div className="camera-overlay" style={{ position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.75)',
@@ -1678,14 +1993,76 @@ export default function ApplicationDetail() {
               </div>
               <div className="form-group"><div className="form-label">Amount in Words</div><div className="text-muted">{app.amount_words}</div></div>
               <hr className="divider" />
-              <div className="form-row">
-                <div><div className="form-label">Receiving Company</div><div>{toProperCase(app.payee_name) || '—'}</div></div>
-                <div><div className="form-label">Bank</div><div>{toProperCase(app.bank_name) || '—'}</div></div>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px', marginBottom:'10px' }}>
+                <div className="form-label" style={{ marginBottom:0 }}>Receiving & Bank Details</div>
+                {canEditBankDetails && !showBankEdit && (
+                  <button type="button" className="btn btn-outline btn-sm" onClick={openBankDetailsEdit}>
+                    Edit bank details
+                  </button>
+                )}
               </div>
-              <div className="form-group">
-                <div className="form-label">Account / IBAN</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:'13px' }}>{app.bank_account || '—'}</div>
-              </div>
+              {showBankEdit ? (
+                <div style={{
+                  border:'1px solid var(--border-2)',
+                  borderRadius:'var(--radius-sm)',
+                  padding:'14px',
+                  marginBottom:'18px',
+                  background:'var(--cream)',
+                }}>
+                  <div className="form-row">
+                    <div>
+                      <label className="form-label">Bank Name</label>
+                      <input
+                        className="form-control"
+                        value={bankEditForm.bank_name}
+                        onChange={e => setBankEditForm(current => ({ ...current, bank_name: e.target.value }))}
+                        placeholder="Enter bank name"
+                        autoFocus
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label">Account / IBAN</label>
+                      <input
+                        className="form-control"
+                        value={bankEditForm.bank_account}
+                        onChange={e => setBankEditForm(current => ({ ...current, bank_account: e.target.value }))}
+                        placeholder="Enter account number or IBAN"
+                        style={{ fontFamily:"'JetBrains Mono',monospace" }}
+                      />
+                    </div>
+                  </div>
+                  {bankEditError && <div className="form-error">{bankEditError}</div>}
+                  <div style={{ display:'flex', justifyContent:'flex-end', gap:'8px', marginTop:'12px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      disabled={bankEditSaving}
+                      onClick={() => { setShowBankEdit(false); setBankEditError('') }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-success btn-sm"
+                      disabled={bankEditSaving}
+                      onClick={saveBankDetails}
+                    >
+                      {bankEditSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="form-row">
+                    <div><div className="form-label">Receiving Company</div><div>{toProperCase(app.payee_name) || '—'}</div></div>
+                    <div><div className="form-label">Bank</div><div>{toProperCase(app.bank_name) || '—'}</div></div>
+                  </div>
+                  <div className="form-group">
+                    <div className="form-label">Account / IBAN</div>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:'13px' }}>{app.bank_account || '—'}</div>
+                  </div>
+                </>
+              )}
               {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
               {savedApplicationAttachments.length > 0 && (
                 <div className="form-group">
