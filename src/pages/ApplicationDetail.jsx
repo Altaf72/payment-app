@@ -530,10 +530,12 @@ export default function ApplicationDetail() {
   const [financeCommentStatus, setFinanceCommentStatus] = useState('')
   const [showBankEdit, setShowBankEdit] = useState(false)
   const [bankEditForm, setBankEditForm] = useState({
+    payment_method_name: '',
     payee_name: '',
     bank_name: '',
     bank_account: '',
   })
+  const [paymentMethodOptions, setPaymentMethodOptions] = useState([])
   const [bankEditSaving, setBankEditSaving] = useState(false)
   const [bankEditError, setBankEditError] = useState('')
   const [showCameraModal, setShowCameraModal] = useState(false)
@@ -912,25 +914,36 @@ export default function ApplicationDetail() {
     } finally { setActionLoading(false) }
   }
 
-  function openBankDetailsEdit() {
+  async function openBankDetailsEdit() {
     setBankEditForm({
+      payment_method_name: app.payment_method_name || '',
       payee_name: app.payee_name || '',
       bank_name: app.bank_name || '',
       bank_account: app.bank_account || '',
     })
     setBankEditError('')
     setShowBankEdit(true)
+    const { data, error } = await supabase
+      .from('payment_methods')
+      .select('id, name')
+      .eq('active', true)
+      .order('name')
+    if (error) setBankEditError(error.message || 'Could not load payment methods')
+    else setPaymentMethodOptions(data || [])
   }
 
   async function saveBankDetails() {
+    const paymentMethodName = bankEditForm.payment_method_name.trim()
     const payeeName = bankEditForm.payee_name.trim()
     const bankName = bankEditForm.bank_name.trim()
     const bankAccount = bankEditForm.bank_account.trim()
+    const oldPaymentMethodName = app.payment_method_name || ''
     const oldPayeeName = app.payee_name || ''
     const oldBankName = app.bank_name || ''
     const oldBankAccount = app.bank_account || ''
 
     if (
+      paymentMethodName === oldPaymentMethodName &&
       payeeName === oldPayeeName &&
       bankName === oldBankName &&
       bankAccount === oldBankAccount
@@ -942,6 +955,28 @@ export default function ApplicationDetail() {
     setBankEditSaving(true)
     setBankEditError('')
     try {
+      let paymentMethodId = null
+      if (paymentMethodName) {
+        const methodNameUnchanged = paymentMethodName.toLowerCase() === oldPaymentMethodName.toLowerCase()
+        const existingMethod = methodNameUnchanged && app.payment_method_id
+          ? { id: app.payment_method_id }
+          : paymentMethodOptions.find(
+              method => method.name?.trim().toLowerCase() === paymentMethodName.toLowerCase()
+            )
+        if (existingMethod?.id) {
+          paymentMethodId = existingMethod.id
+        } else {
+          const { data: newMethod, error: methodInsertError } = await supabase
+            .from('payment_methods')
+            .insert({ name: paymentMethodName, added_by: user.id })
+            .select('id, name')
+            .single()
+          if (methodInsertError) throw methodInsertError
+          paymentMethodId = newMethod.id
+          setPaymentMethodOptions(current => [...current, newMethod])
+        }
+      }
+
       let payeeId = null
       if (payeeName) {
         const { data: payees, error: payeesError } = await supabase
@@ -971,6 +1006,7 @@ export default function ApplicationDetail() {
       }
 
       const { error: updateError } = await supabase.from('applications').update({
+        payment_method_id: paymentMethodId,
         payee_id: payeeId,
         bank_name: bankName || null,
         bank_account: bankAccount || null,
@@ -978,6 +1014,9 @@ export default function ApplicationDetail() {
       if (updateError) throw updateError
 
       const changes = []
+      if (paymentMethodName !== oldPaymentMethodName) {
+        changes.push(`Payment Method: ${oldPaymentMethodName || 'blank'} -> ${paymentMethodName || 'blank'}`)
+      }
       if (payeeName !== oldPayeeName) {
         changes.push(`Receiving Company: ${oldPayeeName || 'blank'} -> ${payeeName || 'blank'}`)
       }
@@ -987,7 +1026,7 @@ export default function ApplicationDetail() {
       if (bankAccount !== oldBankAccount) {
         changes.push(`Account/IBAN: ${oldBankAccount || 'blank'} -> ${bankAccount || 'blank'}`)
       }
-      const note = `Receiving and bank details updated by Finance. ${changes.join('; ')}`
+      const note = `Payment, receiving and bank details updated by Finance. ${changes.join('; ')}`
       const { data: logEntry, error: logError } = await supabase.from('audit_log').insert({
         application_id: id,
         action_by: user.id,
@@ -998,6 +1037,8 @@ export default function ApplicationDetail() {
 
       setApp(current => ({
         ...current,
+        payment_method_id: paymentMethodId,
+        payment_method_name: paymentMethodName || null,
         payee_id: payeeId,
         payee_name: payeeName || null,
         bank_name: bankName || null,
@@ -1013,7 +1054,7 @@ export default function ApplicationDetail() {
       ])
       setShowBankEdit(false)
     } catch (err) {
-      setBankEditError(err.message || 'Could not save receiving and bank details')
+      setBankEditError(err.message || 'Could not save payment, receiving and bank details')
     } finally {
       setBankEditSaving(false)
     }
@@ -2039,7 +2080,7 @@ export default function ApplicationDetail() {
               <div className="form-group"><div className="form-label">Amount in Words</div><div className="text-muted">{app.amount_words}</div></div>
               <hr className="divider" />
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px', marginBottom:'10px' }}>
-                <div className="form-label" style={{ marginBottom:0 }}>Receiving & Bank Details</div>
+                <div className="form-label" style={{ marginBottom:0 }}>Payment, Receiving & Bank Details</div>
                 {canEditBankDetails && !showBankEdit && (
                   <button type="button" className="btn btn-outline btn-sm" onClick={openBankDetailsEdit}>
                     Edit details
@@ -2055,13 +2096,28 @@ export default function ApplicationDetail() {
                   background:'var(--cream)',
                 }}>
                   <div className="form-group">
+                    <label className="form-label">Payment Method</label>
+                    <input
+                      className="form-control"
+                      list="finance-payment-method-options"
+                      value={bankEditForm.payment_method_name}
+                      onChange={e => setBankEditForm(current => ({ ...current, payment_method_name: e.target.value }))}
+                      placeholder="Select or type a payment method"
+                      autoFocus
+                    />
+                    <datalist id="finance-payment-method-options">
+                      {paymentMethodOptions.map(method => (
+                        <option key={method.id} value={method.name} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="form-group">
                     <label className="form-label">Receiving Company</label>
                     <input
                       className="form-control"
                       value={bankEditForm.payee_name}
                       onChange={e => setBankEditForm(current => ({ ...current, payee_name: e.target.value }))}
                       placeholder="Enter receiving company"
-                      autoFocus
                     />
                   </div>
                   <div className="form-row">
