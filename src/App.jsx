@@ -49,6 +49,11 @@ export default function App() {
             <PaymentVoucher />
           </PrivateRoute>
         } />
+        <Route path="receipt-voucher/new" element={
+          <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
+            <PaymentVoucher voucherType="receipt" />
+          </PrivateRoute>
+        } />
         <Route path="dashboard" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
             <FinanceDashboard />

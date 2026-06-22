@@ -630,6 +630,7 @@ export default function FinanceDashboard() {
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
           <button className="btn btn-primary" onClick={() => navigate('/payment-voucher/new')}>Create Payment Voucher</button>
+          <button className="btn btn-outline" onClick={() => navigate('/receipt-voucher/new')}>Create Receipt Voucher</button>
           <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
         </div>
       </div>

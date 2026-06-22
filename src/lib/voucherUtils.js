@@ -25,7 +25,15 @@ export function nextPaymentVoucherNumber(prefix, refNumber, existingVouchers = [
 }
 
 export function nextStandalonePaymentVoucherNumber(prefix, existingVouchers = []) {
-  const base = `${String(prefix || '').toUpperCase()}PV-`
+  return nextStandaloneVoucherNumber(prefix, 'PV', existingVouchers)
+}
+
+export function nextStandaloneReceiptVoucherNumber(prefix, existingVouchers = []) {
+  return nextStandaloneVoucherNumber(prefix, 'RV', existingVouchers)
+}
+
+function nextStandaloneVoucherNumber(prefix, code, existingVouchers = []) {
+  const base = `${String(prefix || '').toUpperCase()}${code}-`
   const maxSequence = existingVouchers.reduce((max, voucher) => {
     const number = String(voucher.voucher_number || '')
     const match = number.match(new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)$`, 'i'))

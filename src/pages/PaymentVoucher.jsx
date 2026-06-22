@@ -3,7 +3,11 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { amountToWords, formatCurrency } from '../lib/utils'
-import { nextPaymentVoucherNumber, nextStandalonePaymentVoucherNumber } from '../lib/voucherUtils'
+import {
+  nextPaymentVoucherNumber,
+  nextStandalonePaymentVoucherNumber,
+  nextStandaloneReceiptVoucherNumber,
+} from '../lib/voucherUtils'
 
 const emptyCheque = {
   cheque_no: '',
@@ -28,11 +32,11 @@ function displayDate(value) {
   })
 }
 
-function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
+function PaymentVoucherPrint({ application, company, form, cheques, profile, isReceipt }) {
   const chequeRows = form.payment_mode === 'Cheque' ? cheques : []
   return (
     <div className="voucher-print">
-      <div className="voucher-print-status">{form.status === 'saved' ? 'PAID' : 'DRAFT'}</div>
+      <div className="voucher-print-status">{form.status === 'saved' ? (isReceipt ? 'RECEIVED' : 'PAID') : 'DRAFT'}</div>
       <header className="voucher-print-header">
         <div className="voucher-print-logo">
           {company?.logo_url
@@ -42,17 +46,17 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
         </div>
         <div>
           <h1>{company?.name || application?.company_name || ''}</h1>
-          <p>PAYMENT VOUCHER</p>
+          <p>{isReceipt ? 'RECEIPT VOUCHER' : 'PAYMENT VOUCHER'}</p>
         </div>
         <div className="voucher-print-number">{form.voucher_number}</div>
       </header>
 
       <section className="voucher-print-summary">
         <div><span>Date</span><strong>{displayDate(form.voucher_date)}</strong></div>
-        <div><span>Payment Mode</span><strong>{form.payment_mode || '-'}</strong></div>
+        <div><span>{isReceipt ? 'Receipt Mode' : 'Payment Mode'}</span><strong>{form.payment_mode || '-'}</strong></div>
         <div><span>Reference No.</span><strong>{form.reference_no || '-'}</strong></div>
         <div><span>Currency</span><strong>{form.currency || 'AED'}</strong></div>
-        <div className="voucher-total"><span>Amount Paid</span><strong>AED {formatCurrency(Number(form.amount) || 0)}</strong></div>
+        <div className="voucher-total"><span>{isReceipt ? 'Amount Received' : 'Amount Paid'}</span><strong>AED {formatCurrency(Number(form.amount) || 0)}</strong></div>
       </section>
 
       <div className="voucher-amount-words">
@@ -60,7 +64,7 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
       </div>
 
       <section className="voucher-paid-to">
-        <span>Paid To:</span>
+        <span>{isReceipt ? 'Received From:' : 'Paid To:'}</span>
         <strong>{form.paid_to}</strong>
       </section>
 
@@ -74,7 +78,7 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
                 <th>Chq #</th>
                 <th>Date</th>
                 <th>Bank</th>
-                <th>In Favour Of</th>
+                <th>{isReceipt ? 'Received From' : 'In Favour Of'}</th>
                 <th className="number">Amount</th>
               </tr>
             </thead>
@@ -109,16 +113,17 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile }) {
       <footer>
         {application?.ref_number
           ? `Linked application: ${application.ref_number}`
-          : 'Standalone payment voucher'
+          : `Standalone ${isReceipt ? 'receipt' : 'payment'} voucher`
         } | Generated {new Date().toLocaleString('en-GB')}
       </footer>
     </div>
   )
 }
 
-export default function PaymentVoucher() {
+export default function PaymentVoucher({ voucherType = 'payment' }) {
   const { applicationId } = useParams()
   const isStandalone = !applicationId
+  const isReceipt = voucherType === 'receipt'
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user, profile } = useAuth()
@@ -155,7 +160,7 @@ export default function PaymentVoucher() {
 
   useEffect(() => {
     load()
-  }, [applicationId])
+  }, [applicationId, voucherType])
 
   async function load() {
     setLoading(true)
@@ -164,11 +169,14 @@ export default function PaymentVoucher() {
     if (isStandalone) {
       const [companiesResult, vouchersResult] = await Promise.all([
         supabase.from('companies').select('*').order('name'),
-        supabase.from('payment_vouchers').select('*').is('application_id', null).order('created_at'),
+        supabase.from('payment_vouchers').select('*')
+          .is('application_id', null)
+          .eq('voucher_type', voucherType)
+          .order('created_at'),
       ])
       if (vouchersResult.error) {
         setSchemaReady(false)
-        setError(`Voucher tables are not ready. Run sql/payment_vouchers.sql and sql/standalone_payment_vouchers.sql in Supabase. ${vouchersResult.error.message}`)
+        setError(`Voucher tables are not ready. Run sql/${isReceipt ? 'receipt_vouchers.sql' : 'standalone_payment_vouchers.sql'} in Supabase. ${vouchersResult.error.message}`)
         setLoading(false)
         return
       }
@@ -210,7 +218,10 @@ export default function PaymentVoucher() {
 
     const [{ data: companyData }, voucherResult] = await Promise.all([
       supabase.from('companies').select('*').eq('id', appData.company_id).single(),
-      supabase.from('payment_vouchers').select('*').eq('application_id', applicationId).order('installment_no'),
+      supabase.from('payment_vouchers').select('*')
+        .eq('application_id', applicationId)
+        .eq('voucher_type', 'payment')
+        .order('installment_no'),
     ])
 
     if (voucherResult.error) {
@@ -279,7 +290,9 @@ export default function PaymentVoucher() {
     setCompany(companyData || null)
     setForm({
       voucher_number: companyData
-        ? nextStandalonePaymentVoucherNumber(companyData.prefix, companyVouchers)
+        ? (isReceipt
+            ? nextStandaloneReceiptVoucherNumber(companyData.prefix, companyVouchers)
+            : nextStandalonePaymentVoucherNumber(companyData.prefix, companyVouchers))
         : '',
       installment_no: 1,
       voucher_date: localDate(),
@@ -386,7 +399,7 @@ export default function PaymentVoucher() {
 
   function validate() {
     if (isStandalone && !company?.id) return 'Company is required'
-    if (!form.paid_to.trim()) return 'Payee name is required'
+    if (!form.paid_to.trim()) return isReceipt ? 'Received From is required' : 'Payee name is required'
     if (!form.amount || Number(form.amount) <= 0) return 'Amount is required'
     if (!form.voucher_number.trim()) return 'Voucher number is required'
     return ''
@@ -406,6 +419,7 @@ export default function PaymentVoucher() {
       const payload = {
         application_id: applicationId || null,
         company_id: isStandalone ? company.id : application.company_id,
+        voucher_type: voucherType,
         voucher_number: form.voucher_number.trim(),
         installment_no: form.installment_no,
         voucher_date: form.voucher_date,
@@ -474,10 +488,10 @@ export default function PaymentVoucher() {
           ? current.map(item => item.id === updatedVoucher.id ? updatedVoucher : item)
           : [...current, updatedVoucher].sort((a, b) => a.installment_no - b.installment_no)
       })
-      setMessage(status === 'draft' ? 'Draft saved' : 'Payment voucher saved')
+      setMessage(status === 'draft' ? 'Draft saved' : `${isReceipt ? 'Receipt' : 'Payment'} voucher saved`)
       return voucher
     } catch (saveError) {
-      setError(saveError.message || 'Could not save payment voucher')
+      setError(saveError.message || `Could not save ${isReceipt ? 'receipt' : 'payment'} voucher`)
       return null
     } finally {
       setSaving(false)
@@ -493,7 +507,7 @@ export default function PaymentVoucher() {
     window.print()
   }
 
-  if (loading) return <div className="empty-state"><p>Loading payment voucher...</p></div>
+  if (loading) return <div className="empty-state"><p>Loading {isReceipt ? 'receipt' : 'payment'} voucher...</p></div>
   if (error && !application && !isStandalone) return <div className="alert alert-error">{error}</div>
   if (!schemaReady) {
     return (
@@ -502,7 +516,7 @@ export default function PaymentVoucher() {
           {isStandalone ? 'Back to Dashboard' : 'Back to Application'}
         </button>
         <div className="alert alert-warning">
-          <strong>Payment Voucher database setup is required.</strong>
+          <strong>{isReceipt ? 'Receipt' : 'Payment'} Voucher database setup is required.</strong>
           <div style={{ marginTop:'6px' }}>{error}</div>
         </div>
       </div>
@@ -517,17 +531,22 @@ export default function PaymentVoucher() {
             <button className="btn btn-outline btn-sm" onClick={() => navigate(isStandalone ? '/dashboard' : `/application/${applicationId}`)} style={{ marginBottom:'8px' }}>
               {isStandalone ? 'Back to Dashboard' : 'Back to Application'}
             </button>
-            <h1>{isStandalone ? 'Standalone Payment Voucher' : 'Payment Voucher'}</h1>
+            <h1>
+              {isReceipt
+                ? 'Standalone Receipt Voucher'
+                : isStandalone ? 'Standalone Payment Voucher' : 'Payment Voucher'
+              }
+            </h1>
             <p>
               {isStandalone
-                ? `${company?.name || 'Select a company'} | No payment application required`
+                ? `${company?.name || 'Select a company'} | No ${isReceipt ? 'receipt application' : 'payment application'} required`
                 : `${application.ref_number} | ${application.company_name} | No approval-stage restriction`
               }
             </p>
           </div>
           <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
             <button className="btn btn-outline" onClick={() => isStandalone ? startStandaloneVoucher() : startNewVoucher()}>
-              {isStandalone ? 'New Standalone Voucher' : 'New Partial Voucher'}
+              {isReceipt ? 'New Receipt Voucher' : isStandalone ? 'New Standalone Voucher' : 'New Partial Voucher'}
             </button>
             <button className="btn btn-outline" disabled={saving} onClick={() => saveVoucher('draft')}>Save Draft</button>
             <button className="btn btn-primary" disabled={saving} onClick={() => saveVoucher('saved')}>
@@ -565,7 +584,12 @@ export default function PaymentVoucher() {
         {displayedVouchers.length > 0 && (
           <div className="card" style={{ marginBottom:'16px' }}>
             <div className="card-header">
-              <h2>{isStandalone ? `Standalone Vouchers - ${company?.name}` : `Vouchers for ${application.ref_number}`}</h2>
+              <h2>
+                {isReceipt
+                  ? `Receipt Vouchers - ${company?.name}`
+                  : isStandalone ? `Standalone Vouchers - ${company?.name}` : `Vouchers for ${application.ref_number}`
+                }
+              </h2>
               <span className="text-sm text-muted">{displayedVouchers.length} saved</span>
             </div>
             <div className="table-wrap">
@@ -590,7 +614,7 @@ export default function PaymentVoucher() {
         {isStandalone ? (
           <div className="stats-row voucher-stats">
             <div className="stat-card"><div className="stat-label">Company</div><div className="stat-value" style={{fontSize:'18px'}}>{company?.prefix || '-'}</div></div>
-            <div className="stat-card"><div className="stat-label">Standalone Vouchers</div><div className="stat-value">{displayedVouchers.length}</div></div>
+            <div className="stat-card"><div className="stat-label">{isReceipt ? 'Receipt Vouchers' : 'Standalone Vouchers'}</div><div className="stat-value">{displayedVouchers.length}</div></div>
             <div className="stat-card"><div className="stat-label">Current Voucher</div><div className="stat-value">AED {formatCurrency(currentAmount)}</div></div>
           </div>
         ) : (
@@ -633,7 +657,7 @@ export default function PaymentVoucher() {
 
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Payee Name <span className="required">*</span></label>
+                <label className="form-label">{isReceipt ? 'Received From' : 'Payee Name'} <span className="required">*</span></label>
                 <input className="form-control" value={form.paid_to} onChange={e => {
                   setField('paid_to', e.target.value)
                   if (cheques.length === 1 && !cheques[0].in_favour_of) setCheque(0, 'in_favour_of', e.target.value)
@@ -648,11 +672,11 @@ export default function PaymentVoucher() {
 
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Receiving Company</label>
+                <label className="form-label">{isReceipt ? 'Received Into / Company' : 'Receiving Company'}</label>
                 <input className="form-control" value={form.receiving_company} onChange={e => setField('receiving_company', e.target.value)} />
               </div>
               <div className="form-group">
-                <label className="form-label">Payment Mode</label>
+                <label className="form-label">{isReceipt ? 'Receipt Mode' : 'Payment Mode'}</label>
                 <select className="form-control" value={form.payment_mode} onChange={e => setField('payment_mode', e.target.value)}>
                   <option value="Cheque">Cheque</option>
                   <option value="Bank Transfer">Bank Transfer</option>
@@ -663,11 +687,11 @@ export default function PaymentVoucher() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">Payment / Transfer Reference</label>
+              <label className="form-label">{isReceipt ? 'Receipt / Transfer Reference' : 'Payment / Transfer Reference'}</label>
               <input className="form-control" value={form.reference_no} onChange={e => setField('reference_no', e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Payment Reason</label>
+              <label className="form-label">{isReceipt ? 'Receipt Reason' : 'Payment Reason'}</label>
               <textarea className="form-control" value={form.payment_reason} onChange={e => setField('payment_reason', e.target.value)} />
             </div>
             <div className="form-group">
@@ -690,7 +714,7 @@ export default function PaymentVoucher() {
                 </div>
                 <div className="table-wrap">
                   <table>
-                    <thead><tr><th>Srl</th><th>Cheque #</th><th>Date</th><th>Bank</th><th>In Favour Of</th><th>Amount</th><th></th></tr></thead>
+                    <thead><tr><th>Srl</th><th>Cheque #</th><th>Date</th><th>Bank</th><th>{isReceipt ? 'Received From' : 'In Favour Of'}</th><th>Amount</th><th></th></tr></thead>
                     <tbody>
                       {cheques.map((cheque, index) => (
                         <tr key={index}>
@@ -698,7 +722,7 @@ export default function PaymentVoucher() {
                           <td><input className="form-control" value={cheque.cheque_no} onChange={e => setCheque(index, 'cheque_no', e.target.value)} /></td>
                           <td><input type="date" className="form-control" value={cheque.cheque_date} onChange={e => setCheque(index, 'cheque_date', e.target.value)} /></td>
                           <td><input className="form-control" value={cheque.bank_name} onChange={e => setCheque(index, 'bank_name', e.target.value)} /></td>
-                          <td><input className="form-control" value={cheque.in_favour_of} onChange={e => setCheque(index, 'in_favour_of', e.target.value)} /></td>
+                          <td><input className="form-control" placeholder={isReceipt ? 'Received from' : ''} value={cheque.in_favour_of} onChange={e => setCheque(index, 'in_favour_of', e.target.value)} /></td>
                           <td><input type="number" min="0" step="0.01" className="form-control" value={cheque.amount} onChange={e => setCheque(index, 'amount', e.target.value)} /></td>
                           <td><button className="btn btn-danger btn-sm" onClick={() => removeCheque(index)}>Remove</button></td>
                         </tr>
@@ -742,6 +766,7 @@ export default function PaymentVoucher() {
         form={form}
         cheques={cheques}
         profile={profile}
+        isReceipt={isReceipt}
       />
     </div>
   )

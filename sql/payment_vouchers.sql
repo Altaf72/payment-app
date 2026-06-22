@@ -7,6 +7,7 @@ create table if not exists public.payment_vouchers (
   id uuid primary key default gen_random_uuid(),
   application_id uuid references public.applications(id) on delete restrict,
   company_id uuid references public.companies(id) on delete restrict,
+  voucher_type text not null default 'payment' check (voucher_type in ('payment', 'receipt')),
   voucher_number text not null unique,
   installment_no integer not null default 1 check (installment_no > 0),
   voucher_date date not null default current_date,
@@ -33,6 +34,16 @@ create table if not exists public.payment_vouchers (
 -- Existing installations may still have application_id marked NOT NULL.
 alter table public.payment_vouchers
   alter column application_id drop not null;
+
+alter table public.payment_vouchers
+  add column if not exists voucher_type text not null default 'payment';
+
+alter table public.payment_vouchers
+  drop constraint if exists payment_vouchers_voucher_type_check;
+
+alter table public.payment_vouchers
+  add constraint payment_vouchers_voucher_type_check
+  check (voucher_type in ('payment', 'receipt'));
 
 create table if not exists public.voucher_cheques (
   id uuid primary key default gen_random_uuid(),
