@@ -529,7 +529,11 @@ export default function ApplicationDetail() {
   const [financeComment, setFinanceComment]       = useState('')
   const [financeCommentStatus, setFinanceCommentStatus] = useState('')
   const [showBankEdit, setShowBankEdit] = useState(false)
-  const [bankEditForm, setBankEditForm] = useState({ bank_name: '', bank_account: '' })
+  const [bankEditForm, setBankEditForm] = useState({
+    payee_name: '',
+    bank_name: '',
+    bank_account: '',
+  })
   const [bankEditSaving, setBankEditSaving] = useState(false)
   const [bankEditError, setBankEditError] = useState('')
   const [showCameraModal, setShowCameraModal] = useState(false)
@@ -910,6 +914,7 @@ export default function ApplicationDetail() {
 
   function openBankDetailsEdit() {
     setBankEditForm({
+      payee_name: app.payee_name || '',
       bank_name: app.bank_name || '',
       bank_account: app.bank_account || '',
     })
@@ -918,12 +923,18 @@ export default function ApplicationDetail() {
   }
 
   async function saveBankDetails() {
+    const payeeName = bankEditForm.payee_name.trim()
     const bankName = bankEditForm.bank_name.trim()
     const bankAccount = bankEditForm.bank_account.trim()
+    const oldPayeeName = app.payee_name || ''
     const oldBankName = app.bank_name || ''
     const oldBankAccount = app.bank_account || ''
 
-    if (bankName === oldBankName && bankAccount === oldBankAccount) {
+    if (
+      payeeName === oldPayeeName &&
+      bankName === oldBankName &&
+      bankAccount === oldBankAccount
+    ) {
       setShowBankEdit(false)
       return
     }
@@ -931,20 +942,52 @@ export default function ApplicationDetail() {
     setBankEditSaving(true)
     setBankEditError('')
     try {
+      let payeeId = null
+      if (payeeName) {
+        const { data: payees, error: payeesError } = await supabase
+          .from('payees')
+          .select('id, company_name')
+        if (payeesError) throw payeesError
+
+        const existingPayee = (payees || []).find(
+          payee => payee.company_name?.trim().toLowerCase() === payeeName.toLowerCase()
+        )
+        if (existingPayee) {
+          payeeId = existingPayee.id
+          const { error: payeeUpdateError } = await supabase.from('payees').update({
+            bank_name: bankName || null,
+            bank_account: bankAccount || null,
+          }).eq('id', payeeId)
+          if (payeeUpdateError) throw payeeUpdateError
+        } else {
+          const { data: newPayee, error: payeeInsertError } = await supabase.from('payees').insert({
+            company_name: payeeName,
+            bank_name: bankName || null,
+            bank_account: bankAccount || null,
+          }).select('id').single()
+          if (payeeInsertError) throw payeeInsertError
+          payeeId = newPayee.id
+        }
+      }
+
       const { error: updateError } = await supabase.from('applications').update({
+        payee_id: payeeId,
         bank_name: bankName || null,
         bank_account: bankAccount || null,
       }).eq('id', id)
       if (updateError) throw updateError
 
       const changes = []
+      if (payeeName !== oldPayeeName) {
+        changes.push(`Receiving Company: ${oldPayeeName || 'blank'} -> ${payeeName || 'blank'}`)
+      }
       if (bankName !== oldBankName) {
         changes.push(`Bank: ${oldBankName || 'blank'} -> ${bankName || 'blank'}`)
       }
       if (bankAccount !== oldBankAccount) {
         changes.push(`Account/IBAN: ${oldBankAccount || 'blank'} -> ${bankAccount || 'blank'}`)
       }
-      const note = `Bank details updated by Finance. ${changes.join('; ')}`
+      const note = `Receiving and bank details updated by Finance. ${changes.join('; ')}`
       const { data: logEntry, error: logError } = await supabase.from('audit_log').insert({
         application_id: id,
         action_by: user.id,
@@ -955,6 +998,8 @@ export default function ApplicationDetail() {
 
       setApp(current => ({
         ...current,
+        payee_id: payeeId,
+        payee_name: payeeName || null,
         bank_name: bankName || null,
         bank_account: bankAccount || null,
       }))
@@ -968,7 +1013,7 @@ export default function ApplicationDetail() {
       ])
       setShowBankEdit(false)
     } catch (err) {
-      setBankEditError(err.message || 'Could not save bank details')
+      setBankEditError(err.message || 'Could not save receiving and bank details')
     } finally {
       setBankEditSaving(false)
     }
@@ -1997,7 +2042,7 @@ export default function ApplicationDetail() {
                 <div className="form-label" style={{ marginBottom:0 }}>Receiving & Bank Details</div>
                 {canEditBankDetails && !showBankEdit && (
                   <button type="button" className="btn btn-outline btn-sm" onClick={openBankDetailsEdit}>
-                    Edit bank details
+                    Edit details
                   </button>
                 )}
               </div>
@@ -2009,6 +2054,16 @@ export default function ApplicationDetail() {
                   marginBottom:'18px',
                   background:'var(--cream)',
                 }}>
+                  <div className="form-group">
+                    <label className="form-label">Receiving Company</label>
+                    <input
+                      className="form-control"
+                      value={bankEditForm.payee_name}
+                      onChange={e => setBankEditForm(current => ({ ...current, payee_name: e.target.value }))}
+                      placeholder="Enter receiving company"
+                      autoFocus
+                    />
+                  </div>
                   <div className="form-row">
                     <div>
                       <label className="form-label">Bank Name</label>
@@ -2017,7 +2072,6 @@ export default function ApplicationDetail() {
                         value={bankEditForm.bank_name}
                         onChange={e => setBankEditForm(current => ({ ...current, bank_name: e.target.value }))}
                         placeholder="Enter bank name"
-                        autoFocus
                       />
                     </div>
                     <div>
