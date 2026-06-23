@@ -377,10 +377,10 @@ tbody tr:last-child { border-bottom: none; }
 /* Off-screen A4 document used by html2pdf export. */
 .voucher-print.voucher-pdf-exporting {
   display: block;
-  position: fixed;
+  position: absolute;
   left: 0;
   top: 0;
-  z-index: 9999;
+  z-index: -1;
   width: 190mm;
   padding: 10mm;
   box-sizing: content-box;

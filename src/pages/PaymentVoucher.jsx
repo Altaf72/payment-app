@@ -549,21 +549,44 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     }
     setExportingPdf(true)
     setError('')
+    let exportElement = null
     try {
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const html2pdf = (await import('html2pdf.js')).default
+      exportElement = printRef.current.cloneNode(true)
+      exportElement.classList.add('voucher-pdf-document')
+      exportElement.style.cssText = [
+        'display:block',
+        'position:relative',
+        'left:auto',
+        'top:auto',
+        'z-index:auto',
+        'width:190mm',
+        'padding:0',
+        'margin:0',
+        'background:#fff',
+      ].join(';')
+      document.body.appendChild(exportElement)
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       await html2pdf().set({
-        margin: 0,
+        margin: [10, 10, 10, 10],
         filename: `${form.voucher_number || (isReceipt ? 'receipt-voucher' : 'payment-voucher')}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          logging: false,
+          backgroundColor: '#ffffff',
+        },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      }).from(printRef.current).save()
+      }).from(exportElement).save()
       setMessage('PDF downloaded')
     } catch (downloadError) {
       setError(downloadError.message || 'Could not export PDF')
     } finally {
+      exportElement?.remove()
       setExportingPdf(false)
       if (searchParams.get('download') === '1') {
         setSearchParams({ voucher: currentVoucherId })
