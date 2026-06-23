@@ -3,6 +3,8 @@ import { useMemo, useRef, useState } from 'react'
 const HISTORY_PREFIX = 'qbo_posting_history_'
 const DEFAULTS_PREFIX = 'qbo_posting_defaults_'
 const LAST_BACKUP_KEY = 'qbo_posting_last_backup'
+const VOUCHER_HISTORY_KEY = 'voucher_name_history'
+const VOUCHER_LAST_BACKUP_KEY = 'voucher_name_history_last_backup'
 
 function readQboStorage() {
   const companies = {}
@@ -29,12 +31,37 @@ function uniqueRecent(imported = [], existing = []) {
   ).slice(0, 25)
 }
 
+function readVoucherStorage() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VOUCHER_HISTORY_KEY) || '{}')
+    return {
+      payees: Array.isArray(parsed.payees) ? parsed.payees : [],
+      receivingCompanies: Array.isArray(parsed.receivingCompanies) ? parsed.receivingCompanies : [],
+      preparedBy: Array.isArray(parsed.preparedBy) ? parsed.preparedBy : [],
+      approvedBy: Array.isArray(parsed.approvedBy) ? parsed.approvedBy : [],
+      receivedBy: Array.isArray(parsed.receivedBy) ? parsed.receivedBy : [],
+    }
+  } catch {
+    return { payees: [], receivingCompanies: [], preparedBy: [], approvedBy: [], receivedBy: [] }
+  }
+}
+
 function mergeHistory(imported = {}, existing = {}) {
   return {
     debitAccounts: uniqueRecent(imported.debitAccounts, existing.debitAccounts),
     creditAccounts: uniqueRecent(imported.creditAccounts, existing.creditAccounts),
     taxes: uniqueRecent(imported.taxes, existing.taxes),
     classes: uniqueRecent(imported.classes, existing.classes),
+  }
+}
+
+function mergeVoucherHistory(imported = {}, existing = {}) {
+  return {
+    payees: uniqueRecent(imported.payees, existing.payees),
+    receivingCompanies: uniqueRecent(imported.receivingCompanies, existing.receivingCompanies),
+    preparedBy: uniqueRecent(imported.preparedBy, existing.preparedBy),
+    approvedBy: uniqueRecent(imported.approvedBy, existing.approvedBy),
+    receivedBy: uniqueRecent(imported.receivedBy, existing.receivedBy),
   }
 }
 
@@ -49,16 +76,28 @@ function countValues(companies) {
   }, 0)
 }
 
+function countVoucherValues(history) {
+  return (history.payees?.length || 0) +
+    (history.receivingCompanies?.length || 0) +
+    (history.preparedBy?.length || 0) +
+    (history.approvedBy?.length || 0) +
+    (history.receivedBy?.length || 0)
+}
+
 export default function QboSettings() {
   const fileRef = useRef()
+  const voucherFileRef = useRef()
   const [replaceExisting, setReplaceExisting] = useState(false)
   const [message, setMessage] = useState({ type:'', text:'' })
   const [revision, setRevision] = useState(0)
 
   const companies = useMemo(() => readQboStorage(), [revision])
+  const voucherHistory = useMemo(() => readVoucherStorage(), [revision])
   const companyCount = Object.keys(companies).length
   const valueCount = countValues(companies)
+  const voucherValueCount = countVoucherValues(voucherHistory)
   const lastBackup = localStorage.getItem(LAST_BACKUP_KEY)
+  const voucherLastBackup = localStorage.getItem(VOUCHER_LAST_BACKUP_KEY)
 
   function downloadBackup() {
     const backup = {
@@ -77,6 +116,25 @@ export default function QboSettings() {
     localStorage.setItem(LAST_BACKUP_KEY, backup.exported_at)
     setRevision(value => value + 1)
     setMessage({ type:'success', text:`Downloaded QBO backup for ${companyCount} company record(s).` })
+  }
+
+  function downloadVoucherBackup() {
+    const backup = {
+      type: 'payment-app-voucher-local-data',
+      version: 1,
+      exported_at: new Date().toISOString(),
+      history: voucherHistory,
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type:'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `voucher-local-data-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    localStorage.setItem(VOUCHER_LAST_BACKUP_KEY, backup.exported_at)
+    setRevision(value => value + 1)
+    setMessage({ type:'success', text:`Downloaded voucher local data backup with ${voucherValueCount} remembered value(s).` })
   }
 
   async function restoreBackup(event) {
@@ -131,14 +189,55 @@ export default function QboSettings() {
     }
   }
 
+  async function restoreVoucherBackup(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setMessage({ type:'', text:'' })
+
+    try {
+      const backup = JSON.parse(await file.text())
+      if (backup?.type !== 'payment-app-voucher-local-data' || backup?.version !== 1 || !backup?.history) {
+        throw new Error('This is not a valid Payment App voucher local data backup file.')
+      }
+
+      const existing = replaceExisting ? {} : readVoucherStorage()
+      const history = mergeVoucherHistory(backup.history || {}, existing)
+      localStorage.setItem(VOUCHER_HISTORY_KEY, JSON.stringify(history))
+      setRevision(value => value + 1)
+      setMessage({
+        type:'success',
+        text:`Voucher local data ${replaceExisting ? 'replaced' : 'merged'} successfully from ${file.name}.`,
+      })
+    } catch (error) {
+      setMessage({ type:'error', text:error.message || 'Could not restore voucher local data backup.' })
+    }
+  }
+
   return (
     <div>
       <div className="page-header">
-        <h1>QBO Settings</h1>
-        <p>Finance-owned local account suggestions and portable backup</p>
+        <h1>Finance Local Settings</h1>
+        <p>Finance-owned local suggestions and portable backups</p>
       </div>
 
       {message.text && <div className={`alert alert-${message.type}`}>{message.text}</div>}
+
+      <label style={{
+        display:'flex',alignItems:'flex-start',gap:'8px',padding:'12px',
+        border:'1px solid var(--border-2)',borderRadius:'var(--radius-sm)',background:'var(--cream)',
+        marginBottom:'18px',
+      }}>
+        <input type="checkbox" checked={replaceExisting}
+          onChange={event => setReplaceExisting(event.target.checked)}
+          style={{marginTop:'3px'}} />
+        <span>
+          <strong style={{display:'block',fontSize:'12px'}}>Replace existing local data during restore</strong>
+          <span style={{fontSize:'11px',color:'var(--ink-3)'}}>
+            Leave unchecked to merge the imported file with values already stored on this computer.
+          </span>
+        </span>
+      </label>
 
       <div className="stats-row">
         <div className="stat-card">
@@ -153,6 +252,33 @@ export default function QboSettings() {
           <div className="stat-label">Last Backup</div>
           <div style={{fontSize:'14px',fontWeight:600,marginTop:'8px'}}>
             {lastBackup ? new Date(lastBackup).toLocaleString('en-GB') : 'No backup downloaded yet'}
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom:'18px' }}>
+        <div className="card-header">
+          <h2>Voucher Local Data Backup</h2>
+          <span className="text-sm text-muted">{voucherValueCount} remembered value(s)</span>
+        </div>
+        <div className="card-body">
+          <p style={{fontSize:'13px',color:'var(--ink-2)',marginBottom:'14px'}}>
+            The backup contains only remembered Payee Name, Receiving Company, Prepared By, Approved By and Received By suggestions.
+          </p>
+          <div style={{fontSize:'12px',color:'var(--ink-3)',marginBottom:'18px'}}>
+            Last voucher backup: {voucherLastBackup ? new Date(voucherLastBackup).toLocaleString('en-GB') : 'No backup downloaded yet'}
+          </div>
+
+          <div style={{display:'flex',gap:'10px',flexWrap:'wrap'}}>
+            <button className="btn btn-primary" type="button" onClick={downloadVoucherBackup}
+              disabled={voucherValueCount === 0}>
+              Download Voucher Data
+            </button>
+            <button className="btn btn-outline" type="button" onClick={() => voucherFileRef.current?.click()}>
+              Restore Voucher Data
+            </button>
+            <input ref={voucherFileRef} type="file" accept=".json,application/json"
+              onChange={restoreVoucherBackup} style={{display:'none'}} />
           </div>
         </div>
       </div>
@@ -178,21 +304,6 @@ export default function QboSettings() {
             <input ref={fileRef} type="file" accept=".json,application/json"
               onChange={restoreBackup} style={{display:'none'}} />
           </div>
-
-          <label style={{
-            display:'flex',alignItems:'flex-start',gap:'8px',padding:'12px',
-            border:'1px solid var(--border-2)',borderRadius:'var(--radius-sm)',background:'var(--cream)',
-          }}>
-            <input type="checkbox" checked={replaceExisting}
-              onChange={event => setReplaceExisting(event.target.checked)}
-              style={{marginTop:'3px'}} />
-            <span>
-              <strong style={{display:'block',fontSize:'12px'}}>Replace existing local QBO data</strong>
-              <span style={{fontSize:'11px',color:'var(--ink-3)'}}>
-                Leave unchecked to merge the imported file with values already stored on this computer.
-              </span>
-            </span>
-          </label>
         </div>
       </div>
     </div>

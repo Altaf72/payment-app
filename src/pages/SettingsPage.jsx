@@ -127,6 +127,10 @@ export default function SettingsPage() {
   const [newCompany, setNewCompany]     = useState({ name: '', prefix: '' })
   const [logoUploading, setLogoUploading] = useState(null)
   const [savingColor, setSavingColor]     = useState(null)
+  const [editingCompanyName, setEditingCompanyName] = useState(null)
+  const [companyNameDraft, setCompanyNameDraft] = useState('')
+  const [editingUserName, setEditingUserName] = useState(null)
+  const [userNameDraft, setUserNameDraft] = useState('')
   const [userAppCounts, setUserAppCounts] = useState({})
   const [mergeSource, setMergeSource]     = useState(null)
   const [mergeTarget, setMergeTarget]     = useState('')
@@ -318,8 +322,40 @@ export default function SettingsPage() {
     load()
   }
 
+  function startEditCompanyName(company) {
+    setEditingCompanyName(company.id)
+    setCompanyNameDraft(company.name || '')
+  }
+
+  async function saveCompanyName(id) {
+    const name = companyNameDraft.trim()
+    if (!name) return flash('error', 'Company name is required')
+    const { error } = await supabase.from('companies').update({ name }).eq('id', id)
+    if (error) return flash('error', error.message)
+    setEditingCompanyName(null)
+    setCompanyNameDraft('')
+    flash('success', 'Company name updated')
+    load()
+  }
+
   async function toggleCompany(id, active) {
     await supabase.from('companies').update({ active: !active }).eq('id', id)
+    load()
+  }
+
+  function startEditUserName(user) {
+    setEditingUserName(user.id)
+    setUserNameDraft(user.full_name || '')
+  }
+
+  async function saveUserName(id) {
+    const fullName = userNameDraft.trim()
+    if (!fullName) return flash('error', 'Display name is required')
+    const { error } = await supabase.from('users').update({ full_name: fullName }).eq('id', id)
+    if (error) return flash('error', error.message)
+    setEditingUserName(null)
+    setUserNameDraft('')
+    flash('success', 'Display name updated')
     load()
   }
 
@@ -450,7 +486,30 @@ export default function SettingsPage() {
                   <tbody>
                     {companies.map(c => (
                       <tr key={c.id}>
-                        <td style={{fontWeight:500}}>{c.name}</td>
+                        <td style={{fontWeight:500,minWidth:'260px'}}>
+                          {editingCompanyName === c.id ? (
+                            <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap'}}>
+                              <input
+                                className="form-control"
+                                value={companyNameDraft}
+                                onChange={e => setCompanyNameDraft(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') saveCompanyName(c.id)
+                                  if (e.key === 'Escape') setEditingCompanyName(null)
+                                }}
+                                autoFocus
+                                style={{minWidth:'220px'}}
+                              />
+                              <button className="btn btn-primary btn-sm" onClick={() => saveCompanyName(c.id)}>Save</button>
+                              <button className="btn btn-outline btn-sm" onClick={() => setEditingCompanyName(null)}>Cancel</button>
+                            </div>
+                          ) : (
+                            <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+                              <span>{c.name}</span>
+                              <button className="btn btn-outline btn-sm" onClick={() => startEditCompanyName(c)}>Edit Name</button>
+                            </div>
+                          )}
+                        </td>
                         <td><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:'12px'}}>{c.prefix}</span></td>
                         <td>
                           <CompanyColorPicker
@@ -503,7 +562,32 @@ export default function SettingsPage() {
                             width:'10px',height:'10px',borderRadius:'50%',flexShrink:0,
                             background: isMerged ? '#9ca3af' : u.is_active ? '#059669' : '#dc2626',
                           }} title={isMerged ? 'Merged' : u.is_active ? 'Active' : 'Deactivated'} />
-                          <span style={{fontWeight:600,fontSize:'14px'}}>{u.full_name}</span>
+                          {editingUserName === u.id ? (
+                            <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap'}}>
+                              <input
+                                className="form-control"
+                                value={userNameDraft}
+                                onChange={e => setUserNameDraft(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') saveUserName(u.id)
+                                  if (e.key === 'Escape') setEditingUserName(null)
+                                }}
+                                autoFocus
+                                style={{width:'170px',padding:'5px 8px',fontSize:'12px'}}
+                              />
+                              <button className="btn btn-primary btn-sm" onClick={() => saveUserName(u.id)}>Save</button>
+                              <button className="btn btn-outline btn-sm" onClick={() => setEditingUserName(null)}>Cancel</button>
+                            </div>
+                          ) : (
+                            <>
+                              <span style={{fontWeight:600,fontSize:'14px'}}>{u.full_name}</span>
+                              {!isMerged && (
+                                <button className="btn btn-outline btn-sm" onClick={() => startEditUserName(u)}>
+                                  Edit Name
+                                </button>
+                              )}
+                            </>
+                          )}
                           {isMerged && <span className="badge badge-draft" style={{fontSize:'10px'}}>Merged</span>}
                           {!u.is_active && !isMerged && <span className="badge badge-rejected" style={{fontSize:'10px'}}>Inactive</span>}
                         </div>

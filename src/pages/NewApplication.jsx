@@ -70,6 +70,16 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
     }
   }
 
+  function closeIfFocusLeft() {
+    window.setTimeout(() => {
+      if (!containerRef.current?.contains(document.activeElement)) {
+        setOpen(false)
+        setAdding(false)
+        setCursor(-1)
+      }
+    }, 120)
+  }
+
   // Close on outside click
   useEffect(() => {
     function handler(e) {
@@ -82,7 +92,7 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
   }, [])
 
   return (
-    <div className="autocomplete-wrap" ref={containerRef}>
+    <div className="autocomplete-wrap" ref={containerRef} onBlur={closeIfFocusLeft}>
       <input
         ref={inputRef}
         className="form-control"
@@ -138,7 +148,7 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
 }
 
 // ── Payee autocomplete (free-text + suggestions) ─────────────
-function PayeeInput({ payees, value, onChange, onSelect }) {
+function PayeeInput({ payees, value, onChange, onSelect, canDelete, onDelete }) {
   const [open, setOpen]     = useState(false)
   const [cursor, setCursor] = useState(-1)
   const containerRef        = useRef()
@@ -163,8 +173,17 @@ function PayeeInput({ payees, value, onChange, onSelect }) {
     else if (e.key === 'Escape') setOpen(false)
   }
 
+  function closeIfFocusLeft() {
+    window.setTimeout(() => {
+      if (!containerRef.current?.contains(document.activeElement)) {
+        setOpen(false)
+        setCursor(-1)
+      }
+    }, 120)
+  }
+
   return (
-    <div className="autocomplete-wrap" ref={containerRef}>
+    <div className="autocomplete-wrap" ref={containerRef} onBlur={closeIfFocusLeft}>
       <input
         className="form-control"
         placeholder="Search existing or type new company…"
@@ -180,11 +199,33 @@ function PayeeInput({ payees, value, onChange, onSelect }) {
             <div
               key={p.id}
               className="autocomplete-item"
-              style={{ background: cursor === i ? 'var(--cream-2)' : '' }}
+              style={{
+                background: cursor === i ? 'var(--cream-2)' : '',
+                display:'flex',
+                alignItems:'center',
+                justifyContent:'space-between',
+                gap:'10px',
+              }}
               onMouseDown={e => { e.preventDefault(); onSelect(p); setOpen(false) }}
             >
-              {p.company_name}
-              {p.bank_name && <div className="sub">{p.bank_name} · {p.bank_account}</div>}
+              <div style={{minWidth:0}}>
+                <div style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.company_name}</div>
+                {p.bank_name && <div className="sub">{p.bank_name} · {p.bank_account}</div>}
+              </div>
+              {canDelete && (
+                <button
+                  type="button"
+                  className="autocomplete-delete"
+                  title="Delete receiving company"
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onDelete?.(p)
+                  }}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -195,7 +236,7 @@ function PayeeInput({ payees, value, onChange, onSelect }) {
 
 // ── Main form ─────────────────────────────────────────────────
 export default function NewApplication() {
-  const { user, profile } = useAuth()
+  const { user, profile, isSuperAdmin } = useAuth()
   const navigate           = useNavigate()
   const [searchParams]     = useSearchParams()
   const editId             = searchParams.get('edit')
@@ -472,6 +513,28 @@ export default function NewApplication() {
     return data?.id || null
   }
 
+  async function deletePayee(payee) {
+    if (!isSuperAdmin || !payee?.id) return
+    const confirmed = window.confirm(`Delete receiving company "${payee.company_name}" from suggestions?\n\nExisting applications will not be changed.`)
+    if (!confirmed) return
+
+    setError('')
+    const { error: deleteError } = await supabase
+      .from('payees')
+      .delete()
+      .eq('id', payee.id)
+    if (deleteError) {
+      setError(`Could not delete receiving company. If this is blocked by permissions, run sql/superadmin_delete_payees.sql in Supabase. ${deleteError.message}`)
+      return
+    }
+
+    setPayees(current => current.filter(item => item.id !== payee.id))
+    setForm(current => current.payee_name.trim().toLowerCase() === payee.company_name.trim().toLowerCase()
+      ? { ...current, payee_name:'', bank_id:'', bank_name:'', bank_account:'' }
+      : current
+    )
+  }
+
   async function uploadAttachments(appId) {
     const uploaded = []
     for (let index = 0; index < attachments.length; index += 1) {
@@ -667,7 +730,7 @@ export default function NewApplication() {
           <div className="form-row">
             <div className="form-group">
               <label className="form-label">付款金额 <span className="cn">Amount (AED)</span><span className="required">*</span></label>
-              <input className="form-control" type="number" step="0.01" min="0" placeholder="0.00"
+              <input className="form-control no-number-spinner" type="number" step="0.01" min="0" placeholder="0.00"
                 value={form.amount} onChange={e => set('amount', e.target.value)} />
             </div>
             <div className="form-group">
@@ -682,6 +745,8 @@ export default function NewApplication() {
             <PayeeInput
               payees={payees}
               value={form.payee_name}
+              canDelete={isSuperAdmin}
+              onDelete={deletePayee}
               onChange={val => set('payee_name', val)}
               onSelect={p => {
                 const bk = banks.find(b => b.name === p.bank_name)

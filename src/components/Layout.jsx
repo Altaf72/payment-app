@@ -87,7 +87,7 @@ export default function Layout() {
             </button>
             <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}
               onClick={() => go('/qbo-settings')}>
-              <span className="icon">Q</span> QBO Settings
+              <span className="icon">L</span> Local Settings
             </button>
           </>
         )}
@@ -122,7 +122,7 @@ export default function Layout() {
           </button>
           <div style={{marginTop:'10px',textAlign:'center',fontSize:'10px',
             color:'rgba(255,255,255,0.72)',letterSpacing:'.08em',fontWeight:600,
-            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.6</div>
+            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.14</div>
         </div>
       </aside>
 

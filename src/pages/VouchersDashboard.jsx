@@ -124,7 +124,7 @@ export default function VouchersDashboard() {
     amount: filtered.reduce((sum, voucher) => sum + Number(voucher.amount || 0), 0),
   }), [vouchers, filtered])
 
-  function voucherUrl(voucher, download = false) {
+  function voucherUrl(voucher) {
     const type = voucher.voucher_type || 'payment'
     const base = type === 'receipt'
       ? '/receipt-voucher/new'
@@ -132,7 +132,6 @@ export default function VouchersDashboard() {
         ? `/application/${voucher.application_id}/payment-voucher`
         : '/payment-voucher/new'
     const params = new URLSearchParams({ voucher: voucher.id, from: 'vouchers' })
-    if (download) params.set('download', '1')
     return `${base}?${params.toString()}`
   }
 
@@ -225,8 +224,7 @@ export default function VouchersDashboard() {
                       <td style={{textAlign:'right',whiteSpace:'nowrap'}}>AED {formatCurrency(voucher.amount)}</td>
                       <td>
                         <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                          <button className="btn btn-outline btn-sm" onClick={() => openVoucherPath(voucherUrl(voucher))}>Edit</button>
-                          <button className="btn btn-gold btn-sm" onClick={() => openVoucherPath(voucherUrl(voucher, true))}>PDF</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => openVoucherPath(voucherUrl(voucher))}>Open</button>
                         </div>
                       </td>
                     </tr>
