@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -32,10 +32,13 @@ function displayDate(value) {
   })
 }
 
-function PaymentVoucherPrint({ application, company, form, cheques, profile, isReceipt }) {
+function PaymentVoucherPrint({ application, company, form, cheques, profile, isReceipt, printRef, exportingPdf }) {
   const chequeRows = form.payment_mode === 'Cheque' ? cheques : []
+  const description = form.payment_reason?.trim()
+  const narration = form.narration?.trim()
+  const remarks = form.remarks?.trim()
   return (
-    <div className="voucher-print">
+    <div ref={printRef} className={`voucher-print ${exportingPdf ? 'voucher-pdf-exporting' : ''}`}>
       <div className="voucher-print-status">{form.status === 'saved' ? (isReceipt ? 'RECEIVED' : 'PAID') : 'DRAFT'}</div>
       <header className="voucher-print-header">
         <div className="voucher-print-logo">
@@ -98,11 +101,26 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile, isR
         </section>
       )}
 
-      <section className="voucher-print-section">
-        <h2>Description / Narration</h2>
-        <p>{form.narration || form.payment_reason || '-'}</p>
-        {form.remarks && <p className="voucher-print-remarks">Remarks: {form.remarks}</p>}
-      </section>
+      {description && (
+        <section className="voucher-print-section">
+          <h2>{isReceipt ? 'Receipt Description' : 'Payment Description'}</h2>
+          <p>{description}</p>
+        </section>
+      )}
+
+      {narration && (
+        <section className="voucher-print-section">
+          <h2>Narration</h2>
+          <p>{narration}</p>
+        </section>
+      )}
+
+      {remarks && (
+        <section className="voucher-print-section">
+          <h2>Remarks</h2>
+          <p className="voucher-print-remarks">{remarks}</p>
+        </section>
+      )}
 
       <section className="voucher-signatures">
         <div><span>Prepared By</span><strong>{form.prepared_by_name || profile?.full_name || ''}</strong><i>Signature</i></div>
@@ -127,6 +145,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user, profile } = useAuth()
+  const printRef = useRef(null)
+  const autoDownloadRef = useRef('')
 
   const [application, setApplication] = useState(null)
   const [company, setCompany] = useState(null)
@@ -139,6 +159,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [exportingPdf, setExportingPdf] = useState(false)
   const [form, setForm] = useState({
     voucher_number: '',
     installment_no: 1,
@@ -161,6 +182,19 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   useEffect(() => {
     load()
   }, [applicationId, voucherType])
+
+  useEffect(() => {
+    const requestedVoucherId = searchParams.get('voucher')
+    if (
+      loading ||
+      searchParams.get('download') !== '1' ||
+      !currentVoucherId ||
+      currentVoucherId !== requestedVoucherId ||
+      autoDownloadRef.current === requestedVoucherId
+    ) return
+    autoDownloadRef.current = requestedVoucherId
+    handleDownloadPdf()
+  }, [loading, currentVoucherId, searchParams])
 
   async function load() {
     setLoading(true)
@@ -507,6 +541,36 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     window.print()
   }
 
+  async function handleDownloadPdf() {
+    const validationError = validate()
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+    setExportingPdf(true)
+    setError('')
+    try {
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const html2pdf = (await import('html2pdf.js')).default
+      await html2pdf().set({
+        margin: 0,
+        filename: `${form.voucher_number || (isReceipt ? 'receipt-voucher' : 'payment-voucher')}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+      }).from(printRef.current).save()
+      setMessage('PDF downloaded')
+    } catch (downloadError) {
+      setError(downloadError.message || 'Could not export PDF')
+    } finally {
+      setExportingPdf(false)
+      if (searchParams.get('download') === '1') {
+        setSearchParams({ voucher: currentVoucherId })
+      }
+    }
+  }
+
   if (loading) return <div className="empty-state"><p>Loading {isReceipt ? 'receipt' : 'payment'} voucher...</p></div>
   if (error && !application && !isStandalone) return <div className="alert alert-error">{error}</div>
   if (!schemaReady) {
@@ -553,6 +617,9 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
               {saving ? 'Saving...' : 'Save'}
             </button>
             <button className="btn btn-gold" onClick={handlePrint}>Print</button>
+            <button className="btn btn-gold" disabled={exportingPdf} onClick={handleDownloadPdf}>
+              {exportingPdf ? 'Exporting...' : 'Export PDF'}
+            </button>
           </div>
         </div>
 
@@ -767,6 +834,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         cheques={cheques}
         profile={profile}
         isReceipt={isReceipt}
+        printRef={printRef}
+        exportingPdf={exportingPdf}
       />
     </div>
   )

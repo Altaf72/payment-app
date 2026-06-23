@@ -374,6 +374,69 @@ tbody tr:last-child { border-bottom: none; }
 .voucher-cheques td { padding: 6px; }
 .voucher-cheques .form-control { min-width: 110px; padding: 7px 8px; font-size: 12px; }
 
+/* Off-screen A4 document used by html2pdf export. */
+.voucher-print.voucher-pdf-exporting {
+  display: block;
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 190mm;
+  padding: 10mm;
+  box-sizing: content-box;
+  color: #111827;
+  background: #fff;
+  font-family: Arial, sans-serif;
+}
+.voucher-pdf-exporting .voucher-print-status {
+  position: absolute; top: 17mm; right: 18mm; border: 2px solid #15803d;
+  color: #15803d; border-radius: 4px; padding: 3px 10px; font-size: 12px;
+  font-weight: 800; letter-spacing: .12em;
+}
+.voucher-pdf-exporting .voucher-print-header {
+  min-height: 28mm; display: grid; grid-template-columns: 30mm 1fr 42mm;
+  align-items: center; gap: 5mm; border-bottom: 2px solid #8b6914; padding-bottom: 5mm;
+}
+.voucher-pdf-exporting .voucher-print-logo img {
+  display: block; max-width: 28mm; max-height: 22mm; object-fit: contain;
+}
+.voucher-pdf-exporting .voucher-logo-placeholder {
+  width: 22mm; height: 18mm; border: 1px solid #d1d5db; display: flex;
+  align-items: center; justify-content: center; font-weight: 700; color: #6b7280;
+}
+.voucher-pdf-exporting .voucher-print-header h1 { font-size: 18px; text-align: center; text-transform: uppercase; }
+.voucher-pdf-exporting .voucher-print-header p { font-size: 12px; font-weight: 800; letter-spacing: .18em; text-align: center; margin-top: 3px; }
+.voucher-pdf-exporting .voucher-print-number { font-family: 'Courier New', monospace; font-size: 13px; font-weight: 800; text-align: right; margin-top: 16mm; }
+.voucher-pdf-exporting .voucher-print-summary {
+  margin-top: 6mm; display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #d1d5db;
+}
+.voucher-pdf-exporting .voucher-print-summary > div { padding: 3mm; border-right: 1px solid #d1d5db; }
+.voucher-pdf-exporting .voucher-print-summary > div:last-child { border-right: none; }
+.voucher-pdf-exporting .voucher-print-summary span,
+.voucher-pdf-exporting .voucher-paid-to span {
+  display: block; color: #6b7280; font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.voucher-pdf-exporting .voucher-print-summary strong { display: block; font-size: 11px; margin-top: 1mm; }
+.voucher-pdf-exporting .voucher-print-summary .voucher-total { grid-column: span 4; border-top: 1px solid #d1d5db; text-align: right; }
+.voucher-pdf-exporting .voucher-print-summary .voucher-total strong { font-size: 16px; color: #8b6914; }
+.voucher-pdf-exporting .voucher-amount-words { background: #f9fafb; border: 1px solid #d1d5db; border-top: none; padding: 3mm; font-size: 11px; font-weight: 700; }
+.voucher-pdf-exporting .voucher-paid-to { display: grid; grid-template-columns: 32mm 1fr; align-items: center; margin-top: 5mm; padding: 3mm; border: 1px solid #d1d5db; }
+.voucher-pdf-exporting .voucher-paid-to strong { font-size: 13px; text-transform: uppercase; }
+.voucher-pdf-exporting .voucher-print-section { margin-top: 5mm; break-inside: avoid; }
+.voucher-pdf-exporting .voucher-print-section h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2mm; }
+.voucher-pdf-exporting .voucher-print-section table { width: 100%; border-collapse: collapse; font-size: 9px; }
+.voucher-pdf-exporting .voucher-print-section th,
+.voucher-pdf-exporting .voucher-print-section td { border: 1px solid #d1d5db; padding: 2mm; }
+.voucher-pdf-exporting .voucher-print-section th { background: #f3f4f6; }
+.voucher-pdf-exporting .voucher-print-section .number { text-align: right; white-space: nowrap; }
+.voucher-pdf-exporting .voucher-print-section p { border: 1px solid #d1d5db; padding: 3mm; font-size: 10px; white-space: pre-wrap; }
+.voucher-pdf-exporting .voucher-signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8mm; margin-top: 14mm; break-inside: avoid; }
+.voucher-pdf-exporting .voucher-signatures > div { text-align: center; }
+.voucher-pdf-exporting .voucher-signatures span { display: block; font-size: 9px; color: #6b7280; text-transform: uppercase; }
+.voucher-pdf-exporting .voucher-signatures strong { display: block; min-height: 12mm; padding-top: 2mm; font-size: 10px; }
+.voucher-pdf-exporting .voucher-signatures i { display: block; border-top: 1px solid #111827; padding-top: 2mm; font-size: 8px; font-style: normal; color: #6b7280; }
+.voucher-pdf-exporting footer { margin-top: 8mm; border-top: 1px solid #e5e7eb; padding-top: 2mm; text-align: center; font-size: 8px; color: #9ca3af; }
+
 @media print {
   @page {
     size: A4 portrait;
@@ -478,8 +541,8 @@ tbody tr:last-child { border-bottom: none; }
   .voucher-print-section td { border: 1px solid #d1d5db; padding: 2mm; }
   .voucher-print-section th { background: #f3f4f6; }
   .voucher-print-section .number { text-align: right; white-space: nowrap; }
-  .voucher-print-section p { border: 1px solid #d1d5db; padding: 3mm; min-height: 13mm; font-size: 10px; white-space: pre-wrap; }
-  .voucher-print-section .voucher-print-remarks { border-top: none; min-height: auto; color: #4b5563; }
+  .voucher-print-section p { border: 1px solid #d1d5db; padding: 3mm; font-size: 10px; white-space: pre-wrap; }
+  .voucher-print-section .voucher-print-remarks { color: #4b5563; }
   .voucher-signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8mm; margin-top: 14mm; }
   .voucher-signatures > div { text-align: center; }
   .voucher-signatures span { display: block; font-size: 9px; color: #6b7280; text-transform: uppercase; }

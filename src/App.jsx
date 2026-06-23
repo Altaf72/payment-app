@@ -11,6 +11,7 @@ import MyProfile from './pages/MyProfile'
 import ResetPasswordPage from './pages/ResetPasswordPage'
 import PaymentVoucher from './pages/PaymentVoucher'
 import QboSettings from './pages/QboSettings'
+import VouchersDashboard from './pages/VouchersDashboard'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -52,6 +53,11 @@ export default function App() {
         <Route path="receipt-voucher/new" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
             <PaymentVoucher voucherType="receipt" />
+          </PrivateRoute>
+        } />
+        <Route path="vouchers" element={
+          <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
+            <VouchersDashboard />
           </PrivateRoute>
         } />
         <Route path="dashboard" element={
