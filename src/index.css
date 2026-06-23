@@ -234,6 +234,22 @@ tbody tr:last-child { border-bottom: none; }
 
 /* Responsive */
 @media (max-width: 768px) {
+  .voucher-action-header {
+    margin: -8px -6px 14px !important;
+    padding: 8px 6px !important;
+  }
+  .voucher-action-header h1 { font-size: 18px !important; }
+  .voucher-action-header > div:last-child {
+    width: 100%;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .voucher-action-header .btn {
+    flex: 0 0 auto;
+    padding: 7px 11px;
+    font-size: 12px;
+  }
   .app-shell {
     display: block;
     height: 100vh;
@@ -364,6 +380,19 @@ tbody tr:last-child { border-bottom: none; }
 /* Payment voucher */
 .voucher-print { display: none; }
 .voucher-stats .stat-value { font-size: 18px; }
+.voucher-action-header {
+  position: sticky;
+  top: 0;
+  z-index: 110;
+  margin: -6px -8px 18px;
+  padding: 10px 8px;
+  background: rgba(247, 245, 239, .97);
+  border-bottom: 1px solid var(--border-2);
+  box-shadow: 0 4px 10px rgba(23, 23, 46, .06);
+  backdrop-filter: blur(8px);
+}
+.voucher-action-header h1 { font-size: 21px; }
+.voucher-action-header p { margin-top: 2px; }
 .voucher-cheques {
   margin-top: 6px;
   padding: 16px;
@@ -443,6 +472,13 @@ tbody tr:last-child { border-bottom: none; }
     size: A4 portrait;
     margin: 10mm;
   }
+  .mobile-header,
+  .mobile-menu-button,
+  .mobile-sidebar-close,
+  .mobile-sidebar-backdrop,
+  .sidebar {
+    display: none !important;
+  }
   html, body, #root {
     width: auto;
     height: auto;
@@ -459,6 +495,9 @@ tbody tr:last-child { border-bottom: none; }
     padding: 0;
     overflow: visible;
     background: #fff;
+  }
+  .app-shell {
+    padding-top: 0 !important;
   }
   .voucher-screen { display: none !important; }
   .voucher-print {

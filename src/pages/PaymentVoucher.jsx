@@ -36,7 +36,6 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile, isR
   const chequeRows = form.payment_mode === 'Cheque' ? cheques : []
   const description = form.payment_reason?.trim()
   const narration = form.narration?.trim()
-  const remarks = form.remarks?.trim()
   return (
     <div ref={printRef} className={`voucher-print ${exportingPdf ? 'voucher-pdf-exporting' : ''}`}>
       <div className="voucher-print-status">{form.status === 'saved' ? (isReceipt ? 'RECEIVED' : 'PAID') : 'DRAFT'}</div>
@@ -115,13 +114,6 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile, isR
         </section>
       )}
 
-      {remarks && (
-        <section className="voucher-print-section">
-          <h2>Remarks</h2>
-          <p className="voucher-print-remarks">{remarks}</p>
-        </section>
-      )}
-
       <section className="voucher-signatures">
         <div><span>Prepared By</span><strong>{form.prepared_by_name || profile?.full_name || ''}</strong><i>Signature</i></div>
         <div><span>Approved By</span><strong>{form.approved_by_name || ''}</strong><i>Signature</i></div>
@@ -145,6 +137,9 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user, profile } = useAuth()
+  const openedFromVouchers = searchParams.get('from') === 'vouchers'
+  const backPath = isStandalone || openedFromVouchers ? '/vouchers' : `/application/${applicationId}`
+  const backLabel = isStandalone || openedFromVouchers ? 'Back to Vouchers Dashboard' : 'Back to Application'
   const printRef = useRef(null)
   const autoDownloadRef = useRef('')
 
@@ -287,7 +282,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     if (!appData) return
     const next = nextPaymentVoucherNumber(companyData?.prefix, appData.ref_number, vouchers)
     setCurrentVoucherId(null)
-    setSearchParams({})
+    setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
     setForm({
       voucher_number: next.voucherNumber,
       installment_no: next.installmentNo,
@@ -320,7 +315,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       ? vouchers.filter(voucher => voucher.company_id === companyData.id)
       : []
     setCurrentVoucherId(null)
-    setSearchParams({})
+    setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
     setCompany(companyData || null)
     setForm({
       voucher_number: companyData
@@ -356,7 +351,12 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
 
   async function editVoucher(voucher, updateUrl = true) {
     setCurrentVoucherId(voucher.id)
-    if (updateUrl) setSearchParams({ voucher: voucher.id })
+    if (updateUrl) {
+      setSearchParams({
+        voucher: voucher.id,
+        ...(openedFromVouchers ? { from: 'vouchers' } : {}),
+      })
+    }
     setForm({
       voucher_number: voucher.voucher_number || '',
       installment_no: voucher.installment_no || 1,
@@ -492,7 +492,10 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         if (insertError) throw insertError
         voucher = data
         setCurrentVoucherId(voucher.id)
-        setSearchParams({ voucher: voucher.id })
+        setSearchParams({
+          voucher: voucher.id,
+          ...(openedFromVouchers ? { from: 'vouchers' } : {}),
+        })
       }
 
       await supabase.from('voucher_cheques').delete().eq('voucher_id', voucher.id)
@@ -589,7 +592,10 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       exportElement?.remove()
       setExportingPdf(false)
       if (searchParams.get('download') === '1') {
-        setSearchParams({ voucher: currentVoucherId })
+        setSearchParams({
+          voucher: currentVoucherId,
+          ...(openedFromVouchers ? { from: 'vouchers' } : {}),
+        })
       }
     }
   }
@@ -599,8 +605,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   if (!schemaReady) {
     return (
       <div>
-        <button className="btn btn-outline btn-sm" onClick={() => navigate(isStandalone ? '/dashboard' : `/application/${applicationId}`)} style={{ marginBottom:'16px' }}>
-          {isStandalone ? 'Back to Dashboard' : 'Back to Application'}
+        <button className="btn btn-outline btn-sm" onClick={() => navigate(backPath)} style={{ marginBottom:'16px' }}>
+          {backLabel}
         </button>
         <div className="alert alert-warning">
           <strong>{isReceipt ? 'Receipt' : 'Payment'} Voucher database setup is required.</strong>
@@ -613,10 +619,10 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   return (
     <div>
       <div className="voucher-screen">
-        <div className="page-header flex justify-between items-center" style={{ gap:'16px', flexWrap:'wrap' }}>
+        <div className="page-header voucher-action-header flex justify-between items-center" style={{ gap:'16px', flexWrap:'wrap' }}>
           <div>
-            <button className="btn btn-outline btn-sm" onClick={() => navigate(isStandalone ? '/dashboard' : `/application/${applicationId}`)} style={{ marginBottom:'8px' }}>
-              {isStandalone ? 'Back to Dashboard' : 'Back to Application'}
+            <button className="btn btn-outline btn-sm" onClick={() => navigate(backPath)} style={{ marginBottom:'8px' }}>
+              {backLabel}
             </button>
             <h1>
               {isReceipt
@@ -784,9 +790,21 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
               <label className="form-label">{isReceipt ? 'Receipt Reason' : 'Payment Reason'}</label>
               <textarea className="form-control" value={form.payment_reason} onChange={e => setField('payment_reason', e.target.value)} />
             </div>
-            <div className="form-group">
-              <label className="form-label">Remarks</label>
-              <textarea className="form-control" value={form.remarks} onChange={e => setField('remarks', e.target.value)} />
+            <div className="form-group" style={{
+              padding:'12px',
+              border:'1px dashed var(--border)',
+              borderRadius:'var(--radius-sm)',
+              background:'var(--cream-2)',
+            }}>
+              <label className="form-label" style={{color:'var(--ink-3)'}}>Remarks - Internal Only</label>
+              <textarea
+                className="form-control"
+                value={form.remarks}
+                onChange={e => setField('remarks', e.target.value)}
+                placeholder="Internal notes for Finance"
+                style={{background:'#f3f4f6',color:'var(--ink-2)'}}
+              />
+              <div className="form-hint">For internal use only. This will not be printed or included in the PDF voucher.</div>
             </div>
             <div className="form-group">
               <label className="form-label">Description / Narration</label>

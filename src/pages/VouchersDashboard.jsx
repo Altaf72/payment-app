@@ -3,6 +3,16 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { formatCurrency } from '../lib/utils'
 
+const STORAGE_KEY = 'vouchers_dashboard_filters'
+
+function getSavedDashboardState() {
+  try {
+    return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
 function displayDate(value) {
   if (!value) return '—'
   return new Date(`${value}T00:00:00`).toLocaleDateString('en-GB', {
@@ -14,18 +24,53 @@ function displayDate(value) {
 
 export default function VouchersDashboard() {
   const navigate = useNavigate()
+  const saved = getSavedDashboardState()
   const [vouchers, setVouchers] = useState([])
   const [companies, setCompanies] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [search, setSearch] = useState('')
-  const [typeFilter, setTypeFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [companyFilter, setCompanyFilter] = useState('all')
+  const [search, setSearch] = useState(saved.search || '')
+  const [typeFilter, setTypeFilter] = useState(saved.typeFilter || 'all')
+  const [statusFilter, setStatusFilter] = useState(saved.statusFilter || 'all')
+  const [companyFilter, setCompanyFilter] = useState(saved.companyFilter || 'all')
 
   useEffect(() => {
     load()
   }, [])
+
+  useEffect(() => {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      search,
+      typeFilter,
+      statusFilter,
+      companyFilter,
+      scrollTop: getSavedDashboardState().scrollTop || 0,
+    }))
+  }, [search, typeFilter, statusFilter, companyFilter])
+
+  useEffect(() => {
+    if (loading) return
+    const main = document.querySelector('.main-content')
+    if (main) main.scrollTop = Number(getSavedDashboardState().scrollTop) || 0
+  }, [loading])
+
+  function rememberPosition() {
+    const current = getSavedDashboardState()
+    const main = document.querySelector('.main-content')
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      ...current,
+      search,
+      typeFilter,
+      statusFilter,
+      companyFilter,
+      scrollTop: main?.scrollTop || 0,
+    }))
+  }
+
+  function openVoucherPath(path) {
+    rememberPosition()
+    navigate(path)
+  }
 
   async function load() {
     setLoading(true)
@@ -86,7 +131,7 @@ export default function VouchersDashboard() {
       : voucher.application_id
         ? `/application/${voucher.application_id}/payment-voucher`
         : '/payment-voucher/new'
-    const params = new URLSearchParams({ voucher: voucher.id })
+    const params = new URLSearchParams({ voucher: voucher.id, from: 'vouchers' })
     if (download) params.set('download', '1')
     return `${base}?${params.toString()}`
   }
@@ -99,8 +144,8 @@ export default function VouchersDashboard() {
           <p>Payment and receipt vouchers</p>
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-          <button className="btn btn-primary" onClick={() => navigate('/payment-voucher/new')}>New Payment Voucher</button>
-          <button className="btn btn-outline" onClick={() => navigate('/receipt-voucher/new')}>New Receipt Voucher</button>
+          <button className="btn btn-primary" onClick={() => openVoucherPath('/payment-voucher/new?from=vouchers')}>New Payment Voucher</button>
+          <button className="btn btn-outline" onClick={() => openVoucherPath('/receipt-voucher/new?from=vouchers')}>New Receipt Voucher</button>
         </div>
       </div>
 
@@ -180,8 +225,8 @@ export default function VouchersDashboard() {
                       <td style={{textAlign:'right',whiteSpace:'nowrap'}}>AED {formatCurrency(voucher.amount)}</td>
                       <td>
                         <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                          <button className="btn btn-outline btn-sm" onClick={() => navigate(voucherUrl(voucher))}>Edit</button>
-                          <button className="btn btn-gold btn-sm" onClick={() => navigate(voucherUrl(voucher, true))}>PDF</button>
+                          <button className="btn btn-outline btn-sm" onClick={() => openVoucherPath(voucherUrl(voucher))}>Edit</button>
+                          <button className="btn btn-gold btn-sm" onClick={() => openVoucherPath(voucherUrl(voucher, true))}>PDF</button>
                         </div>
                       </td>
                     </tr>
