@@ -122,6 +122,18 @@ with check (
   )
 );
 
+drop policy if exists "Super admins can delete payment vouchers" on public.payment_vouchers;
+create policy "Super admins can delete payment vouchers"
+on public.payment_vouchers for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.users
+    where users.id = auth.uid()
+      and users.role = 'superadmin'
+  )
+);
+
 drop policy if exists "Authenticated users can view voucher cheques" on public.voucher_cheques;
 create policy "Authenticated users can view voucher cheques"
 on public.voucher_cheques for select
@@ -147,5 +159,5 @@ with check (
   )
 );
 
-grant select, insert, update on public.payment_vouchers to authenticated;
+grant select, insert, update, delete on public.payment_vouchers to authenticated;
 grant select, insert, update, delete on public.voucher_cheques to authenticated;
