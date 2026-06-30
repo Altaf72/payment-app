@@ -109,6 +109,16 @@ function parseDeletedFinanceAttachment(note) {
 }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
+const USED_REFS_KEY = 'finance_dashboard_used_refs'
+
+function loadUsedRefs() {
+  try {
+    const refs = JSON.parse(localStorage.getItem(USED_REFS_KEY) || '[]')
+    return new Set(Array.isArray(refs) ? refs : [])
+  } catch {
+    return new Set()
+  }
+}
 
 export default function FinanceDashboard() {
   const { user, profile } = useAuth()
@@ -127,6 +137,7 @@ export default function FinanceDashboard() {
   const [batchMsg, setBatchMsg]         = useState('')
   const [quickActionLoading, setQuickActionLoading] = useState(null)
   const [undoBatchLoading, setUndoBatchLoading] = useState(null)
+  const [usedRefs, setUsedRefs] = useState(loadUsedRefs)
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = 'finance_dashboard_filters'
@@ -171,6 +182,17 @@ export default function FinanceDashboard() {
       setCompaniesSorted([...(data||[])].sort((a,b) => (a.created_at||'').localeCompare(b.created_at||'')))
     })
   }, [])
+
+  function markReferenceUsed(refNumber) {
+    const ref = String(refNumber || '').trim()
+    if (!ref) return
+    setUsedRefs(current => {
+      const next = new Set(current)
+      next.add(ref)
+      localStorage.setItem(USED_REFS_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
 
   async function load() {
     setLoading(true)
@@ -801,6 +823,7 @@ export default function FinanceDashboard() {
                   const dotColor = dbColor || col?.accent || '#999'
                   const quickActions = getQuickActions(app)
                   const totalCols = 10
+                  const refWasUsed = usedRefs.has(app.ref_number)
                   return (
                     <React.Fragment key={app.id}>
                       <tr style={{lineHeight:'1.3'}}>
@@ -815,13 +838,23 @@ export default function FinanceDashboard() {
                         {/* Reference + copy button */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
-                            <span style={{fontSize:'11px',fontWeight:400,whiteSpace:'nowrap',letterSpacing:'.01em'}}>
+                            <span
+                              title={refWasUsed ? 'Reference copied/used on this computer' : ''}
+                              style={{
+                                fontSize:'11px',
+                                fontWeight:400,
+                                whiteSpace:'nowrap',
+                                letterSpacing:'.01em',
+                                color: refWasUsed ? '#b45309' : 'var(--ink)',
+                              }}
+                            >
                               {app.ref_number || '—'}
                             </span>
                             <button
                               title="Copy reference number"
                               onClick={() => {
                                 navigator.clipboard.writeText(app.ref_number || '')
+                                markReferenceUsed(app.ref_number)
                                 const el = document.getElementById(`copied-${app.id}`)
                                 if (el) { el.style.opacity=1; setTimeout(()=>el.style.opacity=0,1200) }
                               }}
