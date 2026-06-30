@@ -815,7 +815,7 @@ export default function FinanceDashboard() {
                         {/* Reference + copy button */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
-                            <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:'11px',fontWeight:600,whiteSpace:'nowrap'}}>
+                            <span style={{fontSize:'11px',fontWeight:400,whiteSpace:'nowrap',letterSpacing:'.01em'}}>
                               {app.ref_number || '—'}
                             </span>
                             <button

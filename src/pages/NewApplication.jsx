@@ -9,8 +9,6 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
   const [input, setInput]       = useState('')
   const [open, setOpen]         = useState(false)
   const [cursor, setCursor]     = useState(-1)
-  const [adding, setAdding]     = useState(false)
-  const [newVal, setNewVal]     = useState('')
   const listRef                 = useRef([])
   const inputRef                = useRef()
   const containerRef            = useRef()
@@ -34,20 +32,25 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
     onChange(opt.id, opt.name)
     setInput(opt.name)
     setOpen(false)
-    setAdding(false)
     setCursor(-1)
     // Blur the input so no stale focus keeps dropdown open
     if (inputRef.current) inputRef.current.blur()
   }
 
-  async function commitNew() {
-    const name = newVal.trim() || input.trim()
+  async function commitNew(nameValue = input) {
+    const name = String(nameValue || '').trim()
     if (!name) return
-    const id = await onChange('__new__', name)
-    setInput(name)
-    setAdding(false)
-    setNewVal('')
-    setOpen(false)
+    try {
+      const id = await onChange('__new__', name)
+      setInput(name)
+      setOpen(false)
+      setCursor(-1)
+      if (inputRef.current) inputRef.current.blur()
+      return id
+    } catch (error) {
+      window.alert(error.message || `Could not add "${name}"`)
+      return null
+    }
   }
 
   function handleKey(e) {
@@ -63,7 +66,7 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
       if (cursor >= 0 && cursor < filtered.length) {
         selectOption(filtered[cursor])
       } else if (cursor === filtered.length && allowNew) {
-        setAdding(true); setNewVal(input)
+        commitNew(input)
       }
     } else if (e.key === 'Escape') {
       setOpen(false); setCursor(-1)
@@ -74,7 +77,6 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
     window.setTimeout(() => {
       if (!containerRef.current?.contains(document.activeElement)) {
         setOpen(false)
-        setAdding(false)
         setCursor(-1)
       }
     }, 120)
@@ -122,23 +124,9 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
             <div
               className="autocomplete-item"
               style={{ color: 'var(--gold)', fontWeight: 500, background: cursor === filtered.length ? 'var(--cream-2)' : '' }}
-              onMouseDown={e => { e.preventDefault(); setAdding(true); setNewVal(input.trim()) }}
+              onMouseDown={e => { e.preventDefault(); commitNew(input) }}
             >
               ＋ Add "{input.trim()}"
-            </div>
-          )}
-          {allowNew && adding && (
-            <div style={{ padding: '8px 12px', display: 'flex', gap: '6px' }} onMouseDown={e => e.preventDefault()}>
-              <input
-                className="form-control"
-                value={newVal}
-                onChange={e => setNewVal(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') commitNew(); if (e.key === 'Escape') setAdding(false) }}
-                autoFocus
-                style={{ fontSize: '12px', padding: '4px 8px' }}
-              />
-              <button className="btn btn-primary btn-sm" onClick={commitNew}>Add</button>
-              <button className="btn btn-outline btn-sm" onClick={() => setAdding(false)}>✕</button>
             </div>
           )}
         </div>
@@ -485,17 +473,20 @@ export default function NewApplication() {
 
   // Add-new handlers return the new ID
   async function addReason(name) {
-    const { data } = await supabase.from('payment_reasons').insert({ name, added_by: user.id }).select().single()
+    const { data, error } = await supabase.from('payment_reasons').insert({ name, added_by: user.id }).select().single()
+    if (error) throw error
     if (data) setPaymentReasons(r => [...r, data])
     return data?.id
   }
   async function addMethod(name) {
-    const { data } = await supabase.from('payment_methods').insert({ name, added_by: user.id }).select().single()
+    const { data, error } = await supabase.from('payment_methods').insert({ name, added_by: user.id }).select().single()
+    if (error) throw error
     if (data) setPaymentMethods(m => [...m, data])
     return data?.id
   }
   async function addBank(name) {
-    const { data } = await supabase.from('banks').insert({ name }).select().single()
+    const { data, error } = await supabase.from('banks').insert({ name }).select().single()
+    if (error) throw error
     if (data) setBanks(b => [...b, data])
     return data?.id
   }
