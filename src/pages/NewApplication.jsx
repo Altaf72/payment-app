@@ -120,7 +120,7 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
               {o.name}
             </div>
           ))}
-          {allowNew && !adding && input.trim() && (
+          {allowNew && input.trim() && (
             <div
               className="autocomplete-item"
               style={{ color: 'var(--gold)', fontWeight: 500, background: cursor === filtered.length ? 'var(--cream-2)' : '' }}
