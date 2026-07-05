@@ -378,9 +378,11 @@ export async function parsePayrollWorkbook(file) {
   let lastTeam = ''
 
   rows.slice(1).forEach(row => {
-    if (required.serial !== null && !textValue(row[required.serial])) return
+    const slNo = textValue(row[required.serial])
     const employee = textValue(row[required.employee])
     if (!employee) return
+    const company = optional.company === null ? '' : textValue(row[optional.company]).toUpperCase()
+    if (!slNo && !company) return
     const team = textValue(row[optional.team])
     if (team) lastTeam = team
     const currentSalary = numberValue(row[required.current_salary])
@@ -392,7 +394,6 @@ export async function parsePayrollWorkbook(file) {
     const commission = numberValue(row[optional.commission])
     const advance = numberValue(row[optional.advance])
     const depositedCash = numberValue(row[optional.deposited_cash])
-    const company = optional.company === null ? '' : textValue(row[optional.company]).toUpperCase()
     const salaryExpense = totalPayable - commission - advance - depositedCash
     const rawShares = Object.fromEntries(Object.entries(shareColumns).map(([entity, col]) => [entity, readShare(row[col])]))
     const shares = normalizeShares(rawShares, company, entities)
@@ -423,7 +424,7 @@ export async function parsePayrollWorkbook(file) {
     })
 
     employees.push({
-      slNo: textValue(row[required.serial]),
+      slNo,
       employee,
       name: employee,
       team,

@@ -20,6 +20,39 @@ const THEME = {
   subtle: '#8fa2bd',
 }
 
+const PAYROLL_SESSION_KEY = 'paymentapp.payroll.session'
+const PAYROLL_LAST_FILE_KEY = 'paymentapp.payroll.lastFile'
+
+function readStoredPayroll() {
+  try {
+    const stored = sessionStorage.getItem(PAYROLL_SESSION_KEY)
+    return stored ? JSON.parse(stored) : null
+  } catch {
+    return null
+  }
+}
+
+function readLastPayrollFile() {
+  try {
+    return localStorage.getItem(PAYROLL_LAST_FILE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberPayroll(payroll, fileLabel) {
+  try {
+    sessionStorage.setItem(PAYROLL_SESSION_KEY, JSON.stringify(payroll))
+  } catch {
+    // Session restore is a convenience; keep the upload working even if storage is full.
+  }
+  try {
+    localStorage.setItem(PAYROLL_LAST_FILE_KEY, fileLabel)
+  } catch {
+    // Ignore local storage failures.
+  }
+}
+
 function money(value) {
   return `AED ${formatCurrency(Number(value || 0))}`
 }
@@ -476,8 +509,78 @@ function IntercompanyNet({ mhWaterfall, hhWaterfall, records, onShow }) {
   )
 }
 
+function ChannelBookSummary({ records, onShow }) {
+  const channelRows = [
+    {
+      key: 'WPS-ENBD',
+      label: 'WPS-ENBD',
+      owner: 'MH',
+      note: 'belongs to MH - HH trx is done to help',
+      records: records.filter(row => row.channelType === 'WPS-ENBD'),
+      helpField: 'hhAmount',
+    },
+    {
+      key: 'WPS-JAE',
+      label: 'WPS-JAE',
+      owner: 'HH',
+      note: 'belongs to HH - MH trx is done to help',
+      records: records.filter(row => row.channelType === 'WPS-JAE'),
+      helpField: 'mhAmount',
+    },
+    {
+      key: 'BANK',
+      label: 'Bank',
+      owner: 'Own books',
+      note: 'bank transfers follow the company book on each row',
+      records: records.filter(row => row.channelType === 'BANK'),
+      helpField: null,
+    },
+    {
+      key: 'CASH',
+      label: 'Cash',
+      owner: 'Own books',
+      note: 'cash payments follow the company book on each row',
+      records: records.filter(row => row.channelType === 'CASH'),
+      helpField: null,
+    },
+  ].map(row => ({
+    ...row,
+    total: row.records.reduce((amount, record) => amount + record.mhAmount + record.hhAmount, 0),
+    mhAmount: sum(row.records, 'mhAmount'),
+    hhAmount: sum(row.records, 'hhAmount'),
+    helpAmount: row.helpField ? sum(row.records, row.helpField) : 0,
+  }))
+
+  return (
+    <div style={{ marginTop:'16px', borderTop:`1px solid ${THEME.lineSoft}`, paddingTop:'14px' }}>
+      <div style={{ color:THEME.muted, fontSize:'12px', marginBottom:'8px' }}>Channel book summary</div>
+      <MiniTable
+        columns={[
+          { key:'label', label:'Channel' },
+          { key:'owner', label:'Belongs To' },
+          { key:'total', label:'Total Paid', num:true },
+          { key:'mhAmount', label:'MH Amount', num:true },
+          { key:'hhAmount', label:'HH Amount', num:true },
+          { key:'helpAmount', label:'Help Amount', num:true },
+          { key:'note', label:'Note' },
+        ]}
+        rows={channelRows}
+        onRowClick={row => onShow(`${row.label} Channel Rows`, row.records, [
+          { key:'name', label:'Name' },
+          { key:'company', label:'Company' },
+          { key:'paymentMode', label:'Payment Mode' },
+          { key:'mhAmount', label:'MH Amount', num:true },
+          { key:'hhAmount', label:'HH Amount', num:true },
+          { key:'total', label:'Total', num:true },
+        ])}
+      />
+    </div>
+  )
+}
+
 export default function PayrollWorkbookDashboard() {
-  const [payroll, setPayroll] = useState(null)
+  const [payroll, setPayroll] = useState(() => readStoredPayroll())
+  const [lastPayrollFile, setLastPayrollFile] = useState(() => readLastPayrollFile())
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -547,7 +650,11 @@ export default function PayrollWorkbookDashboard() {
     setLoading(true)
     setError('')
     try {
-      setPayroll(await parsePayrollWorkbook(file))
+      const parsedPayroll = await parsePayrollWorkbook(file)
+      const fileLabel = file.path || file.webkitRelativePath || file.name
+      setPayroll(parsedPayroll)
+      setLastPayrollFile(fileLabel)
+      rememberPayroll(parsedPayroll, fileLabel)
     } catch (parseError) {
       setPayroll(null)
       setError(parseError.message || 'Could not read payroll workbook')
@@ -583,6 +690,7 @@ export default function PayrollWorkbookDashboard() {
         </div>
         <div style={{ display:'flex', gap:'10px', alignItems:'center', flexWrap:'wrap' }}>
           {payroll && <span style={{ color:THEME.muted, fontSize:'12px', fontFamily:'monospace' }}>{payroll.fileName} · Main · {records.length} rows</span>}
+          {!payroll && lastPayrollFile && <span style={{ color:THEME.muted, fontSize:'12px', fontFamily:'monospace' }}>Last file: {lastPayrollFile}</span>}
           {payroll && <button type="button" className="btn btn-outline btn-sm" onClick={exportLedger}>Export Ledger CSV</button>}
           <label style={{ background:'#C9A66B', color:'#1A1408', padding:'10px 16px', borderRadius:'8px', fontWeight:700, cursor:'pointer' }}>
             {loading ? 'Reading...' : 'Choose payroll file'}
@@ -598,6 +706,9 @@ export default function PayrollWorkbookDashboard() {
           <div style={{ width:'46px', height:'46px', margin:'0 auto 18px', border:`1px solid ${THEME.line}`, borderRadius:'8px', display:'grid', placeItems:'center', color:THEME.muted, fontFamily:'monospace' }}>XLS</div>
           <h2 style={{ color:THEME.text, margin:'0 0 10px' }}>No workbook loaded</h2>
           <p style={{ color:THEME.muted, lineHeight:1.6 }}>Choose the monthly payroll file, for example PAYROLL JUNE2026.xlsm. The console reads Main sheet A:AB locally in your browser.</p>
+          {lastPayrollFile && (
+            <p style={{ color:THEME.subtle, lineHeight:1.6, marginTop:'12px', fontFamily:'monospace' }}>Last loaded: {lastPayrollFile}</p>
+          )}
         </ConsoleCard>
       ) : (
         <div style={{ display:'grid', gap:'16px' }}>
@@ -668,6 +779,7 @@ export default function PayrollWorkbookDashboard() {
               <WaterfallEntity waterfall={analysis.hhWaterfall} records={records} onShow={showRows} />
             </div>
             <IntercompanyNet mhWaterfall={analysis.mhWaterfall} hhWaterfall={analysis.hhWaterfall} records={records} onShow={showRows} />
+            <ChannelBookSummary records={records} onShow={showRows} />
           </ConsoleCard>
 
           <ConsoleCard>
