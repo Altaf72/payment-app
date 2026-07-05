@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { parsePayrollWorkbook, payrollRowsToCsv } from '../lib/payrollWorkbook'
 import { formatCurrency } from '../lib/utils'
 
@@ -22,6 +22,124 @@ const THEME = {
 
 const PAYROLL_SESSION_KEY = 'paymentapp.payroll.session'
 const PAYROLL_LAST_FILE_KEY = 'paymentapp.payroll.lastFile'
+const LANGUAGE_KEY = 'paymentapp.displayLanguage'
+
+const PAYROLL_TEXT = {
+  en: {
+    consoleTitle: 'Payroll Review Console',
+    mainSheet: 'Main',
+    rows: 'rows',
+    lastFile: 'Last file',
+    exportLedger: 'Export Ledger CSV',
+    reading: 'Reading...',
+    chooseFile: 'Choose payroll file',
+    noWorkbook: 'No workbook loaded',
+    noWorkbookHelp: 'Choose the monthly payroll file, for example PAYROLL JUNE2026.xlsm. The console reads Main sheet A:AB locally in your browser.',
+    lastLoaded: 'Last loaded',
+    headcount: 'Headcount',
+    payrollRows: 'payroll rows',
+    totalPayroll: 'Total Payroll',
+    mainTotalColumn: 'Main sheet Total column',
+    fixedSalary: 'Fixed Salary',
+    fixedSalaryColumn: 'Fix Salary column',
+    commission: 'Commission',
+    commissionColumn: 'Commission column',
+    deductions: 'Deductions',
+    deductionColumn: 'Deduction column',
+    actualCost: 'Actual Cost',
+    stampHint: "The stamps use the workbook's own MH Amount and HH Amount columns. Click a stamp to inspect contributing rows.",
+    byCompanyTag: 'By Company Tag',
+    companyHeadcountHint: 'Company column, headcount view',
+    byActualCost: 'By Actual Cost to Company',
+    allocationHint: 'MH Amount / HH Amount allocation view',
+    totalColumn: 'Total column',
+    paymentModeExposure: 'Payment Mode & WPS Exposure',
+    paymentModeHint: 'Payment Mode split by entity amount',
+    costComposition: 'Cost Composition - Accrual Build-Up',
+    costCompositionHint: 'Fix+Support+Addon-Deduction, Commission, Other - by MH/HH Share%',
+    settlement: 'Settlement Waterfall & Intercompany Position',
+    settlementHint: 'How the payable actually gets cleared, per disbursing bank/cash',
+    advanceControl: 'Advance & Deduction Control',
+    advanceHint: 'Positive advances and applied deductions by company',
+    byTeam: 'By Team / Department',
+    byTeamHint: 'Team carried down from Main sheet',
+    byRole: 'By Role',
+    byRoleHint: 'Role column',
+    top10: 'Top 10 By Total Cost',
+    top10Hint: 'Grouped by Sl No, so salary + commission rows combine',
+    reviewFlags: 'Review Flags',
+    noFlags: 'No review flags found.',
+    employeeLedger: 'Employee Ledger',
+    shownRows: 'row(s) shown',
+    searchPlaceholder: 'Search name / code / remarks',
+    allCompanies: 'All companies',
+    allRoles: 'All roles',
+    allPaymentModes: 'All payment modes',
+    hideZeroRows: 'Hide zero rows',
+    close: 'Close',
+  },
+  zh: {
+    consoleTitle: '工资审核控制台',
+    mainSheet: '主表',
+    rows: '行',
+    lastFile: '上次文件',
+    exportLedger: '导出明细 CSV',
+    reading: '读取中...',
+    chooseFile: '选择工资文件',
+    noWorkbook: '未加载工资表',
+    noWorkbookHelp: '请选择每月工资文件，例如 PAYROLL JUNE2026.xlsm。系统会在浏览器本地读取 Main 表 A:AB。',
+    lastLoaded: '上次加载',
+    headcount: '人数',
+    payrollRows: '工资行',
+    totalPayroll: '工资总额',
+    mainTotalColumn: 'Main 表 Total 列',
+    fixedSalary: '固定工资',
+    fixedSalaryColumn: 'Fix Salary 列',
+    commission: '佣金',
+    commissionColumn: 'Commission 列',
+    deductions: '扣款',
+    deductionColumn: 'Deduction 列',
+    actualCost: '实际成本',
+    stampHint: '圆章使用工资表中的 MH Amount 和 HH Amount 列。点击圆章可查看明细行。',
+    byCompanyTag: '按公司标签',
+    companyHeadcountHint: 'Company 列，按人数查看',
+    byActualCost: '按公司实际成本',
+    allocationHint: 'MH Amount / HH Amount 分摊视图',
+    totalColumn: 'Total 列',
+    paymentModeExposure: '付款方式与 WPS 分布',
+    paymentModeHint: '按公司金额拆分付款方式',
+    costComposition: '成本组成 - 应计构成',
+    costCompositionHint: 'Fix+Support+Addon-Deduction、Commission、Other，按 MH/HH 比例',
+    settlement: '结算瀑布与公司间余额',
+    settlementHint: '按实际付款银行/现金渠道查看应付如何清算',
+    advanceControl: '预支与扣款控制',
+    advanceHint: '按公司查看预支和已扣款',
+    byTeam: '按团队 / 部门',
+    byTeamHint: '从 Main 表带出的 Team',
+    byRole: '按岗位',
+    byRoleHint: 'Role 列',
+    top10: '总成本前 10',
+    top10Hint: '按 Sl No 合并，所以工资和佣金行会合计',
+    reviewFlags: '复核提示',
+    noFlags: '未发现复核提示。',
+    employeeLedger: '员工明细',
+    shownRows: '行显示',
+    searchPlaceholder: '搜索姓名 / 编号 / 备注',
+    allCompanies: '全部公司',
+    allRoles: '全部岗位',
+    allPaymentModes: '全部付款方式',
+    hideZeroRows: '隐藏零金额行',
+    close: '关闭',
+  },
+}
+
+function readDisplayLanguage() {
+  try {
+    return localStorage.getItem(LANGUAGE_KEY) === 'zh' ? 'zh' : 'en'
+  } catch {
+    return 'en'
+  }
+}
 
 function readStoredPayroll() {
   try {
@@ -105,6 +223,11 @@ function groupSum(records, key, amountKey = 'total') {
     result[label] = (result[label] || 0) + Number(record[amountKey] || 0)
   })
   return Object.entries(result).sort((a, b) => b[1] - a[1])
+}
+
+function isLedgerZeroRow(row) {
+  return ['fixSalary', 'commission', 'deduction', 'total', 'mhAmount', 'hhAmount']
+    .every(key => Math.abs(Number(row[key] || 0)) < 0.005)
 }
 
 function derivePayrollReviewFields(record) {
@@ -597,17 +720,33 @@ function ChannelBookSummary({ records, onShow }) {
 export default function PayrollWorkbookDashboard() {
   const [payroll, setPayroll] = useState(() => readStoredPayroll())
   const [lastPayrollFile, setLastPayrollFile] = useState(() => readLastPayrollFile())
+  const [displayLanguage, setDisplayLanguage] = useState(() => readDisplayLanguage())
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [companyFilter, setCompanyFilter] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
   const [modeFilter, setModeFilter] = useState('')
+  const [hideZeroRows, setHideZeroRows] = useState(false)
   const [modal, setModal] = useState(null)
 
   const baseRecords = payroll?.employees || []
   const records = useMemo(() => baseRecords.map(derivePayrollReviewFields), [baseRecords])
   const groups = useMemo(() => buildEmployeeGroups(records), [records])
+  const text = PAYROLL_TEXT[displayLanguage]
+
+  useEffect(() => {
+    function handleLanguageChange(event) {
+      if (event.type === 'storage' && event.key && event.key !== LANGUAGE_KEY) return
+      setDisplayLanguage(event.detail === 'zh' || readDisplayLanguage() === 'zh' ? 'zh' : 'en')
+    }
+    window.addEventListener('paymentapp:language-change', handleLanguageChange)
+    window.addEventListener('storage', handleLanguageChange)
+    return () => {
+      window.removeEventListener('paymentapp:language-change', handleLanguageChange)
+      window.removeEventListener('storage', handleLanguageChange)
+    }
+  }, [])
 
   const analysis = useMemo(() => {
     if (!payroll) return null
@@ -655,9 +794,10 @@ export default function PayrollWorkbookDashboard() {
       if (companyFilter && row.company !== companyFilter) return false
       if (roleFilter && row.role !== roleFilter) return false
       if (modeFilter && row.paymentMode !== modeFilter) return false
+      if (hideZeroRows && isLedgerZeroRow(row)) return false
       return true
     })
-  }, [companyFilter, modeFilter, records, roleFilter, search])
+  }, [companyFilter, hideZeroRows, modeFilter, records, roleFilter, search])
 
   async function handleFile(event) {
     const file = event.target.files?.[0]
@@ -698,18 +838,18 @@ export default function PayrollWorkbookDashboard() {
   const roleMax = Math.max(...(analysis?.byRole || []).map(([, value]) => Math.abs(value)), 1)
 
   return (
-    <div style={{ background:THEME.bg, color:THEME.text, margin:'-24px', padding:'24px', minHeight:'calc(100vh - 48px)' }}>
+    <div className="payroll-console" style={{ background:THEME.bg, color:THEME.text, margin:'-24px', padding:'24px', minHeight:'calc(100vh - 48px)' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', gap:'16px', flexWrap:'wrap', borderBottom:`1px solid ${THEME.line}`, paddingBottom:'18px', marginBottom:'22px' }}>
         <div>
-          <div style={{ color:THEME.muted, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.14em' }}>Payroll Review Console</div>
+          <div style={{ color:THEME.muted, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.14em' }}>{text.consoleTitle}</div>
           <h1 style={{ margin:'4px 0 0', color:THEME.text, fontSize:'26px' }}>Million Homes · HomesVIP</h1>
         </div>
         <div style={{ display:'flex', gap:'10px', alignItems:'center', flexWrap:'wrap' }}>
-          {payroll && <span style={{ color:THEME.muted, fontSize:'12px', fontFamily:'monospace' }}>{payroll.fileName} · Main · {records.length} rows</span>}
-          {!payroll && lastPayrollFile && <span style={{ color:THEME.muted, fontSize:'12px', fontFamily:'monospace' }}>Last file: {lastPayrollFile}</span>}
-          {payroll && <button type="button" className="btn btn-outline btn-sm" onClick={exportLedger}>Export Ledger CSV</button>}
+          {payroll && <span style={{ color:THEME.muted, fontSize:'12px', fontFamily:'monospace' }}>{payroll.fileName} · {text.mainSheet} · {records.length} {text.rows}</span>}
+          {!payroll && lastPayrollFile && <span style={{ color:THEME.muted, fontSize:'12px', fontFamily:'monospace' }}>{text.lastFile}: {lastPayrollFile}</span>}
+          {payroll && <button type="button" className="btn btn-outline btn-sm" onClick={exportLedger}>{text.exportLedger}</button>}
           <label style={{ background:'#C9A66B', color:'#1A1408', padding:'10px 16px', borderRadius:'8px', fontWeight:700, cursor:'pointer' }}>
-            {loading ? 'Reading...' : 'Choose payroll file'}
+            {loading ? text.reading : text.chooseFile}
             <input type="file" accept=".xlsx,.xlsm" onChange={handleFile} style={{ display:'none' }} />
           </label>
         </div>
@@ -720,56 +860,56 @@ export default function PayrollWorkbookDashboard() {
       {!payroll || !analysis ? (
         <ConsoleCard style={{ maxWidth:'560px', margin:'60px auto', textAlign:'center', borderStyle:'dashed', padding:'52px 28px' }}>
           <div style={{ width:'46px', height:'46px', margin:'0 auto 18px', border:`1px solid ${THEME.line}`, borderRadius:'8px', display:'grid', placeItems:'center', color:THEME.muted, fontFamily:'monospace' }}>XLS</div>
-          <h2 style={{ color:THEME.text, margin:'0 0 10px' }}>No workbook loaded</h2>
-          <p style={{ color:THEME.muted, lineHeight:1.6 }}>Choose the monthly payroll file, for example PAYROLL JUNE2026.xlsm. The console reads Main sheet A:AB locally in your browser.</p>
+          <h2 style={{ color:THEME.text, margin:'0 0 10px' }}>{text.noWorkbook}</h2>
+          <p style={{ color:THEME.muted, lineHeight:1.6 }}>{text.noWorkbookHelp}</p>
           {lastPayrollFile && (
-            <p style={{ color:THEME.subtle, lineHeight:1.6, marginTop:'12px', fontFamily:'monospace' }}>Last loaded: {lastPayrollFile}</p>
+            <p style={{ color:THEME.subtle, lineHeight:1.6, marginTop:'12px', fontFamily:'monospace' }}>{text.lastLoaded}: {lastPayrollFile}</p>
           )}
         </ConsoleCard>
       ) : (
         <div style={{ display:'grid', gap:'16px' }}>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(170px, 1fr))', gap:'12px' }}>
-            <Kpi label="Headcount" value={analysis.totals.headcount} sub={`${analysis.totals.rows} payroll rows`} onClick={() => showRows('Unique Staff', groups, [
+            <Kpi label={text.headcount} value={analysis.totals.headcount} sub={`${analysis.totals.rows} ${text.payrollRows}`} onClick={() => showRows('Unique Staff', groups, [
               { key:'name', label:'Name' }, { key:'company', label:'Company' }, { key:'teamFilled', label:'Team' }, { key:'role', label:'Role' }, { key:'total', label:'Total', num:true },
             ])} />
-            <Kpi label="Total Payroll" value={money(analysis.totals.total)} sub="Main sheet Total column" onClick={() => showRows('Total Payroll Rows', records, ledgerColumns())} />
-            <Kpi label="Fixed Salary" value={money(analysis.totals.fixedSalary)} sub="Fix Salary column" />
-            <Kpi label="Commission" value={money(analysis.totals.commission)} sub="Commission column" onClick={() => showRows('Commission Rows', records.filter(row => row.commission > 0), ledgerColumns())} />
-            <Kpi label="Deductions" value={money(analysis.totals.deduction)} sub="Deduction column" onClick={() => showRows('Deduction Rows', records.filter(row => row.deduction > 0), ledgerColumns())} />
+            <Kpi label={text.totalPayroll} value={money(analysis.totals.total)} sub={text.mainTotalColumn} onClick={() => showRows('Total Payroll Rows', records, ledgerColumns())} />
+            <Kpi label={text.fixedSalary} value={money(analysis.totals.fixedSalary)} sub={text.fixedSalaryColumn} />
+            <Kpi label={text.commission} value={money(analysis.totals.commission)} sub={text.commissionColumn} onClick={() => showRows('Commission Rows', records.filter(row => row.commission > 0), ledgerColumns())} />
+            <Kpi label={text.deductions} value={money(analysis.totals.deduction)} sub={text.deductionColumn} onClick={() => showRows('Deduction Rows', records.filter(row => row.deduction > 0), ledgerColumns())} />
           </div>
 
           <div style={{ display:'flex', gap:'28px', alignItems:'center', flexWrap:'wrap', padding:'12px 4px' }}>
             {['MH','HH'].map(entity => (
-              <button key={entity} type="button" onClick={() => showRows(`${entity} Actual Cost`, records.filter(row => row[entity === 'MH' ? 'mhAmount' : 'hhAmount'] > 0), ledgerColumns())}
+              <button key={entity} type="button" onClick={() => showRows(`${entity} ${text.actualCost}`, records.filter(row => row[entity === 'MH' ? 'mhAmount' : 'hhAmount'] > 0), ledgerColumns())}
                 style={{ width:'120px', height:'120px', borderRadius:'50%', border:`2px dashed ${ENTITY_COLORS[entity]}`, color:ENTITY_COLORS[entity], background:'transparent', cursor:'pointer' }}>
                 <div style={{ color:THEME.text, fontWeight:800, letterSpacing:'.05em' }}>{entity}</div>
                 <div style={{ color:THEME.text, fontFamily:'monospace', fontSize:'13px', marginTop:'5px' }}>
                   {money(entity === 'MH' ? analysis.totals.mhAmount : analysis.totals.hhAmount)}
                 </div>
-                <div style={{ fontSize:'9px', marginTop:'5px', textTransform:'uppercase' }}>actual cost</div>
+                <div style={{ fontSize:'9px', marginTop:'5px', textTransform:'uppercase' }}>{text.actualCost}</div>
               </button>
             ))}
             <div style={{ color:THEME.muted, maxWidth:'360px', fontSize:'13px', lineHeight:1.6 }}>
-              The stamps use the workbook’s own MH Amount and HH Amount columns. Click a stamp to inspect contributing rows.
+              {text.stampHint}
             </div>
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'16px' }}>
             <ConsoleCard>
-              <SectionHeader title="By Company Tag" hint="Company column, headcount view" />
+              <SectionHeader title={text.byCompanyTag} hint={text.companyHeadcountHint} />
               <BarList rows={analysis.byCompany} max={totalMax} color="#C9A66B" onClick={label => showRows(`Company ${label}`, records.filter(row => row.company === label), ledgerColumns())} />
             </ConsoleCard>
             <ConsoleCard>
-              <SectionHeader title="By Actual Cost to Company" hint="MH Amount / HH Amount allocation view" />
+              <SectionHeader title={text.byActualCost} hint={text.allocationHint} />
               <BarList rows={[['MH', analysis.totals.mhAmount], ['HH', analysis.totals.hhAmount]]} max={Math.max(analysis.totals.mhAmount, analysis.totals.hhAmount, 1)} color="#5FB3A3" />
               <div style={{ color:THEME.muted, fontSize:'12px', marginTop:'12px', borderTop:`1px solid ${THEME.lineSoft}`, paddingTop:'12px' }}>
-                Total column {money(analysis.totals.total)} · MH+HH {money(analysis.totals.mhAmount + analysis.totals.hhAmount)}
+                {text.totalColumn} {money(analysis.totals.total)} · MH+HH {money(analysis.totals.mhAmount + analysis.totals.hhAmount)}
               </div>
             </ConsoleCard>
           </div>
 
           <ConsoleCard>
-            <SectionHeader title="Payment Mode & WPS Exposure" hint="Payment Mode split by entity amount" />
+            <SectionHeader title={text.paymentModeExposure} hint={text.paymentModeHint} />
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'18px' }}>
               {analysis.paymentModes.map(block => (
                 <div key={block.entity}>
@@ -781,7 +921,7 @@ export default function PayrollWorkbookDashboard() {
           </ConsoleCard>
 
           <ConsoleCard>
-            <SectionHeader title="Cost Composition - Accrual Build-Up" hint="Fix+Support+Addon-Deduction, Commission, Other - by MH/HH Share%" />
+            <SectionHeader title={text.costComposition} hint={text.costCompositionHint} />
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'18px' }}>
               <CompositionEntity entity="MH" records={records} onShow={showRows} />
               <CompositionEntity entity="HH" records={records} onShow={showRows} />
@@ -789,7 +929,7 @@ export default function PayrollWorkbookDashboard() {
           </ConsoleCard>
 
           <ConsoleCard>
-            <SectionHeader title="Settlement Waterfall & Intercompany Position" hint="How the payable actually gets cleared, per disbursing bank/cash" />
+            <SectionHeader title={text.settlement} hint={text.settlementHint} />
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'18px' }}>
               <WaterfallEntity waterfall={analysis.mhWaterfall} records={records} onShow={showRows} />
               <WaterfallEntity waterfall={analysis.hhWaterfall} records={records} onShow={showRows} />
@@ -799,7 +939,7 @@ export default function PayrollWorkbookDashboard() {
           </ConsoleCard>
 
           <ConsoleCard>
-            <SectionHeader title="Advance & Deduction Control" hint="Positive advances and applied deductions by company" />
+            <SectionHeader title={text.advanceControl} hint={text.advanceHint} />
             <MiniTable columns={[
               { key:'company', label:'Company' }, { key:'advance', label:'Advance', num:true }, { key:'deduction', label:'Deduction', num:true },
             ]} rows={companies.map(company => ({
@@ -813,26 +953,26 @@ export default function PayrollWorkbookDashboard() {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'16px' }}>
             <ConsoleCard>
-              <SectionHeader title="By Team / Department" hint="Team carried down from Main sheet" />
+              <SectionHeader title={text.byTeam} hint={text.byTeamHint} />
               <BarList rows={analysis.byTeam.slice(0, 10)} max={teamMax} color="#C9A66B" />
             </ConsoleCard>
             <ConsoleCard>
-              <SectionHeader title="By Role" hint="Role column" />
+              <SectionHeader title={text.byRole} hint={text.byRoleHint} />
               <BarList rows={analysis.byRole.slice(0, 10)} max={roleMax} color="#5FB3A3" />
             </ConsoleCard>
           </div>
 
           <ConsoleCard>
-            <SectionHeader title="Top 10 By Total Cost" hint="Grouped by Sl No, so salary + commission rows combine" />
+            <SectionHeader title={text.top10} hint={text.top10Hint} />
             <MiniTable columns={[
               { key:'name', label:'Name' }, { key:'company', label:'Company' }, { key:'paymentMode', label:'Payment Mode' }, { key:'total', label:'Total', num:true },
             ]} rows={analysis.topEarners} onRowClick={row => showRows(row.name, row.rows, ledgerColumns())} />
           </ConsoleCard>
 
           <ConsoleCard>
-            <SectionHeader title="Review Flags" hint={`${analysis.flags.length} item(s)`} />
+            <SectionHeader title={text.reviewFlags} hint={`${analysis.flags.length} item(s)`} />
             {analysis.flags.length === 0 ? (
-              <div style={{ color:'#7FBF8F', fontSize:'13px' }}>No review flags found.</div>
+              <div style={{ color:'#7FBF8F', fontSize:'13px' }}>{text.noFlags}</div>
             ) : analysis.flags.slice(0, 20).map((flag, index) => (
               <div key={`${flag.name}-${index}`} style={{ display:'flex', gap:'10px', padding:'9px 0', borderBottom:`1px solid ${THEME.lineSoft}`, fontSize:'13px' }}>
                 <span style={{ width:'7px', height:'7px', borderRadius:'50%', background:'#E2725B', marginTop:'6px' }} />
@@ -842,21 +982,25 @@ export default function PayrollWorkbookDashboard() {
           </ConsoleCard>
 
           <ConsoleCard>
-            <SectionHeader title="Employee Ledger" hint={`${filteredRecords.length} row(s) shown`} />
+            <SectionHeader title={text.employeeLedger} hint={`${filteredRecords.length} ${text.shownRows}`} />
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'12px' }}>
-              <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search name / code / remarks" style={filterStyle} />
+              <input value={search} onChange={event => setSearch(event.target.value)} placeholder={text.searchPlaceholder} style={filterStyle} />
               <select value={companyFilter} onChange={event => setCompanyFilter(event.target.value)} style={filterStyle}>
-                <option value="">All companies</option>
+                <option value="">{text.allCompanies}</option>
                 {companies.map(company => <option key={company} value={company}>{company}</option>)}
               </select>
               <select value={roleFilter} onChange={event => setRoleFilter(event.target.value)} style={filterStyle}>
-                <option value="">All roles</option>
+                <option value="">{text.allRoles}</option>
                 {roles.map(role => <option key={role} value={role}>{role}</option>)}
               </select>
               <select value={modeFilter} onChange={event => setModeFilter(event.target.value)} style={filterStyle}>
-                <option value="">All payment modes</option>
+                <option value="">{text.allPaymentModes}</option>
                 {modes.map(mode => <option key={mode} value={mode}>{mode}</option>)}
               </select>
+              <label style={toggleStyle}>
+                <input type="checkbox" checked={hideZeroRows} onChange={event => setHideZeroRows(event.target.checked)} />
+                <span>{text.hideZeroRows}</span>
+              </label>
             </div>
             <MiniTable columns={ledgerColumns()} rows={filteredRecords} sticky showTotals maxHeight="520px" />
           </ConsoleCard>
@@ -868,7 +1012,7 @@ export default function PayrollWorkbookDashboard() {
           <div onClick={event => event.stopPropagation()} style={{ maxWidth:'960px', margin:'0 auto', background:THEME.panel, border:`1px solid ${THEME.line}`, borderRadius:'10px', color:THEME.text }}>
             <div style={{ display:'flex', justifyContent:'space-between', gap:'12px', alignItems:'center', padding:'16px 18px', borderBottom:`1px solid ${THEME.line}` }}>
               <h2 style={{ margin:0, fontSize:'16px', color:THEME.text }}>{modal.title}</h2>
-              <button type="button" className="btn btn-outline btn-sm" onClick={() => setModal(null)}>Close</button>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setModal(null)}>{text.close}</button>
             </div>
             <div style={{ padding:'18px' }}>
               <MiniTable columns={modal.columns} rows={modal.rows} />
@@ -887,6 +1031,20 @@ const filterStyle = {
   borderRadius:'7px',
   padding:'8px 10px',
   fontSize:'13px',
+}
+
+const toggleStyle = {
+  display:'inline-flex',
+  alignItems:'center',
+  gap:'7px',
+  background:'#0f1724',
+  border:`1px solid ${THEME.line}`,
+  color:THEME.text,
+  borderRadius:'7px',
+  padding:'8px 10px',
+  fontSize:'13px',
+  cursor:'pointer',
+  minHeight:'38px',
 }
 
 const linkAmountStyle = {
