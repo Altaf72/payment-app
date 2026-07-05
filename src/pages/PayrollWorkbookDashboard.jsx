@@ -514,41 +514,57 @@ function ChannelBookSummary({ records, onShow }) {
     {
       key: 'WPS-ENBD',
       label: 'WPS-ENBD',
-      owner: 'MH',
+      owner: 'MH book',
       note: 'belongs to MH - HH trx is done to help',
       records: records.filter(row => row.channelType === 'WPS-ENBD'),
-      helpField: 'hhAmount',
+      adjustmentField: 'hhAmount',
     },
     {
       key: 'WPS-JAE',
       label: 'WPS-JAE',
-      owner: 'HH',
+      owner: 'HH book',
       note: 'belongs to HH - MH trx is done to help',
       records: records.filter(row => row.channelType === 'WPS-JAE'),
-      helpField: 'mhAmount',
+      adjustmentField: 'mhAmount',
     },
     {
-      key: 'BANK',
+      key: 'BANK-MH',
       label: 'Bank',
-      owner: 'Own books',
-      note: 'bank transfers follow the company book on each row',
-      records: records.filter(row => row.channelType === 'BANK'),
-      helpField: null,
+      owner: 'MH book',
+      note: 'bank follows COMPANY MH; split remains internal',
+      records: records.filter(row => row.channelType === 'BANK' && row.channel === 'MH'),
+      adjustmentField: 'hhAmount',
     },
     {
-      key: 'CASH',
+      key: 'BANK-HH',
+      label: 'Bank',
+      owner: 'HH book',
+      note: 'bank follows COMPANY HH; split remains internal',
+      records: records.filter(row => row.channelType === 'BANK' && row.channel === 'HH'),
+      adjustmentField: 'mhAmount',
+    },
+    {
+      key: 'CASH-MH',
       label: 'Cash',
-      owner: 'Own books',
-      note: 'cash payments follow the company book on each row',
-      records: records.filter(row => row.channelType === 'CASH'),
-      helpField: null,
+      owner: 'MH book',
+      note: 'cash follows COMPANY MH; split remains internal',
+      records: records.filter(row => row.channelType === 'CASH' && row.channel === 'MH'),
+      adjustmentField: 'hhAmount',
+    },
+    {
+      key: 'CASH-HH',
+      label: 'Cash',
+      owner: 'HH book',
+      note: 'cash follows COMPANY HH; split remains internal',
+      records: records.filter(row => row.channelType === 'CASH' && row.channel === 'HH'),
+      adjustmentField: 'mhAmount',
     },
   ].map(row => ({
     ...row,
-    total: row.records.reduce((amount, record) => amount + record.mhAmount + record.hhAmount, 0),
+    total: sum(row.records, 'total'),
     mhAmount: sum(row.records, 'mhAmount'),
     hhAmount: sum(row.records, 'hhAmount'),
-    helpAmount: row.helpField ? sum(row.records, row.helpField) : 0,
+    adjustmentAmount: row.adjustmentField ? sum(row.records, row.adjustmentField) : 0,
   }))
 
   return (
@@ -557,15 +573,15 @@ function ChannelBookSummary({ records, onShow }) {
       <MiniTable
         columns={[
           { key:'label', label:'Channel' },
-          { key:'owner', label:'Belongs To' },
-          { key:'total', label:'Total Paid', num:true },
+          { key:'owner', label:'Book' },
+          { key:'total', label:'Paid From Book', num:true },
           { key:'mhAmount', label:'MH Amount', num:true },
           { key:'hhAmount', label:'HH Amount', num:true },
-          { key:'helpAmount', label:'Help Amount', num:true },
+          { key:'adjustmentAmount', label:'Cross/Internal', num:true },
           { key:'note', label:'Note' },
         ]}
-        rows={channelRows}
-        onRowClick={row => onShow(`${row.label} Channel Rows`, row.records, [
+        rows={channelRows.filter(row => row.records.length)}
+        onRowClick={row => onShow(`${row.label} - ${row.owner}`, row.records, [
           { key:'name', label:'Name' },
           { key:'company', label:'Company' },
           { key:'paymentMode', label:'Payment Mode' },

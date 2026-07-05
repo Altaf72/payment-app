@@ -128,7 +128,7 @@ export default function Layout() {
           </button>
           <div style={{marginTop:'10px',textAlign:'center',fontSize:'10px',
             color:'rgba(255,255,255,0.72)',letterSpacing:'.08em',fontWeight:600,
-            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.26</div>
+            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.27</div>
         </div>
       </aside>
 
