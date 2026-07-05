@@ -85,6 +85,12 @@ export default function Layout() {
               onClick={() => go('/vouchers')}>
               <span className="icon">V</span> Vouchers
             </button>
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/payroll-workbook') ? 'active' : ''}`}
+                onClick={() => go('/payroll-workbook')}>
+                <span className="icon">P</span> Payroll Workbook
+              </button>
+            )}
             <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}
               onClick={() => go('/qbo-settings')}>
               <span className="icon">L</span> Local Settings
@@ -122,7 +128,7 @@ export default function Layout() {
           </button>
           <div style={{marginTop:'10px',textAlign:'center',fontSize:'10px',
             color:'rgba(255,255,255,0.72)',letterSpacing:'.08em',fontWeight:600,
-            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.18</div>
+            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.24</div>
         </div>
       </aside>
 
