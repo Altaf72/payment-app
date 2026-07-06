@@ -21,6 +21,7 @@ const THEME = {
 }
 
 const PAYROLL_SESSION_KEY = 'paymentapp.payroll.session'
+const PAYROLL_LOCAL_KEY = 'paymentapp.payroll.lastParsed'
 const PAYROLL_LAST_FILE_KEY = 'paymentapp.payroll.lastFile'
 const LANGUAGE_KEY = 'paymentapp.displayLanguage'
 
@@ -144,7 +145,16 @@ function readDisplayLanguage() {
 function readStoredPayroll() {
   try {
     const stored = sessionStorage.getItem(PAYROLL_SESSION_KEY)
-    return stored ? JSON.parse(stored) : null
+    if (stored) return JSON.parse(stored)
+  } catch {
+    // Ignore session restore failures and try the persistent local copy.
+  }
+  try {
+    const stored = localStorage.getItem(PAYROLL_LOCAL_KEY)
+    if (!stored) return null
+    const payroll = JSON.parse(stored)
+    sessionStorage.setItem(PAYROLL_SESSION_KEY, JSON.stringify(payroll))
+    return payroll
   } catch {
     return null
   }
@@ -159,10 +169,16 @@ function readLastPayrollFile() {
 }
 
 function rememberPayroll(payroll, fileLabel) {
+  const serialized = JSON.stringify(payroll)
   try {
-    sessionStorage.setItem(PAYROLL_SESSION_KEY, JSON.stringify(payroll))
+    sessionStorage.setItem(PAYROLL_SESSION_KEY, serialized)
   } catch {
     // Session restore is a convenience; keep the upload working even if storage is full.
+  }
+  try {
+    localStorage.setItem(PAYROLL_LOCAL_KEY, serialized)
+  } catch {
+    // Persistent restore is also a convenience; large workbooks can still be loaded manually.
   }
   try {
     localStorage.setItem(PAYROLL_LAST_FILE_KEY, fileLabel)
