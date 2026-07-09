@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge'
 import { formatCurrency } from '../lib/utils'
 import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
 import { buildQboJournalCsv } from '../lib/qboExport'
+import { buildPfsFieldsForApproval, formatPfsDisplay } from '../lib/pfs'
 
 function toProperCase(str) {
   if (!str) return ''
@@ -193,6 +194,7 @@ function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null,
   const finDate  = finEntry ? fmtDate(finEntry.created_at) : date
   const cfoBy    = cfoEntry?.actor || app.cfo_approved_by_name || null
   const cfoDate  = cfoEntry ? fmtDate(cfoEntry.created_at) : date
+  const pfsDisplay = app.pfs_display || formatPfsDisplay(app.pfs_folder, app.pfs_no)
 
   const s = {
     wrap: {
@@ -452,8 +454,8 @@ function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null,
         }}>
           ◆ {app.status?.toUpperCase()}
         </span>
-        <span style={{ fontSize:'10px', color:'#bbb', fontFamily:"Georgia, serif" }}>
-          Generated: {fmtDate(new Date().toISOString())}
+        <span style={{ fontSize:'10px', color:'#aaa', fontFamily:"Georgia, serif", textAlign:'right' }}>
+          {pfsDisplay ? `PFS: ${pfsDisplay} · ` : ''}Generated: {fmtDate(new Date().toISOString())}
         </span>
       </div>
 
@@ -844,7 +846,11 @@ export default function ApplicationDetail() {
         extraFields = { manager_id: user.id, manager_note: note || null, manager_acted_at: now }
       } else if (action === 'fin_approve') {
         newStatus = 'fin_approved'; auditAction = 'fin_approved'
-        extraFields = { fin_approved_by: user.id, fin_approved_at: now }
+        extraFields = {
+          fin_approved_by: user.id,
+          fin_approved_at: now,
+          ...(await buildPfsFieldsForApproval(supabase, app, user.id)),
+        }
       } else if (action === 'approve') {
         newStatus = 'approved'; auditAction = 'approved'
         extraFields = { cfo_approved_by: user.id, cfo_approved_at: now, processed_at: now }
