@@ -650,8 +650,9 @@ export default function ApplicationDetail() {
 
   async function load() {
     setLoading(true)
-    const [{ data: appData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }] = await Promise.all([
+    const [{ data: appData }, { data: pfsData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
+      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by').eq('id', id).single(),
       supabase.from('audit_log')
         .select('id, action, note, created_at, action_by, users!action_by(full_name,role)')
         .eq('application_id', id).order('created_at'),
@@ -666,7 +667,7 @@ export default function ApplicationDetail() {
       logoUrl = co?.logo_url || null
     }
 
-    setApp(appData ? { ...appData, logo_url: logoUrl } : null)
+    setApp(appData ? { ...appData, ...(pfsData || {}), logo_url: logoUrl } : null)
     setApplicantAttachments(applicantFiles || [])
     const mappedLog = (logData || []).map(l => ({
       ...l,
@@ -2405,3 +2406,5 @@ export default function ApplicationDetail() {
     </div>
   )
 }
+
+
