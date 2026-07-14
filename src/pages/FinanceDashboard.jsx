@@ -69,14 +69,14 @@ function formatFileSize(bytes) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
-function AttachmentPill({ path, name, size }) {
+function AttachmentPill({ path, name, size, tabIndex }) {
   const [show, setShow] = useState(false)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
   const isPDF   = /\.pdf$/i.test(name || '')
   const displayName = size ? `${name} (${formatFileSize(size)})` : name
   return (
     <>
-      <button onClick={() => setShow(true)} title={`Preview: ${displayName}`}
+      <button onClick={() => setShow(true)} title={`Preview: ${displayName}`} tabIndex={tabIndex}
         style={{ display:'inline-flex',alignItems:'center',gap:'4px',padding:'3px 8px',
           borderRadius:'20px',cursor:'pointer',background:'#eff6ff',border:'1px solid #bfdbfe',
           color:'#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
@@ -119,6 +119,38 @@ function loadUsedRefs() {
   } catch {
     return new Set()
   }
+}
+
+// Lets finance staff move through values with Tab and copy the focused value
+// straight into another application with Ctrl/Cmd+C.
+function CopyableField({ children, copyText, label, title, style, onCopy }) {
+  const copy = async () => {
+    const text = String(copyText ?? '')
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    onCopy?.()
+  }
+
+  return <div className="dashboard-copy-field" tabIndex={0} role="textbox"
+    aria-label={label || `Copy ${copyText || 'field'}`} title={title} style={style}
+    onKeyDown={event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
+        copy()
+      }
+    }}>
+    {children}
+  </div>
 }
 
 export default function FinanceDashboard() {
@@ -843,8 +875,11 @@ export default function FinanceDashboard() {
                         {/* Reference + copy button */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
-                            <span
+                            <CopyableField
+                              copyText={app.ref_number || ''}
+                              label="Reference number"
                               title={refWasUsed ? 'Reference copied/used on this computer' : ''}
+                              onCopy={() => markReferenceUsed(app.ref_number)}
                               style={{
                                 fontSize:'11px',
                                 fontWeight:400,
@@ -854,9 +889,10 @@ export default function FinanceDashboard() {
                               }}
                             >
                               {app.ref_number || '—'}
-                            </span>
+                            </CopyableField>
                             <button
                               title="Copy reference number"
+                              tabIndex={-1}
                               onClick={() => {
                                 navigator.clipboard.writeText(app.ref_number || '')
                                 markReferenceUsed(app.ref_number)
@@ -885,6 +921,7 @@ export default function FinanceDashboard() {
                               {canUndoBatch && (app.batch_id || app.batch_number) && (
                                 <button
                                   title={`Undo batch ${app.batch_number}`}
+                                  tabIndex={-1}
                                   disabled={undoBatchLoading === app.batch_id}
                                   onClick={() => undoBatch(app)}
                                   style={{
@@ -902,7 +939,7 @@ export default function FinanceDashboard() {
 
                         {/* Company — 1 line ellipsis */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px',maxWidth:'130px'}}>
-                          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                          <CopyableField copyText={app.company_name || ''} label="Company" style={{display:'flex',alignItems:'center',gap:'6px'}}>
                             <span style={{
                               width:'8px',height:'8px',borderRadius:'50%',
                               background:dotColor,flexShrink:0,display:'inline-block',
@@ -914,71 +951,77 @@ export default function FinanceDashboard() {
                             }} title={app.company_name}>
                               {app.company_name}
                             </span>
-                          </div>
+                          </CopyableField>
                         </td>
 
                         {/* Applicant */}
                         <td style={{fontSize:'12px',verticalAlign:'middle',
                           maxWidth:'80px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          {app.submitted_by_name}
+                          <CopyableField copyText={app.submitted_by_name || ''} label="Applicant">{app.submitted_by_name}</CopyableField>
                         </td>
 
                         {/* Payment reason — 1 line ellipsis */}
                         <td style={{verticalAlign:'middle',maxWidth:'140px',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          <div style={{fontSize:'12px',overflow:'hidden',
+                          <CopyableField copyText={app.payment_reason || ''} label="Payment reason" style={{fontSize:'12px',overflow:'hidden',
                             textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                             {app.payment_reason}
-                          </div>
+                          </CopyableField>
                         </td>
 
                         {/* Payee — 1 line */}
                         <td style={{verticalAlign:'middle',maxWidth:'100px',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          <div style={{fontSize:'12px',color:'var(--ink-3)',
+                          <CopyableField copyText={app.payee_name || ''} label="Payee" style={{fontSize:'12px',color:'var(--ink-3)',
                             overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                             {app.payee_name || '—'}
-                          </div>
+                          </CopyableField>
                         </td>
 
                         {/* Amount */}
                         <td style={{fontWeight:600,fontSize:'13px',verticalAlign:'middle',whiteSpace:'nowrap',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          {formatCurrency(app.amount)}
+                          <CopyableField copyText={String(app.amount ?? '')} label="Amount">{formatCurrency(app.amount)}</CopyableField>
                         </td>
 
                         {/* Date */}
                         <td style={{fontSize:'11px',color:'var(--ink-3)',verticalAlign:'middle',whiteSpace:'nowrap',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          {formatDate(app.created_at)}
+                          <CopyableField copyText={formatDate(app.created_at)} label="Date">{formatDate(app.created_at)}</CopyableField>
                         </td>
 
                         {/* Attachment — icon + 8 char filename */}
                         <td style={{verticalAlign:'middle',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <CopyableField
+                            copyText={[app.attachment_name, ...(app.finance_attachments || []).map(att => att.name)].filter(Boolean).join(', ')}
+                            label="Attachment names"
+                          >
                           {(app.attachment_path || app.finance_attachments?.length > 0) ? (
                             <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', maxWidth:'170px' }}>
                               {app.attachment_path && (
-                                <AttachmentPill path={app.attachment_path} name={app.attachment_name} />
+                                <AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} />
                               )}
                               {(app.finance_attachments || []).map((att, index) => (
-                                <AttachmentPill key={`${att.path}-${index}`} path={att.path} name={att.name} size={att.size} />
+                                <AttachmentPill key={`${att.path}-${index}`} path={att.path} name={att.name} size={att.size} tabIndex={-1} />
                               ))}
                             </div>
                           ) : (
                             <span style={{fontSize:'11px',color:'var(--ink-3)'}}>—</span>
                           )}
+                          </CopyableField>
                         </td>
 
                         {/* Status */}
                         <td style={{verticalAlign:'middle',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          <StatusBadge status={app.status} />
+                          <CopyableField copyText={app.status || ''} label="Status"><StatusBadge status={app.status} /></CopyableField>
                           {quickActions && (
                             <div style={{ display:'flex', gap:'3px', marginTop:'4px', flexWrap:'wrap', maxWidth:'86px' }}>
                               <button
                                 title={`${quickActions.label} approve`}
+                                tabIndex={-1}
                                 disabled={!!quickActionLoading}
                                 onClick={() => doQuickAction(app, quickActions.approve)}
                                 style={{
@@ -991,6 +1034,7 @@ export default function FinanceDashboard() {
                               </button>
                               <button
                                 title={`${quickActions.label} reject`}
+                                tabIndex={-1}
                                 disabled={!!quickActionLoading}
                                 onClick={() => doQuickAction(app, quickActions.reject)}
                                 style={{
@@ -1009,6 +1053,7 @@ export default function FinanceDashboard() {
                         <td style={{verticalAlign:'middle',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <button className="btn btn-outline btn-sm"
+                            tabIndex={-1}
                             onClick={() => navigate(`/application/${app.id}`)}>
                             Open →
                           </button>
@@ -1031,7 +1076,7 @@ export default function FinanceDashboard() {
                             whiteSpace:'nowrap',
                             maxWidth:0,
                           }}>
-                            {app.remarks}
+                            <CopyableField copyText={app.remarks} label="Remarks">{app.remarks}</CopyableField>
                           </td>
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                         </tr>

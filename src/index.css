@@ -200,6 +200,10 @@ tbody tr:hover { background: var(--cream); }
 tbody td { padding: 13px 16px; font-size: 13px; color: var(--ink); }
 tbody tr:last-child { border-bottom: none; }
 
+/* Keyboard data-entry mode on the finance dashboard. */
+.dashboard-copy-field { outline: none; border-radius: 3px; }
+.dashboard-copy-field:focus { outline: 2px solid #2563eb; outline-offset: 3px; background: #eff6ff; }
+
 .payroll-console tbody tr:hover { background: #223147 !important; }
 .payroll-console tbody tr:hover td,
 .payroll-console tbody tr:hover button { color: #f8fafc !important; }
