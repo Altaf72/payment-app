@@ -13,6 +13,7 @@ import PaymentVoucher from './pages/PaymentVoucher'
 import QboSettings from './pages/QboSettings'
 import VouchersDashboard from './pages/VouchersDashboard'
 import PayrollWorkbookDashboard from './pages/PayrollWorkbookDashboard'
+import DtcmReport from './pages/DtcmReport'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -64,6 +65,11 @@ export default function App() {
         <Route path="payroll-workbook" element={
           <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>
             <PayrollWorkbookDashboard />
+          </PrivateRoute>
+        } />
+        <Route path="dtcm-report" element={
+          <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>
+            <DtcmReport />
           </PrivateRoute>
         } />
         <Route path="dashboard" element={

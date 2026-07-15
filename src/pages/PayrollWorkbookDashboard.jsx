@@ -60,6 +60,10 @@ const PAYROLL_TEXT = {
     costCompositionHint: 'Fix+Support+Addon-Deduction, Commission, Other - by MH/HH Share%',
     settlement: 'Settlement Waterfall & Intercompany Position',
     settlementHint: 'How the payable actually gets cleared, per disbursing bank/cash',
+    depositedCashControl: 'Deposited Cash Control',
+    depositedCashHint: 'Cash deposited or recovered, grouped by company. Click a company to inspect its payroll rows.',
+    depositedCashAmount: 'Deposited Cash',
+    depositedCashColumn: 'Total recorded in the Deposited Cash column',
     advanceControl: 'Advance & Deduction Control',
     advanceHint: 'Positive advances and applied deductions by company',
     byTeam: 'By Team / Department',
@@ -242,7 +246,7 @@ function groupSum(records, key, amountKey = 'total') {
 }
 
 function isLedgerZeroRow(row) {
-  return ['fixSalary', 'commission', 'deduction', 'total', 'mhAmount', 'hhAmount']
+  return ['fixSalary', 'commission', 'deduction', 'depositedCash', 'total', 'mhAmount', 'hhAmount']
     .every(key => Math.abs(Number(row[key] || 0)) < 0.005)
 }
 
@@ -791,6 +795,16 @@ export default function PayrollWorkbookDashboard() {
     })
     const mhWaterfall = computeWaterfall(records, 'MH')
     const hhWaterfall = computeWaterfall(records, 'HH')
+    const depositedCashByCompany = [...new Set(records.map(row => row.company || 'Unassigned'))]
+      .sort()
+      .map(company => {
+        const companyRows = records.filter(row => (row.company || 'Unassigned') === company)
+        return {
+          company,
+          depositedCash: sum(companyRows, 'depositedCash'),
+        }
+      })
+      .filter(row => Math.abs(row.depositedCash) > 0.005)
     const topEarners = [...groups].sort((a, b) => b.total - a.total).slice(0, 10)
     const flags = records.flatMap(row => {
       const found = []
@@ -800,7 +814,7 @@ export default function PayrollWorkbookDashboard() {
       if (!row.paymentMode || row.paymentMode === 'Unspecified') found.push({ name:row.name, desc:'Missing payment mode' })
       return found
     })
-    return { totals, byCompany, byTeam, byRole, paymentModes, mhWaterfall, hhWaterfall, topEarners, flags }
+    return { totals, byCompany, byTeam, byRole, paymentModes, mhWaterfall, hhWaterfall, depositedCashByCompany, topEarners, flags }
   }, [groups, payroll, records])
 
   const filteredRecords = useMemo(() => {
@@ -837,8 +851,8 @@ export default function PayrollWorkbookDashboard() {
 
   function exportLedger() {
     downloadCsv(`payroll-ledger-${Date.now()}.csv`, [
-      ['Sl No', 'Name', 'Company', 'Team', 'Role', 'Payment Mode', 'Fix Salary', 'Commission', 'Deduction', 'Total', 'MH Amount', 'HH Amount', 'Remarks'],
-      ...records.map(row => [row.slNo, row.name, row.company, row.teamFilled, row.role, row.paymentMode, row.fixSalary, row.commission, row.deduction, row.total, row.mhAmount, row.hhAmount, row.remarks]),
+      ['Sl No', 'Name', 'Company', 'Team', 'Role', 'Payment Mode', 'Fix Salary', 'Commission', 'Deduction', 'Deposited Cash', 'Total', 'MH Amount', 'HH Amount', 'Remarks'],
+      ...records.map(row => [row.slNo, row.name, row.company, row.teamFilled, row.role, row.paymentMode, row.fixSalary, row.commission, row.deduction, row.depositedCash, row.total, row.mhAmount, row.hhAmount, row.remarks]),
     ])
   }
 
@@ -884,7 +898,7 @@ export default function PayrollWorkbookDashboard() {
         </ConsoleCard>
       ) : (
         <div style={{ display:'grid', gap:'16px' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(170px, 1fr))', gap:'12px' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap:'12px' }}>
             <Kpi label={text.headcount} value={analysis.totals.headcount} sub={`${analysis.totals.rows} ${text.payrollRows}`} onClick={() => showRows('Unique Staff', groups, [
               { key:'name', label:'Name' }, { key:'company', label:'Company' }, { key:'teamFilled', label:'Team' }, { key:'role', label:'Role' }, { key:'total', label:'Total', num:true },
             ])} />
@@ -952,6 +966,28 @@ export default function PayrollWorkbookDashboard() {
             </div>
             <IntercompanyNet mhWaterfall={analysis.mhWaterfall} hhWaterfall={analysis.hhWaterfall} records={records} onShow={showRows} />
             <ChannelBookSummary records={records} onShow={showRows} />
+          </ConsoleCard>
+
+          <ConsoleCard>
+            <SectionHeader
+              title={text.depositedCashControl || 'Deposited Cash Control'}
+              hint={text.depositedCashHint || 'Cash deposited or recovered, grouped by company. Click a company to inspect its payroll rows.'}
+            />
+            <div style={{ display:'grid', gridTemplateColumns:'minmax(180px, 280px)', gap:'12px', marginBottom:'16px' }}>
+              <Kpi label={text.depositedCashAmount || 'Deposited Cash'} value={money(analysis.totals.depositedCash)} sub={text.depositedCashColumn || 'Total recorded in the Deposited Cash column'} onClick={() => showRows('Deposited Cash Entries', records.filter(row => Math.abs(row.depositedCash) > 0.005), ledgerColumns())} />
+            </div>
+            {analysis.depositedCashByCompany.length ? (
+              <MiniTable
+                columns={[
+                  { key:'company', label:'Company' },
+                  { key:'depositedCash', label:text.depositedCashAmount || 'Deposited Cash', num:true },
+                ]}
+                rows={analysis.depositedCashByCompany}
+                onRowClick={row => showRows(`${row.company} Deposited Cash`, records.filter(record => (record.company || 'Unassigned') === row.company && Math.abs(record.depositedCash) > 0.005), ledgerColumns())}
+              />
+            ) : (
+              <div style={{ color:THEME.muted, fontSize:'13px' }}>No deposited cash entries in this payroll.</div>
+            )}
           </ConsoleCard>
 
           <ConsoleCard>
@@ -1098,8 +1134,10 @@ function ledgerColumns() {
     { key:'fixSalary', label:'Fix Salary', num:true },
     { key:'commission', label:'Commission', num:true },
     { key:'deduction', label:'Deduction', num:true },
+    { key:'depositedCash', label:'Deposited Cash', num:true },
     { key:'total', label:'Total', num:true },
     { key:'mhAmount', label:'MH Amt', num:true },
     { key:'hhAmount', label:'HH Amt', num:true },
+    { key:'remarks', label:'Remarks' },
   ]
 }

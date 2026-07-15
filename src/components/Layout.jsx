@@ -18,6 +18,7 @@ const TEXT = {
     finance: 'Finance',
     vouchers: 'Vouchers',
     payrollWorkbook: 'Payroll Workbook',
+    dtcmReport: 'DTCM Report',
     localSettings: 'Local Settings',
     admin: 'Admin',
     settings: 'Settings',
@@ -49,6 +50,7 @@ const TEXT = {
     finance: '财务',
     vouchers: '凭证',
     payrollWorkbook: '工资工作簿',
+    dtcmReport: 'DTCM Report',
     localSettings: '本地设置',
     admin: '管理',
     settings: '设置',
@@ -198,6 +200,12 @@ export default function Layout() {
               <button className={`sidebar-link ${isActive('/payroll-workbook') ? 'active' : ''}`}
                 onClick={() => go('/payroll-workbook')}>
                 <span className="icon">P</span> {text.payrollWorkbook}
+              </button>
+            )}
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/dtcm-report') ? 'active' : ''}`}
+                onClick={() => go('/dtcm-report')}>
+                <span className="icon">D</span> {text.dtcmReport}
               </button>
             )}
             <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}

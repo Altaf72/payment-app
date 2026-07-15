@@ -18,6 +18,27 @@ const emptyCheque = {
 }
 
 const NAME_HISTORY_KEY = 'voucher_name_history'
+const PDF_IMPORT_RELOAD_KEY = 'payment_app_pdf_import_reload'
+
+// A browser can retain a previous deployment's app shell while Vercel has
+// already removed that deployment's hashed PDF chunk. Refresh once to load
+// the current app shell and its matching chunk instead of showing a dead-end.
+async function loadHtml2Pdf() {
+  try {
+    const html2pdf = (await import('html2pdf.js')).default
+    sessionStorage.removeItem(PDF_IMPORT_RELOAD_KEY)
+    return html2pdf
+  } catch (error) {
+    const message = String(error?.message || '')
+    const isStaleChunk = /failed to fetch dynamically imported module|importing a module script failed/i.test(message)
+    if (isStaleChunk && !sessionStorage.getItem(PDF_IMPORT_RELOAD_KEY)) {
+      sessionStorage.setItem(PDF_IMPORT_RELOAD_KEY, '1')
+      window.location.reload()
+      return null
+    }
+    throw error
+  }
+}
 
 function localDate() {
   const now = new Date()
@@ -659,7 +680,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     let exportElement = null
     try {
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-      const html2pdf = (await import('html2pdf.js')).default
+      const html2pdf = await loadHtml2Pdf()
+      if (!html2pdf) return null
       exportElement = printRef.current.cloneNode(true)
       exportElement.classList.add('voucher-pdf-document')
       exportElement.style.cssText = [
