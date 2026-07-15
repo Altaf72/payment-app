@@ -435,6 +435,8 @@ body.recon-resizing{
 .recon-filter-toprow{
   display:flex;
   align-items:center;
+  justify-content:flex-end;
+  order:2;
   gap:10px;
   flex-wrap:wrap;
   padding-bottom:9px;
@@ -443,6 +445,7 @@ body.recon-resizing{
 .recon-filter-bottomrow{
   display:flex;
   align-items:center;
+  order:1;
   gap:9px;
   flex-wrap:wrap;
 }
@@ -1335,7 +1338,7 @@ const state = {
   reconScrollLeft: 0,
   columnsPanelOpen: false, // transient UI state — NOT persisted — so re-renders don't collapse the Columns dropdown
   activeMode: "report", // "report" | "reconcile" | "summary" | "hostaway"
-  dtcmReconcile: { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "status", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} },
+  dtcmReconcile: { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "source", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} },
   reconWorkspaceId: "",
   reconArchive: [],
   hostawayReconcile: { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "status", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} },
@@ -1502,7 +1505,7 @@ function reconSnapshot(rc, workspace){
     error: rc.error || null,
     review: rc.review || {},
     manualPairs: rc.manualPairs || [],
-    sortColumn: rc.sortColumn || "status",
+    sortColumn: rc.sortColumn || "source",
     sortDirection: rc.sortDirection || "asc",
     statusFilter: rc.statusFilter || ["all"],
     guestFilter: rc.guestFilter || "",
@@ -1519,7 +1522,7 @@ function applyReconSnapshot(snap){
     loading: false,
     review: snap.review || {},
     manualPairs: Array.isArray(snap.manualPairs) ? snap.manualPairs : [],
-    sortColumn: snap.sortColumn || "status",
+    sortColumn: snap.sortColumn || "source",
     sortDirection: snap.sortDirection || "asc",
     statusFilter: Array.isArray(snap.statusFilter) ? snap.statusFilter : ["all"],
     guestFilter: snap.guestFilter || "",
@@ -3771,6 +3774,7 @@ function renderReconcileArea(){
     el("span", {}, ["Company: ", el("b",{},[meta.companyName || "—"])]),
     el("span", {}, ["Registration ID: ", el("b",{},[meta.registrationId || "—"])]),
     el("span", {}, ["Period: ", el("b",{},[`${meta.fromDateStr||"?"} – ${meta.toDateStr||"?"}`])]),
+    el("button", {class:"btn brass small", onclick: finalizeReconArchive}, ["Finalize & Archive"]),
     el("button", {class:"btn secondary small replace-btn", onclick: confirmResetDtcmUpload}, ["Replace file"]),
   ]);
   area.appendChild(banner);
@@ -3880,6 +3884,35 @@ function exportReconciliationResults(results, meta, sumFees, internalTotal, vari
   const periodTag = (meta && meta.fromDateStr) ? String(meta.fromDateStr).replace(/[^\w]+/g,"_") : new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, `DTCM_Reconciliation_${periodTag}.xlsx`);
 }
+
+function finalizeReconArchive(){
+  const rc = state.dtcmReconcile || {};
+  if(!rc.parsed) return;
+  const meta = rc.parsed.meta || {};
+  const fromDate = parseAnyDate(meta.fromDateStr), toDate = parseAnyDate(meta.toDateStr);
+  const internalRows = dtcmGetInternalRowsForPeriod(fromDate, toDate).map(reconWithEffectiveAmount);
+  const results = adjustedReconResults(dtcmReconcile(rc.parsed.rows, internalRows));
+  const counts = {};
+  results.forEach(row=>{ counts[row.status] = (counts[row.status] || 0) + 1; });
+  if(!confirm('Finalize and archive this reconciliation in Supabase? The archived snapshot is read-only.')) return;
+  window.parent.postMessage({ type:'dtcm-finalize-archive', archive:{
+    company_name:meta.companyName || null, registration_id:meta.registrationId || null,
+    period_start:fromDate ? fromDate.toISOString().slice(0,10) : null,
+    period_end:toDate ? toDate.toISOString().slice(0,10) : null,
+    summary:{ dtcmTotal:rc.parsed.rows.reduce((sum,row)=>sum+(row.fees||0),0), internalTotal:internalRows.reduce((sum,row)=>sum+(row.amount||0),0), counts },
+    snapshot:{
+      parsed:rc.parsed,
+      review:rc.review || {},
+      manualPairs:rc.manualPairs || [],
+      amountOverrides:rc.amountOverrides || {},
+      remarks:rc.remarks || {},
+      results:results.map(row=>Object.assign({}, row, {
+        _archiveReview:reconReviewState(row),
+        _archiveRemark:getReconRemark(row),
+      })),
+    }
+  }}, window.location.origin);
+}
 function exportReconciliationToPdf(results, meta, sumFees, internalTotal, variance, counts){
   const sorted = (results || []).slice().sort(compareReconRows);
   const area = document.getElementById("reconPrintArea");
@@ -3934,7 +3967,7 @@ function exportReconciliationToPdf(results, meta, sumFees, internalTotal, varian
 
 async function resetDtcmUpload(){
   await persistReconState();
-  state.dtcmReconcile = { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "status", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} };
+  state.dtcmReconcile = { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "source", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} };
   state.reconWorkspaceId = "";
   state.activeReconRowId = "";
   state.reconManualDraft = { dtcm: null, internal: null };
@@ -3977,20 +4010,20 @@ async function handleDtcmFile(file){
   const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
   const isExcel = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls");
   if(!isPdf && !isExcel){
-    state.dtcmReconcile = { parsed:null, error: "Please upload the DTCM Transaction Report as PDF, XLSX or XLS.", loading:false, review:{}, manualPairs:[], sortColumn:"status", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
+    state.dtcmReconcile = { parsed:null, error: "Please upload the DTCM Transaction Report as PDF, XLSX or XLS.", loading:false, review:{}, manualPairs:[], sortColumn:"source", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
     renderReconcileArea();
     persistReconState();
     return;
   }
-  state.dtcmReconcile = { parsed:null, error:null, loading:true, review:{}, manualPairs:[], sortColumn:"status", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
+  state.dtcmReconcile = { parsed:null, error:null, loading:true, review:{}, manualPairs:[], sortColumn:"source", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
   renderReconcileArea();
   try{
     const parsed = isExcel ? await parseDtcmExcelFile(file) : await parseDtcmPdfFile(file);
-    state.dtcmReconcile = { parsed, error:null, loading:false, review:{}, manualPairs:[], sortColumn:"status", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
+    state.dtcmReconcile = { parsed, error:null, loading:false, review:{}, manualPairs:[], sortColumn:"source", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
     state.reconWorkspaceId = reconWorkspaceInfo(parsed).id;
   }catch(e){
     console.error(e);
-    state.dtcmReconcile = { parsed:null, error: "Couldn't read that DTCM file: " + e.message, loading:false, review:{}, manualPairs:[], sortColumn:"status", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
+    state.dtcmReconcile = { parsed:null, error: "Couldn't read that DTCM file: " + e.message, loading:false, review:{}, manualPairs:[], sortColumn:"source", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
   }
   renderReconcileArea();
   persistReconState();
@@ -4170,9 +4203,12 @@ function reconStatusFilterKey(r){
   return reconReviewState(r).statusClass || RECON_STATUS_CLASS[r.status] || r.status;
 }
 function reconStatusFilterKeys(r){
+  const review = reconReviewState(r);
   const visual = reconStatusFilterKey(r);
   const base = RECON_STATUS_CLASS[r.status] || r.status;
-  return Array.from(new Set([visual, base]));
+  const keys = [visual, base];
+  if(!review.checked) keys.push("unchecked");
+  return Array.from(new Set(keys));
 }
 function reconStatusFilterLabel(key){
   const labels = {
@@ -4184,7 +4220,7 @@ function reconStatusFilterLabel(key){
     "missing-dtcm": "Missing from DTCM",
     "manual-match": "Manual match",
     "manual-override": "Manual override",
-    unchecked: "Unmatched",
+    unchecked: "Unchecked",
   };
   return labels[key] || key;
 }
@@ -4313,6 +4349,12 @@ function buildReconStatusFilter(results, filteredCount, opts){
     el("button", {class:"btn secondary small", onclick: opts.onExport}, ["Export to Excel"]),
     el("button", {class:"btn secondary small", onclick: opts.onExportPdf}, ["Export to PDF"]),
     buildReconGuestFilterInput(),
+    el("button", {
+      class:"btn secondary small",
+      title:"Return to the original reconciliation row order",
+      disabled:(state.dtcmReconcile.sortColumn || "source") === "source",
+      onclick:resetReconSort,
+    }, ["Reset sort"]),
   ]);
   const bottomRow = el("div", {class:"recon-filter-bottomrow"}, [
     el("label", {}, ["Status"]),
@@ -4411,10 +4453,11 @@ function cycleReconReviewState(id, r){
 function reconCellValue(r, key){
   const review = reconReviewState(r);
   const unit = r.dtcm ? r.dtcm.unitNumber : dtcmUnitNumFromClass(r.internal.className);
-  const statusOrder = {amount_mismatch:0, missing_internal:1, missing_dtcm:2, low_confidence:3, matched:4};
+  const statusOrder = {unchecked:0, "amount-mismatch":1, "missing-internal":2, "missing-dtcm":3, "low-confidence":4, "manual-match":5, "manual-override":6, matched:7};
   switch(key){
+    case "source": return 0;
     case "checked": return review.checked ? 1 : 0;
-    case "status": return statusOrder[r.status] == null ? 99 : statusOrder[r.status];
+    case "status": return statusOrder[review.statusClass] ?? 99;
     case "unit": return String(unit || "").toLowerCase();
     case "dtcmGuest": return String(r.dtcm ? r.dtcm.guestName || "" : "").toLowerCase();
     case "internalGuest": return String(r.internal ? r.internal.guestName || "" : "").toLowerCase();
@@ -4429,7 +4472,8 @@ function reconCellValue(r, key){
 }
 function compareReconRows(a,b){
   const rc = state.dtcmReconcile || {};
-  const key = rc.sortColumn || "status";
+  const key = rc.sortColumn || "source";
+  if(key === "source") return 0;
   const dir = rc.sortDirection === "desc" ? -1 : 1;
   const av = reconCellValue(a, key);
   const bv = reconCellValue(b, key);
@@ -4447,6 +4491,12 @@ function setReconSort(column){
     rc.sortColumn = column;
     rc.sortDirection = "asc";
   }
+  renderReconcileArea();
+  persistReconState();
+}
+function resetReconSort(){
+  state.dtcmReconcile.sortColumn = "source";
+  state.dtcmReconcile.sortDirection = "asc";
   renderReconcileArea();
   persistReconState();
 }

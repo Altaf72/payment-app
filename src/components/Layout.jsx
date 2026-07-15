@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import appPackage from '../../package.json'
 
 const LANGUAGE_KEY = 'paymentapp.displayLanguage'
 
@@ -19,6 +20,7 @@ const TEXT = {
     vouchers: 'Vouchers',
     payrollWorkbook: 'Payroll Workbook',
     dtcmReport: 'DTCM Report',
+    imprestFunds: 'Imprest Fund Management',
     localSettings: 'Local Settings',
     admin: 'Admin',
     settings: 'Settings',
@@ -51,6 +53,7 @@ const TEXT = {
     vouchers: '凭证',
     payrollWorkbook: '工资工作簿',
     dtcmReport: 'DTCM Report',
+    imprestFunds: 'Imprest Fund Management',
     localSettings: '本地设置',
     admin: '管理',
     settings: '设置',
@@ -189,6 +192,17 @@ export default function Layout() {
           </button>
         )}
 
+        {profile?.role === 'manager' && (
+          <>
+            <button className={`sidebar-link ${isActive('/dtcm-report') ? 'active' : ''}`} onClick={() => go('/dtcm-report')}>
+              <span className="icon">D</span> {text.dtcmReport}
+            </button>
+            <button className={`sidebar-link ${isActive('/imprest-funds') ? 'active' : ''}`} onClick={() => go('/imprest-funds')}>
+              <span className="icon">I</span> {text.imprestFunds}
+            </button>
+          </>
+        )}
+
         {['finance','cfo','ceo','superadmin'].includes(profile?.role) && (
           <>
             <div className="sidebar-section">{text.finance}</div>
@@ -206,6 +220,11 @@ export default function Layout() {
               <button className={`sidebar-link ${isActive('/dtcm-report') ? 'active' : ''}`}
                 onClick={() => go('/dtcm-report')}>
                 <span className="icon">D</span> {text.dtcmReport}
+              </button>
+            )}
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/imprest-funds') ? 'active' : ''}`} onClick={() => go('/imprest-funds')}>
+                <span className="icon">I</span> {text.imprestFunds}
               </button>
             )}
             <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}
@@ -245,7 +264,7 @@ export default function Layout() {
           </button>
           <div style={{marginTop:'10px',textAlign:'center',fontSize:'10px',
             color:'rgba(255,255,255,0.72)',letterSpacing:'.08em',fontWeight:600,
-            fontFamily:"'JetBrains Mono',monospace"}}>v1.12.34</div>
+            fontFamily:"'JetBrains Mono',monospace"}}>v{appPackage.version}</div>
         </div>
       </aside>
 

@@ -14,6 +14,7 @@ import QboSettings from './pages/QboSettings'
 import VouchersDashboard from './pages/VouchersDashboard'
 import PayrollWorkbookDashboard from './pages/PayrollWorkbookDashboard'
 import DtcmReport from './pages/DtcmReport'
+import ImprestFundManagement from './pages/ImprestFundManagement'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -68,10 +69,11 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="dtcm-report" element={
-          <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>
+          <PrivateRoute allowedRoles={['finance','cfo','manager','superadmin']}>
             <DtcmReport />
           </PrivateRoute>
         } />
+        <Route path="imprest-funds" element={<PrivateRoute allowedRoles={['finance','cfo','superadmin','manager']}><ImprestFundManagement /></PrivateRoute>} />
         <Route path="dashboard" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
             <FinanceDashboard />
