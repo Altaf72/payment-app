@@ -556,6 +556,36 @@ tbody tr:last-child { border-bottom: none; }
 .voucher-pdf-exporting footer { margin-top: 8mm; border-top: 1px solid #e5e7eb; padding-top: 2mm; text-align: center; font-size: 8px; color: #9ca3af; }
 
 /* DTCM management archive */
+.dtcm-finance-shell {
+  position: relative;
+  display: flex;
+  height: calc(100vh - 64px);
+  min-height: 0;
+  flex-direction: column;
+  background: #f7f4ed;
+}
+.dtcm-finance-switch {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 9px 20px 0;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+}
+.dtcm-finance-switch button {
+  padding: 10px 15px 11px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.dtcm-finance-switch button:hover { color: var(--ink); }
+.dtcm-finance-switch button.active { border-bottom-color: var(--gold); color: var(--ink); }
+.dtcm-finance-content { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.dtcm-finance-workspace { width: 100%; height: 100%; border: 0; background: #faf8f3; }
 .dtcm-archive-browser,
 .dtcm-archive-detail {
   min-height: 100%;
@@ -676,6 +706,23 @@ tbody tr:last-child { border-bottom: none; }
 .dtcm-archive-table tbody tr:last-child td { border-bottom: 0; }
 .dtcm-archive-list td:last-child { text-align: right; }
 .dtcm-archive-table .number { text-align: right; white-space: nowrap; }
+.dtcm-cell-filter {
+  max-width: 100%;
+  padding: 2px 0;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dtcm-cell-filter:hover,
+.dtcm-cell-filter:focus-visible { border-bottom-color: var(--gold); color: #72570f; outline: none; }
+.dtcm-archive-table td.number .dtcm-cell-filter { margin-left: auto; }
 .dtcm-back-link {
   margin: 0 0 12px;
   padding: 0;
@@ -711,20 +758,60 @@ tbody tr:last-child { border-bottom: none; }
   border-radius: 10px;
   background: #fff;
 }
-.dtcm-review-summary span {
+.dtcm-review-summary button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 6px 9px;
+  border: 1px solid transparent;
   border-radius: 7px;
   background: #f3faf4;
   color: #28603c;
+  font-family: inherit;
   font-size: 11px;
   white-space: nowrap;
+  cursor: pointer;
 }
-.dtcm-review-summary span.manual-match { background: #eef5ff; color: #2457a6; }
-.dtcm-review-summary span.manual-override { background: #f6eeff; color: #70439a; }
-.dtcm-review-summary span.unchecked { background: #fff4e5; color: #9a5a12; }
+.dtcm-review-summary button:hover { filter: brightness(.97); }
+.dtcm-review-summary button.active { border-color: currentColor; box-shadow: 0 0 0 2px rgba(24, 40, 61, .12); }
+.dtcm-review-summary button.manual-match { background: #eef5ff; color: #2457a6; }
+.dtcm-review-summary button.manual-override { background: #f6eeff; color: #70439a; }
+.dtcm-review-summary button.unchecked { background: #fff4e5; color: #9a5a12; }
+.dtcm-review-summary button.clear { background: #fff; color: var(--gold); border-color: var(--border); }
+.dtcm-review-summary .dtcm-filter-count { margin-left: auto; color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+.dtcm-archive-field-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: -8px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+.dtcm-archive-field-filters label { display: grid; gap: 5px; }
+.dtcm-archive-field-filters label > span {
+  color: var(--ink-3);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.dtcm-archive-field-filters input {
+  height: 34px;
+  min-width: 145px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+}
+.dtcm-archive-field-filters input[type='search'] { min-width: 190px; }
+.dtcm-archive-field-filters input:focus { outline: 2px solid rgba(139, 105, 20, .22); border-color: var(--gold); }
+.dtcm-archive-field-filters .btn { height: 34px; }
 .dtcm-status-pill {
   display: inline-block;
   padding: 4px 8px;
@@ -737,6 +824,7 @@ tbody tr:last-child { border-bottom: none; }
 }
 .dtcm-empty-cell { padding: 40px !important; color: var(--ink-3); text-align: center !important; }
 @media (max-width: 900px) {
+  .dtcm-finance-switch { padding-left: 10px; padding-right: 10px; }
   .dtcm-archive-browser, .dtcm-archive-detail { padding: 18px; }
   .dtcm-archive-heading, .dtcm-archive-detail-head { flex-direction: column; }
   .dtcm-archive-stats { grid-template-columns: repeat(2, minmax(130px, 1fr)); }

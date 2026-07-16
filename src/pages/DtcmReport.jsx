@@ -11,6 +11,7 @@ const STATUS_LABELS = {
 }
 
 const ARCHIVE_WIDTHS_KEY = 'dtcm_archive_column_widths_v1'
+const EMPTY_DETAIL_FILTERS = { name:'', unit:'', from:'', to:'', dtcmAmount:'', internalAmount:'', remarks:'' }
 const ARCHIVE_COLUMNS = [
   { key:'status', label:'Status', width:150 },
   { key:'unit', label:'Unit', width:90 },
@@ -36,6 +37,28 @@ function formatDate(value, includeTime = false) {
 
 function formatMoney(value) {
   return new Intl.NumberFormat('en-AE', { minimumFractionDigits:2, maximumFractionDigits:2 }).format(Number(value) || 0)
+}
+
+function archiveDateTimestamp(value) {
+  if (!value) return 0
+  const dayFirst = String(value).trim().match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/)
+  if (dayFirst) return new Date(Number(dayFirst[3]), Number(dayFirst[2]) - 1, Number(dayFirst[1])).getTime()
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime()
+}
+
+function archiveRowDateRange(row) {
+  const dates = [row.dtcm?.checkIn, row.dtcm?.checkOut, row.internal?.checkIn, row.internal?.checkOut]
+    .map(archiveDateTimestamp)
+    .filter(Boolean)
+  return dates.length ? { start:Math.min(...dates), end:Math.max(...dates) } : null
+}
+
+function archiveDateInputValue(value) {
+  const timestamp = archiveDateTimestamp(value)
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 function archivePeriod(archive) {
@@ -165,10 +188,10 @@ function archiveCellValue(row, key) {
     case 'unit': return unitNumber(row)
     case 'dtcmGuest': return row.dtcm?.guestName || ''
     case 'internalGuest': return row.internal?.guestName || ''
-    case 'dtcmCheckIn': return new Date(row.dtcm?.checkIn || 0).getTime() || 0
-    case 'dtcmCheckOut': return new Date(row.dtcm?.checkOut || 0).getTime() || 0
-    case 'internalCheckIn': return new Date(row.internal?.checkIn || 0).getTime() || 0
-    case 'internalCheckOut': return new Date(row.internal?.checkOut || 0).getTime() || 0
+    case 'dtcmCheckIn': return archiveDateTimestamp(row.dtcm?.checkIn)
+    case 'dtcmCheckOut': return archiveDateTimestamp(row.dtcm?.checkOut)
+    case 'internalCheckIn': return archiveDateTimestamp(row.internal?.checkIn)
+    case 'internalCheckOut': return archiveDateTimestamp(row.internal?.checkOut)
     case 'dtcmFee': return row.dtcm?.fees == null ? Number.NEGATIVE_INFINITY : Number(row.dtcm.fees)
     case 'internalAmount': return row.internal?.amount == null ? Number.NEGATIVE_INFINITY : Number(row.internal.amount)
     case 'remarks': return row._archiveRemark || ''
@@ -212,7 +235,25 @@ function ArchiveDetail({ archive, onBack }) {
   const variance = (Number(summary.dtcmTotal) || 0) - (Number(summary.internalTotal) || 0)
   const [sort, setSort] = useState({ key:'', direction:'asc' })
   const [widths, setWidths] = useState(loadArchiveWidths)
-  const sortedRows = [...rows].sort((a, b) => {
+  const [statusFilters, setStatusFilters] = useState([])
+  const [detailFilters, setDetailFilters] = useState(EMPTY_DETAIL_FILTERS)
+  const visibleRows = rows.filter(row => {
+    const statusMatch = !statusFilters.length || statusFilters.includes(row._archiveReview.checked ? row._archiveReview.statusClass : 'unchecked')
+    const nameNeedle = detailFilters.name.trim().toLowerCase()
+    const nameMatch = !nameNeedle || [row.dtcm?.guestName, row.internal?.guestName].some(name => String(name || '').toLowerCase().includes(nameNeedle))
+    const unitNeedle = detailFilters.unit.trim().toLowerCase()
+    const unitMatch = !unitNeedle || String(unitNumber(row)).toLowerCase().includes(unitNeedle)
+    const from = detailFilters.from ? new Date(`${detailFilters.from}T00:00:00`).getTime() : 0
+    const to = detailFilters.to ? new Date(`${detailFilters.to}T23:59:59`).getTime() : 0
+    const range = archiveRowDateRange(row)
+    const dateMatch = (!from && !to) || (range && (!from || range.end >= from) && (!to || range.start <= to))
+    const dtcmAmountMatch = detailFilters.dtcmAmount === '' || (row.dtcm?.fees != null && Math.abs(Number(row.dtcm.fees) - Number(detailFilters.dtcmAmount)) < 0.005)
+    const internalAmountMatch = detailFilters.internalAmount === '' || (row.internal?.amount != null && Math.abs(Number(row.internal.amount) - Number(detailFilters.internalAmount)) < 0.005)
+    const remarksNeedle = detailFilters.remarks.trim().toLowerCase()
+    const remarksMatch = !remarksNeedle || String(row._archiveRemark || '').toLowerCase().includes(remarksNeedle)
+    return statusMatch && nameMatch && unitMatch && dateMatch && dtcmAmountMatch && internalAmountMatch && remarksMatch
+  })
+  const sortedRows = [...visibleRows].sort((a, b) => {
     if (!sort.key) return 0
     const av = archiveCellValue(a, sort.key)
     const bv = archiveCellValue(b, sort.key)
@@ -234,6 +275,53 @@ function ArchiveDetail({ archive, onBack }) {
     setSort(current => current.key === key
       ? { key, direction:current.direction === 'asc' ? 'desc' : 'asc' }
       : { key, direction:'asc' })
+  }
+
+  function toggleStatusFilter(key) {
+    setStatusFilters(current => current.includes(key)
+      ? current.filter(value => value !== key)
+      : [...current, key])
+  }
+
+  function applyCellFilter(row, column) {
+    const key = column.key
+    if (key === 'status') {
+      toggleStatusFilter(row._archiveReview.checked ? row._archiveReview.statusClass : 'unchecked')
+      return
+    }
+    if (key === 'unit') {
+      const value = String(unitNumber(row))
+      setDetailFilters(current => ({ ...current, unit:current.unit === value ? '' : value }))
+      return
+    }
+    if (key === 'dtcmGuest' || key === 'internalGuest') {
+      const value = String(key === 'dtcmGuest' ? row.dtcm?.guestName || '' : row.internal?.guestName || '')
+      if (value) setDetailFilters(current => ({ ...current, name:current.name === value ? '' : value }))
+      return
+    }
+    if (['dtcmCheckIn','dtcmCheckOut','internalCheckIn','internalCheckOut'].includes(key)) {
+      const source = {
+        dtcmCheckIn:row.dtcm?.checkIn, dtcmCheckOut:row.dtcm?.checkOut,
+        internalCheckIn:row.internal?.checkIn, internalCheckOut:row.internal?.checkOut,
+      }[key]
+      const value = archiveDateInputValue(source)
+      if (value) setDetailFilters(current => current.from === value && current.to === value ? { ...current, from:'', to:'' } : { ...current, from:value, to:value })
+      return
+    }
+    if (key === 'dtcmFee' && row.dtcm?.fees != null) {
+      const value = String(row.dtcm.fees)
+      setDetailFilters(current => ({ ...current, dtcmAmount:current.dtcmAmount === value ? '' : value }))
+      return
+    }
+    if (key === 'internalAmount' && row.internal?.amount != null) {
+      const value = String(row.internal.amount)
+      setDetailFilters(current => ({ ...current, internalAmount:current.internalAmount === value ? '' : value }))
+      return
+    }
+    if (key === 'remarks' && row._archiveRemark) {
+      const value = String(row._archiveRemark)
+      setDetailFilters(current => ({ ...current, remarks:current.remarks === value ? '' : value }))
+    }
   }
 
   function startResize(event, key) {
@@ -276,12 +364,25 @@ function ArchiveDetail({ archive, onBack }) {
         <div><span>Reviewed / checked</span><strong>{reviewCounts.checked} of {rows.length}</strong></div>
       </div>
 
-      <div className="dtcm-review-summary" aria-label="Finance reconciliation work summary">
-        <span><b>{reviewCounts.matched || 0}</b> reconciled</span>
-        <span><b>{reviewCounts['low-confidence'] || 0}</b> matched (review)</span>
-        <span className="manual-match"><b>{reviewCounts['manual-match'] || 0}</b> manual match</span>
-        <span className="manual-override"><b>{reviewCounts['manual-override'] || 0}</b> manual override</span>
-        <span className={reviewCounts.unchecked ? 'unchecked' : ''}><b>{reviewCounts.unchecked}</b> unchecked</span>
+      <div className="dtcm-review-summary" aria-label="Finance reconciliation work summary and display filters">
+        <button type="button" className={statusFilters.includes('matched') ? 'active' : ''} onClick={() => toggleStatusFilter('matched')}><b>{reviewCounts.matched || 0}</b> reconciled</button>
+        <button type="button" className={statusFilters.includes('low-confidence') ? 'active' : ''} onClick={() => toggleStatusFilter('low-confidence')}><b>{reviewCounts['low-confidence'] || 0}</b> matched (review)</button>
+        <button type="button" className={`manual-match ${statusFilters.includes('manual-match') ? 'active' : ''}`} onClick={() => toggleStatusFilter('manual-match')}><b>{reviewCounts['manual-match'] || 0}</b> manual match</button>
+        <button type="button" className={`manual-override ${statusFilters.includes('manual-override') ? 'active' : ''}`} onClick={() => toggleStatusFilter('manual-override')}><b>{reviewCounts['manual-override'] || 0}</b> manual override</button>
+        <button type="button" className={`unchecked ${statusFilters.includes('unchecked') ? 'active' : ''}`} onClick={() => toggleStatusFilter('unchecked')}><b>{reviewCounts.unchecked}</b> unchecked</button>
+        {statusFilters.length > 0 && <button type="button" className="clear" onClick={() => setStatusFilters([])}>Clear status filters</button>}
+        <span className="dtcm-filter-count">Showing {visibleRows.length} of {rows.length}</span>
+      </div>
+
+      <div className="dtcm-archive-field-filters" aria-label="Filter archived reconciliation rows">
+        <label><span>Guest name</span><input type="search" value={detailFilters.name} placeholder="DTCM or internal name" onChange={event => setDetailFilters(current => ({ ...current, name:event.target.value }))} /></label>
+        <label><span>Unit</span><input type="search" value={detailFilters.unit} placeholder="Unit number" onChange={event => setDetailFilters(current => ({ ...current, unit:event.target.value }))} /></label>
+        <label><span>From date</span><input type="date" value={detailFilters.from} onChange={event => setDetailFilters(current => ({ ...current, from:event.target.value }))} /></label>
+        <label><span>To date</span><input type="date" value={detailFilters.to} onChange={event => setDetailFilters(current => ({ ...current, to:event.target.value }))} /></label>
+        <label><span>DTCM amount</span><input type="number" step="0.01" value={detailFilters.dtcmAmount} placeholder="Exact amount" onChange={event => setDetailFilters(current => ({ ...current, dtcmAmount:event.target.value }))} /></label>
+        <label><span>Internal amount</span><input type="number" step="0.01" value={detailFilters.internalAmount} placeholder="Exact amount" onChange={event => setDetailFilters(current => ({ ...current, internalAmount:event.target.value }))} /></label>
+        <label><span>Remarks</span><input type="search" value={detailFilters.remarks} placeholder="Remark contains" onChange={event => setDetailFilters(current => ({ ...current, remarks:event.target.value }))} /></label>
+        {(statusFilters.length > 0 || Object.values(detailFilters).some(Boolean)) && <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatusFilters([]); setDetailFilters(EMPTY_DETAIL_FILTERS) }}>Clear all filters</button>}
       </div>
 
       <div className="dtcm-archive-table-wrap">
@@ -298,10 +399,14 @@ function ArchiveDetail({ archive, onBack }) {
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan="11" className="dtcm-empty-cell">This older archive does not contain row-level reconciliation details.</td></tr>
+            ) : visibleRows.length === 0 ? (
+              <tr><td colSpan="11" className="dtcm-empty-cell">No rows match the selected display filters.</td></tr>
             ) : sortedRows.map((row, index) => (
               <tr key={`${unitNumber(row)}-${index}`} className={rowColourClass(row)}>
                 {ARCHIVE_COLUMNS.map(column => (
-                  <td key={column.key} className={`${column.number ? 'number ' : ''}${column.side ? `${column.side}-cell` : ''}`}>{archiveCellDisplay(row, column.key)}</td>
+                  <td key={column.key} className={`${column.number ? 'number ' : ''}${column.side ? `${column.side}-cell` : ''}`}>
+                    <button type="button" className="dtcm-cell-filter" title={`Filter by ${column.label}`} onClick={() => applyCellFilter(row, column)}>{archiveCellDisplay(row, column.key)}</button>
+                  </td>
                 ))}
               </tr>
             ))}
@@ -386,6 +491,7 @@ function ArchiveBrowser() {
 export default function DtcmReport() {
   const { user, profile } = useAuth()
   const [message, setMessage] = useState('')
+  const [financeView, setFinanceView] = useState('workspace')
   const isFinance = profile?.role === 'finance'
 
   useEffect(() => {
@@ -404,13 +510,21 @@ export default function DtcmReport() {
   if (!isFinance) return <ArchiveBrowser />
 
   return (
-    <div style={{ height:'calc(100vh - 64px)', position:'relative' }}>
+    <div className="dtcm-finance-shell">
       {message && <div className="alert" style={{position:'absolute',zIndex:2,top:8,right:8,background:'#ecfdf5',color:'#065f46',boxShadow:'var(--shadow)'}}>{message}</div>}
-      <iframe
-        title="DTCM Tourism Dirham Report"
-        src="/dtcm-tourism-dirham-report.html"
-        style={{ display:'block', width:'100%', height:'100%', border:0, background:'#FAF8F3' }}
-      />
+      <div className="dtcm-finance-switch" role="tablist" aria-label="DTCM Finance views">
+        <button type="button" role="tab" aria-selected={financeView === 'workspace'} className={financeView === 'workspace' ? 'active' : ''} onClick={() => setFinanceView('workspace')}>Reconciliation Workspace</button>
+        <button type="button" role="tab" aria-selected={financeView === 'archives'} className={financeView === 'archives' ? 'active' : ''} onClick={() => setFinanceView('archives')}>Archived Reports</button>
+      </div>
+      <div className="dtcm-finance-content">
+        <iframe
+          title="DTCM Tourism Dirham Report"
+          src="/dtcm-tourism-dirham-report.html"
+          className="dtcm-finance-workspace"
+          style={{ display:financeView === 'workspace' ? 'block' : 'none' }}
+        />
+        {financeView === 'archives' && <ArchiveBrowser />}
+      </div>
     </div>
   )
 }
