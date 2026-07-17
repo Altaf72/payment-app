@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { amountToWords, formatDate } from '../lib/utils'
+import { buildPfsFieldsForCreation } from '../lib/pfs'
 
 // ── Keyboard-navigable combobox ──────────────────────────────
 function Combobox({ options, value, onChange, placeholder, allowNew }) {
@@ -595,8 +596,18 @@ export default function NewApplication() {
         if (e) throw e
       } else {
         payload.submitted_by = user.id
-        const { data: app, error: e } = await supabase.from('applications').insert(payload).select().single()
-        if (e) throw e
+        const paymentMethodName = paymentMethods.find(method => method.id === form.payment_method_id)?.name || form.payment_method_text
+        // The maker allocates the permanent PFS before the first print. Retry
+        // once if another maker took the same serial at the same instant.
+        let app, insertError
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const pfsFields = await buildPfsFieldsForCreation(supabase, paymentMethodName, user.id)
+          const result = await supabase.from('applications').insert({ ...payload, ...pfsFields }).select().single()
+          app = result.data
+          insertError = result.error
+          if (!insertError || insertError.code !== '23505') break
+        }
+        if (insertError) throw insertError
         appId = app.id
       }
       if (attachments.length > 0) {

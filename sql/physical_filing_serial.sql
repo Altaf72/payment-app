@@ -1,5 +1,5 @@
 -- Physical Filing Serial Number (PFS)
--- Run this once in Supabase SQL editor before using Finance approval PFS assignment.
+-- Run this once in Supabase SQL editor before using maker-stage PFS assignment.
 
 alter table public.applications
   add column if not exists pfs_folder text

@@ -10,19 +10,9 @@ export function formatPfsDisplay(folder, number) {
   return `${prefix}-${String(number).padStart(4, '0')}`
 }
 
-export async function buildPfsFieldsForApproval(supabase, app, assignedBy = null) {
-  if (!app?.id) return {}
-
-  const { data: current, error: currentError } = await supabase
-    .from('applications')
-    .select('pfs_folder,pfs_no,pfs_display')
-    .eq('id', app.id)
-    .single()
-
-  if (currentError) throw currentError
-  if (current?.pfs_display || current?.pfs_no) return {}
-
-  const pfsFolder = getPfsFolder(app?.payment_method_name)
+// A PFS belongs to the application from the moment it is made.
+export async function buildPfsFieldsForCreation(supabase, paymentMethodName, assignedBy = null) {
+  const pfsFolder = getPfsFolder(paymentMethodName)
   const { data, error } = await supabase
     .from('applications')
     .select('pfs_no')

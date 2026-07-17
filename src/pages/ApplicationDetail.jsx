@@ -6,7 +6,7 @@ import StatusBadge from '../components/StatusBadge'
 import { formatCurrency } from '../lib/utils'
 import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
 import { buildQboJournalCsv } from '../lib/qboExport'
-import { buildPfsFieldsForApproval, formatPfsDisplay } from '../lib/pfs'
+import { formatPfsDisplay } from '../lib/pfs'
 
 function toProperCase(str) {
   if (!str) return ''
@@ -850,7 +850,6 @@ export default function ApplicationDetail() {
         extraFields = {
           fin_approved_by: user.id,
           fin_approved_at: now,
-          ...(await buildPfsFieldsForApproval(supabase, app, user.id)),
         }
       } else if (action === 'approve') {
         newStatus = 'approved'; auditAction = 'approved'

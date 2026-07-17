@@ -5,7 +5,6 @@ import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { COMPANY_PALETTE } from '../lib/companyColors'
-import { buildPfsFieldsForApproval } from '../lib/pfs'
 
 // Attachment popup
 function AttachmentPreview({ path, name, onClose }) {
@@ -530,7 +529,6 @@ export default function FinanceDashboard() {
         extraFields = {
           fin_approved_by: user.id,
           fin_approved_at: now,
-          ...(await buildPfsFieldsForApproval(supabase, app, user.id)),
         }
       } else if (action === 'approve') {
         newStatus = 'approved'; auditAction = 'approved'
