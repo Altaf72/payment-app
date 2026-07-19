@@ -21,6 +21,7 @@ const TEXT = {
     payrollWorkbook: 'Payroll Workbook',
     dtcmReport: 'DTCM Report',
     imprestFunds: 'Imprest Fund Management',
+    chequeFlow: 'ChequeFlow',
     localSettings: 'Local Settings',
     admin: 'Admin',
     settings: 'Settings',
@@ -54,6 +55,7 @@ const TEXT = {
     payrollWorkbook: '工资工作簿',
     dtcmReport: 'DTCM Report',
     imprestFunds: 'Imprest Fund Management',
+    chequeFlow: 'ChequeFlow',
     localSettings: '本地设置',
     admin: '管理',
     settings: '设置',
@@ -225,6 +227,11 @@ export default function Layout() {
             {['finance','cfo','superadmin'].includes(profile?.role) && (
               <button className={`sidebar-link ${isActive('/imprest-funds') ? 'active' : ''}`} onClick={() => go('/imprest-funds')}>
                 <span className="icon">I</span> {text.imprestFunds}
+              </button>
+            )}
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/cheque-flow') ? 'active' : ''}`} onClick={() => go('/cheque-flow')}>
+                <span className="icon">C</span> {text.chequeFlow}
               </button>
             )}
             <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}
