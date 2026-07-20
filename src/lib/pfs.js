@@ -13,16 +13,18 @@ export function formatPfsDisplay(folder, number) {
 // A PFS belongs to the application from the moment it is made.
 export async function buildPfsFieldsForCreation(supabase, paymentMethodName, assignedBy = null) {
   const pfsFolder = getPfsFolder(paymentMethodName)
-  const { data, error } = await supabase
-    .from('applications')
-    .select('pfs_no')
-    .eq('pfs_folder', pfsFolder)
-    .order('pfs_no', { ascending: false })
-    .limit(1)
+  // PFS numbering must be shared by every maker.  Do not derive it from rows
+  // visible to the current user: staff RLS can hide other makers' applications.
+  const { data, error } = await supabase.rpc('next_pfs_number', {
+    p_folder: pfsFolder,
+  })
 
   if (error) throw error
 
-  const nextNo = Number(data?.[0]?.pfs_no || 0) + 1
+  const nextNo = Number(data)
+  if (!Number.isInteger(nextNo) || nextNo < 1) {
+    throw new Error('Could not allocate a PFS number')
+  }
   return {
     pfs_folder: pfsFolder,
     pfs_no: nextNo,
