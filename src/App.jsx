@@ -77,7 +77,7 @@ export default function App() {
         <Route path="imprest-funds" element={<PrivateRoute allowedRoles={['finance','cfo','superadmin','manager']}><ImprestFundManagement /></PrivateRoute>} />
         <Route path="cheque-flow" element={<PrivateRoute allowedRoles={['finance','cfo','superadmin']}><LedgerTrackerWorkspace /></PrivateRoute>} />
         <Route path="dashboard" element={
-          <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
+          <PrivateRoute allowedRoles={['finance','manager','ceo','cfo','superadmin']}>
             <FinanceDashboard />
           </PrivateRoute>
         } />

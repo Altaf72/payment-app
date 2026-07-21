@@ -546,6 +546,13 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
   .report-prop-list{max-height:260px}
 }
 
+.cf-property-matches{position:absolute;left:0;right:0;top:100%;z-index:220;margin-top:3px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow-2);overflow:hidden;max-height:235px;overflow-y:auto}
+.cf-property-match,.cf-property-new{display:block;width:100%;padding:9px 11px;border:0;border-bottom:1px solid var(--line-soft);background:#fff;text-align:left;cursor:pointer;color:var(--ink);font:inherit}
+.cf-property-match:hover,.cf-property-new:hover{background:var(--surface-2)}
+.cf-property-match strong{display:block;font-size:13px}.cf-property-match span{display:block;color:var(--ink-faint);font-size:11px;margin-top:2px}.cf-property-new{color:var(--brand-dark);font-weight:700;border-bottom:0}
+/* Strong current-tab cue: keeps the tracker orientation clear across long workflows. */
+.tabs .tab-btn.active{background:#E1EEE7!important;color:#143F34!important;border-bottom-color:#1F5C4C!important;font-weight:800!important;box-shadow:inset 0 0 0 1px rgba(31,92,76,.12)}
+.tabs .tab-btn.active::before{content:"●";font-size:8px;margin-right:6px;vertical-align:1px;color:#1F5C4C}
 </style>
 </head>
 <body>
@@ -1541,7 +1548,6 @@ function chequeFormFieldsHtml(rec){
   function opts(list, cur){
     return list.map(function(v){ return '<option value="'+esc(v)+'" '+(String(cur||"")===v?"selected":"")+'>'+esc(v)+'</option>'; }).join("");
   }
-  var propDatalist = A.STATE.properties.map(function(p){ return '<option value="'+esc(p.propertyKey)+'">'; }).join("");
   var direction = rec.direction || "Payable";
   return '' +
     '<div class="form-grid">' +
@@ -1554,7 +1560,7 @@ function chequeFormFieldsHtml(rec){
         '<input type="date" id="cf_date" value="'+esc(rec.chequeDate||"")+'" required></div></div>' +
       '<div class="field"><label class="req">Amount</label><input type="number" id="cf_amount" min="0" step="0.01" value="'+esc(rec.amount||"")+'" required></div>' +
       '<div class="field"><label>Entity</label><select id="cf_entity"><option value="">—</option>'+opts(sl.entity, rec.entity)+'</select></div>' +
-      '<div class="field"><label>Property key</label><input type="text" id="cf_propertyKey" list="cf_propKeyList" value="'+esc(rec.propertyKey||"")+'"><datalist id="cf_propKeyList">'+propDatalist+'</datalist></div>' +
+      '<div class="field" style="position:relative"><label>Property key</label><input type="search" id="cf_propertyKey" autocomplete="off" placeholder="Search key, property, owner or description" value="'+esc(rec.propertyKey||"")+'"><div id="cf_propertyMatches" class="cf-property-matches"></div><span class="small-muted">Start typing to find an existing property, or add a new key.</span></div>' +
       '<div class="field"><label id="cf_counterpartyLabel">'+(direction==="Receivable"?"Received from":"Paid to")+'</label><input type="text" id="cf_counterparty" value="'+esc(rec.counterparty||"")+'"></div>' +
       '<div class="field"><label>Description</label><input type="text" id="cf_description" value="'+esc(rec.description||"")+'"></div>' +
       '<div class="field"><label>Payment purpose</label><select id="cf_purpose"><option value="">—</option>'+opts(sl.paymentPurpose, rec.paymentPurpose)+'</select></div>' +
@@ -1578,9 +1584,9 @@ function wireDatePickButtons(scopeEl){
   });
 }
 
-function openChequeForm(existingRec, onSave){
+function openChequeForm(existingRec, onSave, initial){
   var isEdit = !!existingRec;
-  var html = chequeFormFieldsHtml(existingRec||{}) +
+  var html = chequeFormFieldsHtml(existingRec||initial||{}) +
     '<div class="form-actions"><button class="btn" id="cf_cancel" type="button">Cancel</button>' +
     '<button class="btn btn-primary" id="cf_save" type="button">'+(isEdit?"Save changes":"Add cheque")+'</button></div>';
   A.openModal(isEdit ? "Edit cheque" : "Add cheque", html);
@@ -1589,6 +1595,33 @@ function openChequeForm(existingRec, onSave){
   document.getElementById("cf_direction").addEventListener("change", function(e){
     document.getElementById("cf_counterpartyLabel").textContent = e.target.value === "Receivable" ? "Received from" : "Paid to";
   });
+  var keyInput = document.getElementById("cf_propertyKey");
+  var matchesWrap = document.getElementById("cf_propertyMatches");
+  function selectProperty(prop){
+    keyInput.value = prop.propertyKey || "";
+    if(prop.entity) document.getElementById("cf_entity").value = prop.entity;
+    if(!document.getElementById("cf_counterparty").value && prop.payeeOwner) document.getElementById("cf_counterparty").value = prop.payeeOwner;
+    if(!document.getElementById("cf_description").value && prop.propertyUnit) document.getElementById("cf_description").value = prop.propertyUnit;
+    matchesWrap.innerHTML = "";
+  }
+  function renderPropertyMatches(){
+    var query = keyInput.value.trim().toLowerCase();
+    if(!query){ matchesWrap.innerHTML = ""; return; }
+    var matches = A.STATE.properties.filter(function(prop){
+      return [prop.propertyKey,prop.propertyUnit,prop.payeeOwner,prop.entity].filter(Boolean).join(" ").toLowerCase().indexOf(query) !== -1;
+    }).slice(0,8);
+    var exact = A.STATE.properties.some(function(prop){ return A.norm(prop.propertyKey)===A.norm(query); });
+    matchesWrap.innerHTML = matches.map(function(prop){ return '<button type="button" class="cf-property-match" data-key="'+esc(prop.propertyKey)+'"><strong>'+esc(prop.propertyUnit||prop.propertyKey)+'</strong><span>'+esc([prop.propertyKey,prop.payeeOwner,prop.entity].filter(Boolean).join(" · "))+'</span></button>'; }).join("") + (!exact ? '<button type="button" class="cf-property-new" id="cf_addNewProperty">+ Add new property key “'+esc(keyInput.value.trim())+'”</button>' : '');
+    matchesWrap.querySelectorAll("[data-key]").forEach(function(button){ button.addEventListener("click", function(){ var prop=A.STATE.properties.find(function(item){return item.propertyKey===button.getAttribute("data-key");}); if(prop) selectProperty(prop); }); });
+    var add = document.getElementById("cf_addNewProperty");
+    if(add) add.addEventListener("click", function(){
+      var seed={propertyKey:keyInput.value.trim(),propertyUnit:keyInput.value.trim(),recordType:"Property"};
+      var draft={chequeDate:document.getElementById("cf_date").value,amount:document.getElementById("cf_amount").value,direction:document.getElementById("cf_direction").value,entity:document.getElementById("cf_entity").value,propertyKey:seed.propertyKey,counterparty:document.getElementById("cf_counterparty").value,description:document.getElementById("cf_description").value,paymentPurpose:document.getElementById("cf_purpose").value,recurrenceFrequency:document.getElementById("cf_recurrence").value,chequeNo:document.getElementById("cf_chequeNo").value,status:document.getElementById("cf_status").value};
+      A.openPropertyForm(null,function(){ var created=A.STATE.properties.find(function(prop){return A.norm(prop.propertyKey)===A.norm(seed.propertyKey);}); if(created){ draft.propertyKey=created.propertyKey; if(!draft.entity) draft.entity=created.entity||""; if(!draft.counterparty) draft.counterparty=created.payeeOwner||""; if(!draft.description) draft.description=created.propertyUnit||""; } openChequeForm(null,onSave,draft); },seed);
+    });
+  }
+  keyInput.addEventListener("input", renderPropertyMatches);
+  keyInput.addEventListener("focus", renderPropertyMatches);
   document.getElementById("cf_cancel").addEventListener("click", A.closeModal);
   document.getElementById("cf_save").addEventListener("click", function(){
     var date = document.getElementById("cf_date").value;
@@ -2455,9 +2488,9 @@ function isDuplicateKey(key, existing){
   });
 }
 
-function openPropertyForm(existing, onSave){
+function openPropertyForm(existing, onSave, initial){
   var isEdit = !!existing;
-  var seed = existing || { propertyKey: nextKeyForType("Property"), recordType: "Property" };
+  var seed = existing || initial || { propertyKey: nextKeyForType("Property"), recordType: "Property" };
   var html = propertyFormFieldsHtml(seed) +
     '<div class="form-actions"><button class="btn" id="pf_cancel" type="button">Cancel</button>' +
     '<button class="btn btn-primary" id="pf_save" type="button">'+(isEdit?"Save changes":"Add record")+'</button></div>';
