@@ -664,6 +664,7 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
           <h2>Calendar</h2>
           <div class="row-flex" style="gap:10px;align-items:center">
             <span class="hint" id="calSummaryHint"></span>
+            <button class="btn btn-sm" id="btnCalToday" title="Bring the current month into view">Today</button>
             <button class="btn btn-sm" id="btnCalToggleControls">Hide controls</button>
           </div>
         </div>
@@ -2016,14 +2017,35 @@ function initUpcomingControls(){
   applyPreset("0-30");
 }
 
+function prioritySortUpcoming(records){
+  var today = A.todayMidnight();
+  return records.slice().sort(function(a,b){
+    function rank(rec){
+      var status = A.norm(rec.status);
+      var days = A.daysFromToday(rec.chequeDate);
+      if(A.isUnpaidStatus(rec.status) && days !== null && days < 0) return 0; // overdue
+      if(status === "pdc") return 1; // scheduled, always chronological after overdue
+      if(status === "hold") return 2;
+      if(A.isUnpaidStatus(rec.status)) return 3;
+      if(status === "paid/cleared" || status === "cash") return 5; // cleared last
+      return 4;
+    }
+    var rankDiff = rank(a)-rank(b);
+    if(rankDiff) return rankDiff;
+    var da=A.parseDate(a.chequeDate), db=A.parseDate(b.chequeDate);
+    if(!da&&!db) return 0; if(!da) return 1; if(!db) return -1;
+    return da-db;
+  });
+}
+
 function currentFilteredUpcoming(){
   var f = { search: upState.search, direction: Array.from(upState.direction), entity: Array.from(upState.entity), purpose: Array.from(upState.purpose), status: Array.from(upState.status) };
   if(upState.preset === "overdue"){
     var base = A.filterCheques(A.STATE.cheques, Object.assign({}, f, {to: upState.to}));
-    return A.sortByDate(base.filter(function(c){ return A.isUnpaidStatus(c.status); }));
+    return prioritySortUpcoming(base.filter(function(c){ return A.isUnpaidStatus(c.status); }));
   }
   f.from = upState.from; f.to = upState.to;
-  return A.sortByDate(A.filterCheques(A.STATE.cheques, f));
+  return prioritySortUpcoming(A.filterCheques(A.STATE.cheques, f));
 }
 
 function selectedRecords(){
@@ -2805,10 +2827,40 @@ function exportChequesWorkbook(records, filename){
   XLSX.writeFile(wb, filename || "cheques_export.xlsx", {cellDates:true});
 }
 
+// The Properties worksheet is the master register for every tracked key,
+// including recurring and one-off obligations.  Historic cheques sometimes
+// exist before their master record was added, so include those keys too.
+function buildPropertiesMasterRecords(){
+  var byKey = {};
+  A.STATE.properties.forEach(function(property){
+    var key = A.norm(property.propertyKey);
+    if(key) byKey[key] = stripId(property);
+  });
+  A.STATE.cheques.forEach(function(cheque){
+    var key = A.norm(cheque.propertyKey);
+    if(!key || byKey[key]) return;
+    var recordType = A.recordTypeFromKey(cheque.propertyKey);
+    byKey[key] = {
+      propertyKey: cheque.propertyKey,
+      recordType: recordType === "Property" ? "Other" : recordType,
+      propertyUnit: cheque.description || cheque.propertyKey,
+      entity: cheque.entity || "",
+      payeeOwner: cheque.counterparty || "",
+      contractStart: "", contractEnd: "", annualRent: "", totalInstallments: "",
+      propertyStatus: "", ownerNationality: "", managementType: ""
+    };
+  });
+  return Object.keys(byKey).map(function(key){ return byKey[key]; }).sort(function(a,b){
+    var typeOrder = {Property:0, Recurring:1, Other:2};
+    var typeDiff = (typeOrder[a.recordType] || 9) - (typeOrder[b.recordType] || 9);
+    return typeDiff || String(a.propertyKey).localeCompare(String(b.propertyKey));
+  });
+}
+
 function exportFullWorkbook(){
   var wb = XLSX.utils.book_new();
   var plainC = A.STATE.cheques.map(stripId);
-  var plainP = A.STATE.properties.map(stripId);
+  var plainP = buildPropertiesMasterRecords();
   var plainD = A.STATE.deposits.map(stripId);
   var wsC = XLSX.utils.json_to_sheet(plainC, {header:A.CHEQUE_FIELDS});
   applyDateFormat(wsC, A.CHEQUE_FIELDS, CHEQUE_DATE_FIELDS, plainC);
@@ -2941,6 +2993,10 @@ function handleExcelImportFile(file){
       A.STATE.properties = A.backfillRecordTypes(incoming.properties);
       A.STATE.deposits = incoming.deposits;
       if(incoming.setupLists) A.STATE.setupLists = Object.assign({}, A.STATE.setupLists, incoming.setupLists);
+      // The host application listens for this message and upserts every
+      // imported workbook sheet into Supabase. The tracker remains usable
+      // standalone, where postMessage simply has no listener.
+      try{ window.parent.postMessage({ type:"chequeflow:workbook-import", state:{cheques:A.STATE.cheques,properties:A.STATE.properties,deposits:A.STATE.deposits,setupLists:A.STATE.setupLists} }, window.location.origin); }catch(e){}
       A.toast("Replaced ledger data from workbook.", "ok");
       A.refreshAllViews();
     }, {requireText:"REPLACE"});
@@ -3726,7 +3782,6 @@ function initCalendarControls(){
     if(prefs.expanded && typeof prefs.expanded === "object") calendarState.expanded = prefs.expanded;
     if(typeof prefs.scrollTop === "number") calendarState.scrollTop = prefs.scrollTop;
     if(typeof prefs.scrollLeft === "number") calendarState.scrollLeft = prefs.scrollLeft;
-    if(typeof prefs.scrollTop === "number" || typeof prefs.scrollLeft === "number") _calScrollToToday = false;
   }
   document.getElementById("calSearch").value = calendarState.search || "";
 
@@ -3740,6 +3795,11 @@ function initCalendarControls(){
   });
   document.getElementById("btnCalCollapseAll").addEventListener("click", function(){
     calendarState.expanded = {};
+    renderCalendar();
+  });
+  document.getElementById("btnCalToday").addEventListener("click", function(){
+    calendarState.scrollTop = null; calendarState.scrollLeft = null;
+    _calScrollToToday = true;
     renderCalendar();
   });
   document.querySelectorAll("#calLayoutChips [data-layout]").forEach(function(btn){

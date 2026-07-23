@@ -1,10 +1,32 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../lib/supabase'
 
 export default function LedgerTrackerWorkspace() {
-  const { profile } = useAuth()
+  const { profile, user } = useAuth()
   const iframeRef = useRef(null)
   const canEdit = profile?.role === 'finance'
+
+  useEffect(() => {
+    async function syncWorkbook(event) {
+      if (event.origin !== window.location.origin || event.data?.type !== 'chequeflow:workbook-import' || !user?.id) return
+      const state = event.data.state || {}
+      try {
+        const properties = (state.properties || []).filter(p => p.propertyKey).map(p => ({ property_key: String(p.propertyKey).trim(), record_type: p.recordType || 'Property', property_unit: p.propertyUnit ? String(p.propertyUnit) : null, entity: p.entity || null, payee_owner: p.payeeOwner || null, contract_start: isoDate(p.contractStart), contract_end: isoDate(p.contractEnd), annual_rent: Number(p.annualRent || 0), total_installments: Number(p.totalInstallments || 0) || null, property_status: p.propertyStatus || null, owner_nationality: p.ownerNationality || null, management_type: p.managementType || null, created_by: user.id, updated_by: user.id }))
+        const propertyKeys = new Set(properties.map(p => p.property_key))
+        const entries = (state.cheques || []).map((c, index) => ({ source_import_key: `workbook-${index}-${String(c.propertyKey || '').trim()}-${c.chequeDate || ''}`, direction: String(c.direction || 'Payable').toLowerCase() === 'receivable' ? 'receivable' : 'payable', cheque_no: c.chequeNo || null, property_key: c.propertyKey || null, entity: c.entity || null, due_date: isoDate(c.chequeDate) || new Date().toISOString().slice(0, 10), property_name: c.description || null, counterparty: c.counterparty || c.description || c.propertyKey || 'Unassigned', category: c.paymentPurpose || null, recurrence_frequency: c.recurrenceFrequency || null, amount: Number(c.amount || 0.01) || 0.01, currency: 'AED', status: mapStatus(c.status), source_status: c.status || null, notes: c.description || null, created_by: user.id, updated_by: user.id }))
+        const deposits = (state.deposits || []).filter(d => propertyKeys.has(String(d.propertyKey || '').trim())).map(d => ({ property_key: String(d.propertyKey).trim(), rental_deposit: Number(d.rentalDeposit || 0), dewa_deposit: Number(d.dewaDeposit || 0), chiller_deposit: Number(d.chillerDeposit || 0), gas_deposit: Number(d.gasDeposit || 0), other_deposit: Number(d.otherDeposit || 0), remark: d.remark || null, created_by: user.id, updated_by: user.id }))
+        if (properties.length) { const { error } = await supabase.from('cheque_flow_properties').upsert(properties, { onConflict: 'property_key' }); if (error) throw error }
+        if (deposits.length) { const { error } = await supabase.from('cheque_flow_deposits').upsert(deposits, { onConflict: 'property_key' }); if (error) throw error }
+        if (entries.length) { const { error } = await supabase.from('cheque_flow_entries').upsert(entries, { onConflict: 'source_import_key' }); if (error) throw error }
+        const setup = Object.entries(state.setupLists || {}).map(([list_name, values_json]) => ({ list_name, values_json, updated_by: user.id }))
+        if (setup.length) { const { error } = await supabase.from('cheque_flow_setup_lists').upsert(setup, { onConflict: 'list_name' }); if (error) throw error }
+        iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: true }, window.location.origin)
+      } catch (error) { iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: false, message: error.message }, window.location.origin) }
+    }
+    window.addEventListener('message', syncWorkbook)
+    return () => window.removeEventListener('message', syncWorkbook)
+  }, [user?.id])
 
   function configureTracker() {
     const doc = iframeRef.current?.contentDocument
@@ -34,9 +56,21 @@ export default function LedgerTrackerWorkspace() {
       doc.head.appendChild(style)
     }
     if (!canEdit) headerActions?.insertAdjacentHTML('beforeend', '<span style="font-size:12px;color:#5B665F">View only</span>')
+    doc.defaultView?.addEventListener('message', event => {
+      if (event.origin !== window.location.origin || event.data?.type !== 'chequeflow:sync-result') return
+      doc.defaultView?.APP?.toast?.(event.data.ok ? 'Workbook synced to Supabase.' : `Supabase sync failed: ${event.data.message}`, event.data.ok ? 'ok' : 'err')
+    })
   }
 
   return <div style={{ height: 'calc(100vh - 64px)', minHeight: 720, margin: '-24px -32px' }}>
     <iframe ref={iframeRef} onLoad={configureTracker} title="Ledger & Term Tracker" src="/ledger_tracker.html" style={{ display: 'block', width: '100%', height: '100%', border: 0, background: '#edefe8' }} />
   </div>
 }
+
+function isoDate(value) {
+  if (!value) return null
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10)
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10)
+}
+function mapStatus(value) { const text = String(value || '').toLowerCase(); if (text.includes('cleared') || text === 'cash') return 'cleared'; if (text.includes('return') || text.includes('cancel')) return 'returned'; if (text.includes('hold')) return 'on_hold'; return 'pending' }

@@ -71,6 +71,13 @@ create table if not exists public.cheque_flow_deposits (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.cheque_flow_setup_lists (
+  list_name text primary key,
+  values_json jsonb not null default '[]'::jsonb,
+  updated_by uuid references public.users(id),
+  updated_at timestamptz not null default now()
+);
+
 create or replace function public.set_cheque_flow_updated_at() returns trigger language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
 drop trigger if exists cheque_flow_set_updated_at on public.cheque_flow_entries;
 create trigger cheque_flow_set_updated_at before update on public.cheque_flow_entries for each row execute function public.set_cheque_flow_updated_at();
@@ -78,6 +85,7 @@ create trigger cheque_flow_set_updated_at before update on public.cheque_flow_en
 alter table public.cheque_flow_entries enable row level security;
 alter table public.cheque_flow_properties enable row level security;
 alter table public.cheque_flow_deposits enable row level security;
+alter table public.cheque_flow_setup_lists enable row level security;
 drop policy if exists "ChequeFlow finance can view" on public.cheque_flow_entries;
 create policy "ChequeFlow finance can view" on public.cheque_flow_entries for select to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
 drop policy if exists "ChequeFlow finance can insert" on public.cheque_flow_entries;
@@ -91,3 +99,5 @@ drop policy if exists "ChequeFlow finance manages properties" on public.cheque_f
 create policy "ChequeFlow finance manages properties" on public.cheque_flow_properties for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
 drop policy if exists "ChequeFlow finance manages deposits" on public.cheque_flow_deposits;
 create policy "ChequeFlow finance manages deposits" on public.cheque_flow_deposits for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+drop policy if exists "ChequeFlow finance manages setup lists" on public.cheque_flow_setup_lists;
+create policy "ChequeFlow finance manages setup lists" on public.cheque_flow_setup_lists for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));

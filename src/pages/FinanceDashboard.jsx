@@ -175,6 +175,8 @@ export default function FinanceDashboard() {
   const [quickActionLoading, setQuickActionLoading] = useState(null)
   const [undoBatchLoading, setUndoBatchLoading] = useState(null)
   const [usedRefs, setUsedRefs] = useState(loadUsedRefs)
+  const [reviewedIds, setReviewedIds] = useState(() => new Set())
+  const [showUncheckedOnly, setShowUncheckedOnly] = useState(false)
   const loadRequestRef = useRef(0)
 
   // Restore filter state from sessionStorage on mount
@@ -274,6 +276,15 @@ export default function FinanceDashboard() {
     })
   }
 
+  function toggleReviewed(applicationId) {
+    setReviewedIds(current => {
+      const next = new Set(current)
+      if (next.has(applicationId)) next.delete(applicationId)
+      else next.add(applicationId)
+      return next
+    })
+  }
+
   async function load() {
     if (!scopeReady) return
     const requestId = ++loadRequestRef.current
@@ -299,7 +310,29 @@ export default function FinanceDashboard() {
     }
 
     const textTerm = search.trim().replace(/[,%()]/g, ' ').trim()
-    function buildQuery(from, to, includeCount = false) {
+    let commentMatchIds = []
+    if (textTerm) {
+      let commentOffset = 0
+      while (true) {
+        const commentResult = await supabase
+          .from('audit_log')
+          .select('application_id')
+          .eq('action', 'edited')
+          .like('note', 'Comment: %')
+          .ilike('note', `%${textTerm}%`)
+          .range(commentOffset, commentOffset + QUERY_PAGE_SIZE - 1)
+        if (commentResult.error) {
+          console.error('Finance comment search failed', commentResult.error)
+          break
+        }
+        commentMatchIds.push(...(commentResult.data || []).map(row => row.application_id).filter(Boolean))
+        if ((commentResult.data || []).length < QUERY_PAGE_SIZE) break
+        commentOffset += QUERY_PAGE_SIZE
+      }
+      commentMatchIds = [...new Set(commentMatchIds)]
+    }
+
+    function buildQuery(from, to, includeCount = false, includeTextSearch = true) {
       let query = supabase
         .from('applications_full')
         .select('*', includeCount ? { count: 'exact' } : {})
@@ -312,7 +345,7 @@ export default function FinanceDashboard() {
       if (filterCompany) query = query.eq('company_name', filterCompany)
       if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
       if (filterAttachment === 'no')  query = query.is('attachment_path', null)
-      if (textTerm) {
+      if (includeTextSearch && textTerm) {
         query = query.or(
           `ref_number.ilike.%${textTerm}%,payment_reason.ilike.%${textTerm}%,submitted_by_name.ilike.%${textTerm}%,payee_name.ilike.%${textTerm}%,attachment_name.ilike.%${textTerm}%,remarks.ilike.%${textTerm}%`
         )
@@ -336,6 +369,18 @@ export default function FinanceDashboard() {
         if ((result.data || []).length < QUERY_PAGE_SIZE || data.length >= count) break
         offset += QUERY_PAGE_SIZE
       }
+
+      for (let index = 0; index < commentMatchIds.length; index += 200) {
+        const idChunk = commentMatchIds.slice(index, index + 200)
+        const result = await buildQuery(0, idChunk.length - 1, false, false).in('id', idChunk)
+        if (result.error) {
+          error = result.error
+          break
+        }
+        data.push(...(result.data || []))
+      }
+      data = [...new Map(data.map(row => [row.id, row])).values()]
+        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     } else {
       const from = (page - 1) * pageSize
       const result = await buildQuery(from, from + pageSize - 1, true)
@@ -378,6 +423,7 @@ export default function FinanceDashboard() {
       } else {
         const byApp = {}
         const deletedByApp = {}
+        const commentsByApp = {}
         ;(financeLogs || []).forEach(log => {
           const deleted = parseDeletedFinanceAttachment(log.note)
           if (deleted) {
@@ -386,13 +432,19 @@ export default function FinanceDashboard() {
             return
           }
           const attachment = parseFinanceAttachment(log.note)
-          if (!attachment) return
-          if (!byApp[log.application_id]) byApp[log.application_id] = []
-          byApp[log.application_id].push(attachment)
+          if (attachment) {
+            if (!byApp[log.application_id]) byApp[log.application_id] = []
+            byApp[log.application_id].push(attachment)
+          }
+          if (log.note?.startsWith('Comment: ')) {
+            if (!commentsByApp[log.application_id]) commentsByApp[log.application_id] = []
+            commentsByApp[log.application_id].push(log.note.slice(9))
+          }
         })
         rows = rows.map(app => ({
           ...app,
           finance_attachments: (byApp[app.id] || []).filter(att => !deletedByApp[app.id]?.has(att.path)),
+          finance_comments: commentsByApp[app.id] || [],
         }))
       }
     }
@@ -430,29 +482,30 @@ export default function FinanceDashboard() {
     // Export ALL matching records (no pagination)
     if (Array.isArray(allowedCompanyIds) && allowedCompanyIds.length === 0) return
     const exportSearch = search.trim().replace(/[,%()]/g, ' ').trim()
-    let rows = []
-    let offset = 0
-    while (true) {
-      let query = supabase
-        .from('applications_full')
-        .select('*')
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .range(offset, offset + QUERY_PAGE_SIZE - 1)
-      if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
-      if (filterStatus)  query = query.eq('status', filterStatus)
-      if (filterCompany) query = query.eq('company_name', filterCompany)
-      if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
-      if (filterAttachment === 'no')  query = query.is('attachment_path', null)
-      if (exportSearch) query = query.or(`ref_number.ilike.%${exportSearch}%,payment_reason.ilike.%${exportSearch}%,submitted_by_name.ilike.%${exportSearch}%,payee_name.ilike.%${exportSearch}%,remarks.ilike.%${exportSearch}%`)
-      const { data, error } = await query
-      if (error) {
-        alert('Could not export applications: ' + error.message)
-        return
+    let rows = exportSearch || amountSearch.trim() ? [...applications] : []
+    if (!exportSearch && !amountSearch.trim()) {
+      let offset = 0
+      while (true) {
+        let query = supabase
+          .from('applications_full')
+          .select('*')
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + QUERY_PAGE_SIZE - 1)
+        if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
+        if (filterStatus)  query = query.eq('status', filterStatus)
+        if (filterCompany) query = query.eq('company_name', filterCompany)
+        if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
+        if (filterAttachment === 'no')  query = query.is('attachment_path', null)
+        const { data, error } = await query
+        if (error) {
+          alert('Could not export applications: ' + error.message)
+          return
+        }
+        rows.push(...(data || []))
+        if ((data || []).length < QUERY_PAGE_SIZE) break
+        offset += QUERY_PAGE_SIZE
       }
-      rows.push(...(data || []))
-      if ((data || []).length < QUERY_PAGE_SIZE) break
-      offset += QUERY_PAGE_SIZE
     }
     if (amountSearch.trim()) rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
 
@@ -497,15 +550,15 @@ export default function FinanceDashboard() {
     })
   }
 
-  function setCurrentPageSelected(checked) {
+  function setCurrentPageSelected(checked, records = applications) {
     setSelected(current => {
       const updated = new Set(current)
-      applications.forEach(app => checked ? updated.add(app.id) : updated.delete(app.id))
+      records.forEach(app => checked ? updated.add(app.id) : updated.delete(app.id))
       return updated
     })
     setSelectedRecords(current => {
       const updated = new Map(current)
-      applications.forEach(app => checked ? updated.set(app.id, app) : updated.delete(app.id))
+      records.forEach(app => checked ? updated.set(app.id, app) : updated.delete(app.id))
       return updated
     })
   }
@@ -801,6 +854,10 @@ export default function FinanceDashboard() {
   }
 
   const isSearching = !!(search.trim() || amountSearch.trim())
+  const visibleApplications = showUncheckedOnly
+    ? applications.filter(app => !reviewedIds.has(app.id))
+    : applications
+  const reviewedVisibleCount = applications.filter(app => reviewedIds.has(app.id)).length
 
   return (
     <div>
@@ -850,7 +907,7 @@ export default function FinanceDashboard() {
       {/* Filters */}
       <div style={{ display:'flex', gap:'8px', marginBottom:'12px', flexWrap:'wrap', alignItems:'center' }}>
         <input className="form-control" style={{minWidth:'220px',flex:'2'}}
-          placeholder="🔍 Search ref, reason, applicant, payee…"
+          placeholder="🔍 Search ref, reason, applicant, payee, Finance comments…"
           value={search} onChange={e => setSearch(e.target.value)} />
         <input className="form-control" style={{width:'140px'}}
           placeholder="💰 Amount e.g. 105"
@@ -889,6 +946,32 @@ export default function FinanceDashboard() {
           }}>✕ Clear all</button>
         )}
       </div>
+
+      {/* Temporary review controls — memory only, never saved */}
+      {applications.length > 0 && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:'12px', flexWrap:'wrap',
+          marginBottom:'10px', padding:'7px 10px',
+          border:'1px solid var(--border)', borderRadius:'var(--radius-sm)',
+          background:'var(--cream-2)', fontSize:'12px',
+        }}>
+          <span style={{fontWeight:600}}>
+            Temporary review: {reviewedVisibleCount} / {applications.length} checked
+          </span>
+          <label style={{display:'inline-flex',alignItems:'center',gap:'5px',cursor:'pointer'}}>
+            <input type="checkbox" checked={showUncheckedOnly}
+              onChange={event => setShowUncheckedOnly(event.target.checked)} />
+            Show unchecked only
+          </label>
+          {reviewedIds.size > 0 && (
+            <button className="btn btn-outline btn-sm" type="button"
+              onClick={() => setReviewedIds(new Set())}>
+              Clear review ticks
+            </button>
+          )}
+          <span style={{marginLeft:'auto',color:'var(--ink-3)'}}>Clears on refresh or logout</span>
+        </div>
+      )}
 
       {/* Batch selection bar */}
       {selected.size > 0 && (
@@ -953,12 +1036,14 @@ export default function FinanceDashboard() {
               <p>{loadError}</p>
               <button className="btn btn-outline btn-sm" onClick={load}>Try again</button>
             </div>
-          ) : applications.length === 0 ? (
+          ) : visibleApplications.length === 0 ? (
             <div className="empty-state">
               <div className="icon">🔍</div>
-              <h3>No results found</h3>
+              <h3>{showUncheckedOnly && applications.length > 0 ? 'All visible rows are checked' : 'No results found'}</h3>
               <p>
-                {isSearching
+                {showUncheckedOnly && applications.length > 0
+                  ? 'Clear review ticks or turn off “Show unchecked only” to display them again.'
+                  : isSearching
                   ? 'No records match your search across the entire database.'
                   : 'Try adjusting your filters.'
                 }
@@ -971,8 +1056,8 @@ export default function FinanceDashboard() {
                   <th style={{width:'32px'}}>
                     <input type="checkbox"
                       style={{width:'13px',height:'13px',cursor:'pointer'}}
-                      checked={applications.length > 0 && applications.every(app => selected.has(app.id))}
-                      onChange={e => setCurrentPageSelected(e.target.checked)}
+                      checked={visibleApplications.length > 0 && visibleApplications.every(app => selected.has(app.id))}
+                      onChange={e => setCurrentPageSelected(e.target.checked, visibleApplications)}
                     />
                   </th>
                   <th>Reference</th>
@@ -988,7 +1073,7 @@ export default function FinanceDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {applications.map(app => {
+                {visibleApplications.map(app => {
                   const idx = companiesSorted.findIndex(c => c.name === app.company_name)
                   const dbColor = companiesSorted[idx]?.accent_color
                   const col = COMPANY_PALETTE[Math.max(0,idx) % COMPANY_PALETTE.length]
@@ -996,9 +1081,15 @@ export default function FinanceDashboard() {
                   const quickActions = getQuickActions(app)
                   const totalCols = 10
                   const refWasUsed = usedRefs.has(app.ref_number)
+                  const isReviewed = reviewedIds.has(app.id)
+                  const hasDetailRow = !!(app.remarks || app.finance_comments?.length)
                   return (
                     <React.Fragment key={app.id}>
-                      <tr style={{lineHeight:'1.3'}}>
+                      <tr style={{
+                        lineHeight:'1.3',
+                        background:isReviewed ? '#ecfdf5' : undefined,
+                        transition:'background-color .15s ease',
+                      }}>
                         {/* Checkbox */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px'}}>
                           <input type="checkbox"
@@ -1010,6 +1101,20 @@ export default function FinanceDashboard() {
                         {/* Reference + copy button */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
+                            <button type="button"
+                              aria-label={isReviewed ? `Uncheck temporary review for ${app.ref_number}` : `Temporarily check ${app.ref_number}`}
+                              aria-pressed={isReviewed}
+                              title={isReviewed ? 'Remove temporary review tick' : 'Temporarily mark as reviewed'}
+                              onClick={() => toggleReviewed(app.id)}
+                              style={{
+                                width:'18px',height:'18px',borderRadius:'50%',padding:0,flexShrink:0,
+                                border:`1px solid ${isReviewed ? '#15803d' : 'var(--border)'}`,
+                                background:isReviewed ? '#16a34a' : 'transparent',
+                                color:isReviewed ? '#fff' : 'var(--ink-3)',
+                                fontSize:'11px',lineHeight:'16px',cursor:'pointer',
+                              }}>
+                              {isReviewed ? '✓' : ''}
+                            </button>
                             <CopyableField
                               copyText={app.ref_number || ''}
                               label="Reference number"
@@ -1195,23 +1300,38 @@ export default function FinanceDashboard() {
                         </td>
                       </tr>
 
-                      {/* Remarks sub-row — spans from company col to end */}
-                      {app.remarks && (
-                        <tr style={{borderTop:'none'}}>
+                      {/* Remarks and Finance comments — spans from company col to end */}
+                      {hasDetailRow && (
+                        <tr style={{
+                          borderTop:'none',
+                          background:isReviewed ? '#ecfdf5' : undefined,
+                          transition:'background-color .15s ease',
+                        }}>
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                           <td colSpan={8} style={{
                             padding:'0 0 8px 6px',
                             borderTop:'none',
                             fontSize:'11px',
-                            color:'#dc2626',
                             fontStyle:'italic',
                             overflow:'hidden',
                             textOverflow:'ellipsis',
                             whiteSpace:'nowrap',
                             maxWidth:0,
                           }}>
-                            <CopyableField copyText={app.remarks} label="Remarks">{app.remarks}</CopyableField>
+                            {app.remarks && (
+                              <div style={{color:'#dc2626'}}>
+                                <CopyableField copyText={app.remarks} label="Remarks">{app.remarks}</CopyableField>
+                              </div>
+                            )}
+                            {(app.finance_comments || []).map((comment, index) => (
+                              <div key={`${app.id}-finance-comment-${index}`}
+                                style={{color:'#1d4ed8',marginTop:app.remarks || index > 0 ? '2px' : 0}}>
+                                <CopyableField copyText={comment} label="Finance comment">
+                                  Finance: {comment}
+                                </CopyableField>
+                              </div>
+                            ))}
                           </td>
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                         </tr>
