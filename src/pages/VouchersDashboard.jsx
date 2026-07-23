@@ -2,8 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { formatCurrency } from '../lib/utils'
+import { useAuth } from '../context/AuthContext'
 
 const STORAGE_KEY = 'vouchers_dashboard_filters'
+const companyCell = { width:'118px', maxWidth:'118px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }
+const descriptionCell = {
+  minWidth:'260px', maxWidth:'360px', overflow:'hidden', textOverflow:'ellipsis',
+  display:'-webkit-box', WebkitBoxOrient:'vertical', WebkitLineClamp:2, lineHeight:'1.35',
+}
 
 function getSavedDashboardState() {
   try {
@@ -24,6 +30,8 @@ function displayDate(value) {
 
 export default function VouchersDashboard() {
   const navigate = useNavigate()
+  const { profile } = useAuth()
+  const isStaff = profile?.role === 'staff'
   const saved = getSavedDashboardState()
   const [vouchers, setVouchers] = useState([])
   const [companies, setCompanies] = useState([])
@@ -143,7 +151,7 @@ export default function VouchersDashboard() {
           <p>Payment and receipt vouchers</p>
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-          <button className="btn btn-primary" onClick={() => openVoucherPath('/payment-voucher/new?from=vouchers')}>New Payment Voucher</button>
+          <button className="btn btn-primary" onClick={() => openVoucherPath(isStaff ? '/payment-voucher/select-application' : '/payment-voucher/new?from=vouchers')}>New Payment Voucher</button>
           <button className="btn btn-outline" onClick={() => openVoucherPath('/receipt-voucher/new?from=vouchers')}>New Receipt Voucher</button>
         </div>
       </div>
@@ -200,10 +208,10 @@ export default function VouchersDashboard() {
                   <th>Voucher</th>
                   <th>Type</th>
                   <th>Date</th>
-                  <th>Company</th>
+                  <th style={{width:'118px'}}>Company</th>
                   <th>Party</th>
+                  <th style={{minWidth:'260px'}}>Description</th>
                   <th>Mode</th>
-                  <th>Status</th>
                   <th style={{textAlign:'right'}}>Amount</th>
                   <th>Actions</th>
                 </tr>
@@ -217,10 +225,10 @@ export default function VouchersDashboard() {
                       <td style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700}}>{voucher.voucher_number}</td>
                       <td>{type === 'receipt' ? 'Receipt' : 'Payment'}</td>
                       <td>{displayDate(voucher.voucher_date)}</td>
-                      <td>{company?.name || '—'}</td>
+                      <td style={companyCell} title={company?.name || ''}>{company?.name || '—'}</td>
                       <td>{voucher.paid_to || '—'}</td>
+                      <td style={descriptionCell} title={voucher.payment_reason || voucher.narration || ''}>{voucher.payment_reason || voucher.narration || '—'}</td>
                       <td>{voucher.payment_mode || '—'}</td>
-                      <td><span className={`badge badge-${voucher.status === 'saved' ? 'approved' : voucher.status === 'cancelled' ? 'rejected' : 'draft'}`}>{voucher.status}</span></td>
                       <td style={{textAlign:'right',whiteSpace:'nowrap'}}>AED {formatCurrency(voucher.amount)}</td>
                       <td>
                         <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>

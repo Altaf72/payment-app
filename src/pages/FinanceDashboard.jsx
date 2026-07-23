@@ -110,6 +110,7 @@ function parseDeletedFinanceAttachment(note) {
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const USED_REFS_KEY = 'finance_dashboard_used_refs'
+const QUERY_PAGE_SIZE = 1000
 
 function loadUsedRefs() {
   try {
@@ -159,8 +160,12 @@ export default function FinanceDashboard() {
   const [applications, setApplications]       = useState([])
   const [total, setTotal]                     = useState(0)
   const [loading, setLoading]                 = useState(true)
+  const [loadError, setLoadError]             = useState('')
   const [companies, setCompanies]             = useState([])
   const [companiesSorted, setCompaniesSorted] = useState([])
+  const [allowedCompanyIds, setAllowedCompanyIds] = useState(null)
+  const [scopeReady, setScopeReady]           = useState(false)
+  const [scopeError, setScopeError]           = useState('')
   const [selected, setSelected]         = useState(new Set())
   const [selectedRecords, setSelectedRecords] = useState(new Map())
   const [showBatchModal, setShowBatchModal] = useState(false)
@@ -170,6 +175,7 @@ export default function FinanceDashboard() {
   const [quickActionLoading, setQuickActionLoading] = useState(null)
   const [undoBatchLoading, setUndoBatchLoading] = useState(null)
   const [usedRefs, setUsedRefs] = useState(loadUsedRefs)
+  const loadRequestRef = useRef(0)
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = 'finance_dashboard_filters'
@@ -206,14 +212,56 @@ export default function FinanceDashboard() {
 
   useEffect(() => {
     load()
-  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterAttachment])
+  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
 
   useEffect(() => {
-    supabase.from('companies').select('*').order('created_at').then(({ data }) => {
-      setCompanies(data || [])
-      setCompaniesSorted([...(data||[])].sort((a,b) => (a.created_at||'').localeCompare(b.created_at||'')))
-    })
-  }, [])
+    let active = true
+    async function loadCompanyScope() {
+      if (!user?.id || !profile?.role) return
+      setScopeReady(false)
+      setScopeError('')
+      const { data: companyRows, error: companyError } = await supabase
+        .from('companies')
+        .select('*')
+        .order('created_at')
+
+      if (!active) return
+      if (companyError) {
+        setScopeError(`Could not load company access: ${companyError.message}`)
+        setCompanies([])
+        setCompaniesSorted([])
+        setAllowedCompanyIds([])
+        setScopeReady(true)
+        return
+      }
+
+      let visibleCompanies = companyRows || []
+      if (['manager', 'cfo'].includes(profile.role)) {
+        const { data: assignments, error: assignmentError } = await supabase
+          .from('user_companies')
+          .select('company_id')
+          .eq('user_id', user.id)
+
+        if (!active) return
+        if (assignmentError) {
+          setScopeError(`Could not verify assigned companies: ${assignmentError.message}`)
+          visibleCompanies = []
+        } else {
+          const ids = new Set((assignments || []).map(row => row.company_id))
+          visibleCompanies = visibleCompanies.filter(company => ids.has(company.id))
+        }
+        setAllowedCompanyIds(visibleCompanies.map(company => company.id))
+      } else {
+        setAllowedCompanyIds(null)
+      }
+
+      setCompanies(visibleCompanies)
+      setCompaniesSorted([...visibleCompanies].sort((a,b) => (a.created_at||'').localeCompare(b.created_at||'')))
+      setScopeReady(true)
+    }
+    loadCompanyScope()
+    return () => { active = false }
+  }, [user?.id, profile?.role])
 
   function markReferenceUsed(refNumber) {
     const ref = String(refNumber || '').trim()
@@ -227,34 +275,84 @@ export default function FinanceDashboard() {
   }
 
   async function load() {
+    if (!scopeReady) return
+    const requestId = ++loadRequestRef.current
     setLoading(true)
+    if (scopeError) {
+      setApplications([])
+      setTotal(0)
+      setLoadError(scopeError)
+      setLoading(false)
+      return
+    }
+    setLoadError('')
 
     // When searching/filtering: query ALL matching rows (no pagination limit)
     // When browsing: paginate to avoid loading unnecessary data
     const isSearching = !!(search.trim() || amountSearch.trim())
-    const from = isSearching ? 0 : (page - 1) * pageSize
-    const to   = isSearching ? 9999 : from + pageSize - 1
-
-    let query = supabase
-      .from('applications_full')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(from, to)
-
-    if (filterStatus)  query = query.eq('status', filterStatus)
-    if (filterCompany) query = query.eq('company_name', filterCompany)
-    if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
-    if (filterAttachment === 'no')  query = query.is('attachment_path', null)
-
-    // Server-side text search across all records
-    if (search.trim()) {
-      query = query.or(
-        `ref_number.ilike.%${search.trim()}%,payment_reason.ilike.%${search.trim()}%,submitted_by_name.ilike.%${search.trim()}%,payee_name.ilike.%${search.trim()}%,attachment_name.ilike.%${search.trim()}%,remarks.ilike.%${search.trim()}%`
-      )
+    if (Array.isArray(allowedCompanyIds) && allowedCompanyIds.length === 0) {
+      if (requestId !== loadRequestRef.current) return
+      setApplications([])
+      setTotal(0)
+      setLoading(false)
+      return
     }
 
-    const { data, count, error } = await query
-    if (error) console.error(error)
+    const textTerm = search.trim().replace(/[,%()]/g, ' ').trim()
+    function buildQuery(from, to, includeCount = false) {
+      let query = supabase
+        .from('applications_full')
+        .select('*', includeCount ? { count: 'exact' } : {})
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+
+      if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
+      if (filterStatus)  query = query.eq('status', filterStatus)
+      if (filterCompany) query = query.eq('company_name', filterCompany)
+      if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
+      if (filterAttachment === 'no')  query = query.is('attachment_path', null)
+      if (textTerm) {
+        query = query.or(
+          `ref_number.ilike.%${textTerm}%,payment_reason.ilike.%${textTerm}%,submitted_by_name.ilike.%${textTerm}%,payee_name.ilike.%${textTerm}%,attachment_name.ilike.%${textTerm}%,remarks.ilike.%${textTerm}%`
+        )
+      }
+      return query
+    }
+
+    let data = []
+    let count = 0
+    let error = null
+    if (isSearching) {
+      let offset = 0
+      while (true) {
+        const result = await buildQuery(offset, offset + QUERY_PAGE_SIZE - 1, offset === 0)
+        if (result.error) {
+          error = result.error
+          break
+        }
+        data.push(...(result.data || []))
+        if (offset === 0) count = result.count || 0
+        if ((result.data || []).length < QUERY_PAGE_SIZE || data.length >= count) break
+        offset += QUERY_PAGE_SIZE
+      }
+    } else {
+      const from = (page - 1) * pageSize
+      const result = await buildQuery(from, from + pageSize - 1, true)
+      data = result.data || []
+      count = result.count || 0
+      error = result.error
+    }
+
+    if (requestId !== loadRequestRef.current) return
+    if (error) {
+      console.error(error)
+      setApplications([])
+      setTotal(0)
+      setLoadError(`Could not load dashboard applications: ${error.message}`)
+      setLoading(false)
+      return
+    }
 
     // Amount: server-side LIKE on cast — done client-side as postgres cant partial-match numerics
     let rows = data || []
@@ -264,12 +362,16 @@ export default function FinanceDashboard() {
 
     if (rows.length > 0) {
       const ids = rows.map(a => a.id)
-      const { data: financeLogs, error: logError } = await supabase
+      const idChunks = []
+      for (let index = 0; index < ids.length; index += 200) idChunks.push(ids.slice(index, index + 200))
+      const logResults = await Promise.all(idChunks.map(chunk => supabase
         .from('audit_log')
         .select('application_id,action,note,created_at')
-        .in('application_id', ids)
+        .in('application_id', chunk)
         .in('action', ['attachment_added','attachment_deleted','edited'])
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: true })))
+      const logError = logResults.find(result => result.error)?.error
+      const financeLogs = logResults.flatMap(result => result.data || [])
 
       if (logError) {
         console.error(logError)
@@ -295,6 +397,14 @@ export default function FinanceDashboard() {
       }
     }
 
+    if (requestId !== loadRequestRef.current) return
+    if (!isSearching) {
+      const lastPage = Math.max(1, Math.ceil((count || 0) / pageSize))
+      if (page > lastPage) {
+        setPage(lastPage)
+        return
+      }
+    }
     setApplications(rows)
     setSelectedRecords(current => {
       const updated = new Map(current)
@@ -304,7 +414,7 @@ export default function FinanceDashboard() {
       return updated
     })
     // When searching, show actual result count not paginated count
-    setTotal(isSearching ? rows.length : (count || 0))
+    setTotal(isSearching ? rows.length : count)
     setLoading(false)
   }
 
@@ -318,12 +428,32 @@ export default function FinanceDashboard() {
 
   async function exportCSV() {
     // Export ALL matching records (no pagination)
-    let query = supabase.from('applications_full').select('*').order('created_at', { ascending: false })
-    if (filterStatus)  query = query.eq('status', filterStatus)
-    if (filterCompany) query = query.eq('company_name', filterCompany)
-    if (search) query = query.or(`ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,submitted_by_name.ilike.%${search}%,payee_name.ilike.%${search}%,remarks.ilike.%${search}%`)
-    const { data } = await query
-    let rows = data || []
+    if (Array.isArray(allowedCompanyIds) && allowedCompanyIds.length === 0) return
+    const exportSearch = search.trim().replace(/[,%()]/g, ' ').trim()
+    let rows = []
+    let offset = 0
+    while (true) {
+      let query = supabase
+        .from('applications_full')
+        .select('*')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + QUERY_PAGE_SIZE - 1)
+      if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
+      if (filterStatus)  query = query.eq('status', filterStatus)
+      if (filterCompany) query = query.eq('company_name', filterCompany)
+      if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
+      if (filterAttachment === 'no')  query = query.is('attachment_path', null)
+      if (exportSearch) query = query.or(`ref_number.ilike.%${exportSearch}%,payment_reason.ilike.%${exportSearch}%,submitted_by_name.ilike.%${exportSearch}%,payee_name.ilike.%${exportSearch}%,remarks.ilike.%${exportSearch}%`)
+      const { data, error } = await query
+      if (error) {
+        alert('Could not export applications: ' + error.message)
+        return
+      }
+      rows.push(...(data || []))
+      if ((data || []).length < QUERY_PAGE_SIZE) break
+      offset += QUERY_PAGE_SIZE
+    }
     if (amountSearch.trim()) rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
 
     const csv = [
@@ -816,6 +946,13 @@ export default function FinanceDashboard() {
         <div className="table-wrap">
           {loading ? (
             <div className="empty-state"><p>Loading…</p></div>
+          ) : loadError ? (
+            <div className="empty-state">
+              <div className="icon">⚠</div>
+              <h3>Dashboard could not be loaded</h3>
+              <p>{loadError}</p>
+              <button className="btn btn-outline btn-sm" onClick={load}>Try again</button>
+            </div>
           ) : applications.length === 0 ? (
             <div className="empty-state">
               <div className="icon">🔍</div>

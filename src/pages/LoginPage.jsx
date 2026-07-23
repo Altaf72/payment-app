@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 
 export default function LoginPage() {
   const { signIn } = useAuth()
   const navigate   = useNavigate()
+  const location   = useLocation()
 
   const [email,      setEmail]      = useState('')
   const [password,   setPassword]   = useState('')
@@ -24,7 +25,12 @@ export default function LoginPage() {
     setLoading(true)
     try {
       await signIn(email, password)
-      navigate('/')
+      const requestedPath = location.state?.from
+      const destination = typeof requestedPath === 'string' &&
+        requestedPath.startsWith('/') && !requestedPath.startsWith('//')
+        ? requestedPath
+        : '/'
+      navigate(destination, { replace:true })
     } catch (err) {
       setError(err.message || 'Invalid email or password')
     } finally {

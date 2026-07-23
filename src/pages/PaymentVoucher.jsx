@@ -99,15 +99,48 @@ function fileToDataUrl(blob) {
   })
 }
 
+async function waitForImages(container) {
+  const images = Array.from(container?.querySelectorAll('img') || [])
+  const loaded = Promise.all(images.map(image => {
+    if (image.complete && image.naturalWidth > 0) return Promise.resolve()
+    return new Promise(resolve => {
+      image.addEventListener('load', resolve, { once:true })
+      image.addEventListener('error', resolve, { once:true })
+    })
+  }))
+  // Hidden print layouts do not always emit an image load event. Never leave
+  // Print or PDF Preview waiting indefinitely for one.
+  await Promise.race([
+    loaded,
+    new Promise(resolve => setTimeout(resolve, 1200)),
+  ])
+}
+
 function logoStoragePath(logoUrl) {
   const marker = '/storage/v1/object/public/attachments/'
   const index = String(logoUrl || '').indexOf(marker)
-  return index >= 0 ? decodeURIComponent(logoUrl.slice(index + marker.length)) : ''
+  return index >= 0 ? decodeURIComponent(logoUrl.slice(index + marker.length).split(/[?#]/)[0]) : ''
+}
+
+function logoCacheKey(company) {
+  return `paymentapp.company-logo.${company?.id || 'unknown'}.${company?.logo_url || ''}`
+}
+
+function clearOlderLogoCache(company) {
+  try {
+    const prefix = `paymentapp.company-logo.${company.id}.`
+    Object.keys(localStorage).filter(key => key.startsWith(prefix) && key !== logoCacheKey(company))
+      .forEach(key => localStorage.removeItem(key))
+  } catch {
+    // Local logo caching is a performance improvement only.
+  }
 }
 
 async function withPrintableLogo(company) {
   if (!company?.logo_url || String(company.logo_url).startsWith('data:')) return company
   try {
+    const cachedLogo = localStorage.getItem(logoCacheKey(company))
+    if (cachedLogo) return { ...company, logo_url: cachedLogo }
     let imageUrl = company.logo_url
     const storagePath = logoStoragePath(company.logo_url)
     if (storagePath) {
@@ -118,7 +151,10 @@ async function withPrintableLogo(company) {
     }
     const response = await fetch(imageUrl)
     if (!response.ok) throw new Error('Logo could not be loaded')
-    return { ...company, logo_url: await fileToDataUrl(await response.blob()) }
+    const dataUrl = await fileToDataUrl(await response.blob())
+    clearOlderLogoCache(company)
+    try { localStorage.setItem(logoCacheKey(company), dataUrl) } catch {}
+    return { ...company, logo_url: dataUrl }
   } catch {
     return company
   }
@@ -133,7 +169,7 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile, isR
       <header className="voucher-print-header">
         <div className="voucher-print-logo">
           {company?.logo_url
-            ? <img src={company.logo_url} alt="" />
+            ? <img src={company.logo_url} alt="" crossOrigin="anonymous" />
             : <div className="voucher-logo-placeholder">{company?.prefix || ''}</div>
           }
         </div>
@@ -231,6 +267,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user, profile, isSuperAdmin } = useAuth()
+  const isStaff = profile?.role === 'staff'
+  const isFinanceRole = ['finance', 'cfo', 'ceo', 'superadmin'].includes(profile?.role)
   const openedFromVouchers = searchParams.get('from') === 'vouchers'
   const backPath = isStandalone || openedFromVouchers ? '/vouchers' : `/application/${applicationId}`
   const backLabel = isStandalone || openedFromVouchers ? 'Back to Vouchers Dashboard' : 'Back to Application'
@@ -242,6 +280,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [companies, setCompanies] = useState([])
   const [existingVouchers, setExistingVouchers] = useState([])
   const [currentVoucherId, setCurrentVoucherId] = useState(null)
+  const [currentVoucher, setCurrentVoucher] = useState(null)
   const [cheques, setCheques] = useState([{ ...emptyCheque }])
   const [loading, setLoading] = useState(true)
   const [schemaReady, setSchemaReady] = useState(true)
@@ -268,12 +307,13 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     prepared_by_name: '',
     approved_by_name: '',
     received_by_name: '',
+    visible_to_staff: false,
     status: 'draft',
   })
 
   useEffect(() => {
     load()
-  }, [applicationId, voucherType])
+  }, [applicationId, voucherType, isStaff, user?.id])
 
   useEffect(() => () => {
     if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl)
@@ -297,12 +337,13 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     setError('')
 
     if (isStandalone) {
-      const [companiesResult, vouchersResult] = await Promise.all([
+      const [companiesResult, vouchersResult, assignmentsResult] = await Promise.all([
         supabase.from('companies').select('*').order('name'),
         supabase.from('payment_vouchers').select('*')
           .is('application_id', null)
           .eq('voucher_type', voucherType)
           .order('created_at'),
+        supabase.from('user_companies').select('company_id').eq('user_id', user.id),
       ])
       if (vouchersResult.error) {
         setSchemaReady(false)
@@ -310,13 +351,14 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         setLoading(false)
         return
       }
-      if (companiesResult.error) {
-        setError(companiesResult.error.message || 'Could not load companies')
+      if (companiesResult.error || assignmentsResult.error) {
+        setError(companiesResult.error?.message || assignmentsResult.error?.message || 'Could not load company access')
         setLoading(false)
         return
       }
 
-      const companyRows = companiesResult.data || []
+      const assignedCompanyIds = new Set((assignmentsResult.data || []).map(row => row.company_id))
+      const companyRows = (companiesResult.data || []).filter(item => assignedCompanyIds.has(item.id))
       const vouchers = vouchersResult.data || []
       setSchemaReady(true)
       setCompanies(companyRows)
@@ -331,7 +373,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         setCompany(voucherCompany)
         await editVoucher(requestedVoucher, false)
       } else {
-        startStandaloneVoucher(null, vouchers)
+        await startStandaloneVoucher(null, vouchers)
       }
       setLoading(false)
       return
@@ -344,6 +386,11 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       .single()
     if (appError || !appData) {
       setError(appError?.message || 'Application not found')
+      setLoading(false)
+      return
+    }
+    if (isStaff && appData.submitted_by !== user?.id) {
+      setError('Staff can create payment vouchers only from their own Payment Applications.')
       setLoading(false)
       return
     }
@@ -386,6 +433,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     if (!appData) return
     const next = nextPaymentVoucherNumber(companyData?.prefix, appData.ref_number, vouchers)
     setCurrentVoucherId(null)
+    setCurrentVoucher(null)
     setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
     setForm({
       voucher_number: next.voucherNumber,
@@ -403,6 +451,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       prepared_by_name: profile?.full_name || '',
       approved_by_name: '',
       received_by_name: appData.payee_name || '',
+      visible_to_staff: false,
       status: 'draft',
     })
     setCheques([{
@@ -414,19 +463,28 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     setError('')
   }
 
-  function startStandaloneVoucher(companyData = company, vouchers = existingVouchers) {
+  async function startStandaloneVoucher(companyData = company, vouchers = existingVouchers) {
     const companyVouchers = companyData
       ? vouchers.filter(voucher => voucher.company_id === companyData.id)
       : []
     setCurrentVoucherId(null)
+    setCurrentVoucher(null)
     setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
     setCompany(companyData || null)
-    setForm({
-      voucher_number: companyData
+    let voucherNumber = companyData
         ? (isReceipt
             ? nextStandaloneReceiptVoucherNumber(companyData.prefix, companyVouchers)
             : nextStandalonePaymentVoucherNumber(companyData.prefix, companyVouchers))
-        : '',
+        : ''
+    if (companyData?.id) {
+      const { data } = await supabase.rpc('next_standalone_voucher_number', {
+        p_company_id: companyData.id,
+        p_voucher_type: voucherType,
+      })
+      if (typeof data === 'string' && data.trim()) voucherNumber = data
+    }
+    setForm({
+      voucher_number: voucherNumber,
       installment_no: 1,
       voucher_date: localDate(),
       paid_to: '',
@@ -441,6 +499,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       prepared_by_name: profile?.full_name || '',
       approved_by_name: '',
       received_by_name: '',
+      visible_to_staff: false,
       status: 'draft',
     })
     setCheques([{ ...emptyCheque }])
@@ -457,6 +516,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
 
   async function editVoucher(voucher, updateUrl = true) {
     setCurrentVoucherId(voucher.id)
+    setCurrentVoucher(voucher)
     if (updateUrl) {
       setSearchParams({
         voucher: voucher.id,
@@ -479,6 +539,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       prepared_by_name: voucher.prepared_by_name || '',
       approved_by_name: voucher.approved_by_name || '',
       received_by_name: voucher.received_by_name || '',
+      visible_to_staff: Boolean(voucher.visible_to_staff),
       status: voucher.status || 'draft',
     })
     const { data } = await supabase
@@ -498,6 +559,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   }
 
   const currentAmount = Number(form.amount) || 0
+  const isReadOnly = isStaff && !!currentVoucherId &&
+    (form.status === 'saved' || currentVoucher?.created_by !== user?.id)
   const previouslyVouchered = useMemo(
     () => existingVouchers
       .filter(v => v.id !== currentVoucherId && v.status !== 'cancelled')
@@ -551,6 +614,10 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   }
 
   async function saveVoucher(status) {
+    if (isReadOnly) {
+      setError('This voucher is final or belongs to another Staff user and cannot be changed.')
+      return null
+    }
     const validationError = validate()
     if (validationError) {
       setError(validationError)
@@ -580,6 +647,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         prepared_by_name: form.prepared_by_name.trim() || null,
         approved_by_name: form.approved_by_name.trim() || null,
         received_by_name: form.received_by_name.trim() || null,
+        visible_to_staff: isFinanceRole ? Boolean(form.visible_to_staff) : false,
         status,
         updated_by: user.id,
       }
@@ -659,7 +727,19 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       setError(validationError)
       return
     }
-    window.print()
+    preparePrintableCompany().then(() => window.print())
+  }
+
+  async function preparePrintableCompany() {
+    if (!company?.logo_url) return
+    if (!String(company.logo_url).startsWith('data:')) {
+      const printableCompany = await withPrintableLogo(company)
+      if (printableCompany?.logo_url !== company.logo_url) {
+        setCompany(printableCompany)
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      }
+    }
+    await waitForImages(printRef.current)
   }
 
   function closePdfPreview() {
@@ -679,6 +759,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     setError('')
     let exportElement = null
     try {
+      await preparePrintableCompany()
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const html2pdf = await loadHtml2Pdf()
       if (!html2pdf) return null
@@ -697,6 +778,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       ].join(';')
       document.body.appendChild(exportElement)
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      await waitForImages(exportElement)
       const worker = html2pdf().set({
         margin: [10, 10, 10, 10],
         filename: `${form.voucher_number || (isReceipt ? 'receipt-voucher' : 'payment-voucher')}.pdf`,
@@ -811,13 +893,13 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
             </p>
           </div>
           <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-            <button className="btn btn-outline" onClick={() => isStandalone ? startStandaloneVoucher() : startNewVoucher()}>
+            {!isReadOnly && <button className="btn btn-outline" onClick={() => isStandalone ? startStandaloneVoucher() : startNewVoucher()}>
               {isReceipt ? 'New Receipt Voucher' : isStandalone ? 'New Standalone Voucher' : 'New Partial Voucher'}
-            </button>
-            <button className="btn btn-outline" disabled={saving} onClick={() => saveVoucher('draft')}>Save Draft</button>
-            <button className="btn btn-primary" disabled={saving} onClick={() => saveVoucher('saved')}>
+            </button>}
+            {!isReadOnly && <button className="btn btn-outline" disabled={saving} onClick={() => saveVoucher('draft')}>Save Draft</button>}
+            {!isReadOnly && <button className="btn btn-primary" disabled={saving} onClick={() => saveVoucher('saved')}>
               {saving ? 'Saving...' : 'Save'}
-            </button>
+            </button>}
             <button className="btn btn-gold" onClick={handlePrint}>Print</button>
             <button className="btn btn-gold" disabled={exportingPdf} onClick={handlePreviewPdf}>
               {exportingPdf ? 'Preparing...' : 'PDF Preview'}
@@ -832,6 +914,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
 
         {error && <div className="alert alert-error">{error}</div>}
         {message && <div className="alert alert-success">{message}</div>}
+        {isReadOnly && <div className="alert alert-warning">This is a final voucher or another Staff member’s voucher. It is available for viewing, printing, and PDF download only.</div>}
 
         {isStandalone && (
           <div className="card" style={{ marginBottom:'16px' }}>
@@ -883,7 +966,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
             <h2>Voucher Details</h2>
             <span className={`badge badge-${form.status === 'saved' ? 'approved' : 'draft'}`}>{form.status}</span>
           </div>
-          <div className="card-body">
+          <fieldset className="card-body" disabled={isReadOnly} style={{ border:0, margin:0, minWidth:0 }}>
             <div className="form-row-3">
               <div className="form-group">
                 <label className="form-label">Voucher Number</label>
@@ -902,6 +985,13 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">{isReceipt ? 'Received From' : 'Payee Name'} <span className="required">*</span></label>
+                {isReceipt && nameHistory.payees.length > 0 && (
+                  <select className="form-control" value="" style={{marginBottom:'7px'}}
+                    onChange={event => event.target.value && setField('paid_to', event.target.value)}>
+                    <option value="">Quick select a remembered received-from name</option>
+                    {nameHistory.payees.map(name => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                )}
                 <input className="form-control" list="voucher-payee-history" value={form.paid_to} onChange={e => {
                   setField('paid_to', e.target.value)
                   if (cheques.length === 1 && !cheques[0].in_favour_of) setCheque(0, 'in_favour_of', e.target.value)
@@ -954,6 +1044,13 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
               />
               <div className="form-hint">For internal use only. This will not be printed or included in the PDF voucher.</div>
             </div>
+            {isFinanceRole && (
+              <label className="form-group" style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                <input type="checkbox" checked={form.visible_to_staff}
+                  onChange={event => setField('visible_to_staff', event.target.checked)} />
+                <span>Allow Staff to view this voucher</span>
+              </label>
+            )}
             <div className="form-group">
               <label className="form-label">Description / Narration</label>
               <textarea className="form-control" value={form.narration} onChange={e => setField('narration', e.target.value)} />
@@ -1042,7 +1139,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
             <datalist id="voucher-received-by-history">
               {nameHistory.receivedBy.map(name => <option key={name} value={name} />)}
             </datalist>
-          </div>
+          </fieldset>
         </div>
       </div>
 

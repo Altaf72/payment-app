@@ -3336,7 +3336,7 @@ var esc = A.esc;
    per date that actually has activity that month.
    ========================================================================= */
 
-var calendarState = { entity: "", direction: "", search: "", expanded: {}, transpose: true, controlsCollapsed: true };
+var calendarState = { entity: "", direction: "", search: "", expanded: {}, transpose: true, controlsCollapsed: true, scrollTop: null, scrollLeft: null };
 var CAL_PREFS_KEY = "ledgerTracker.calendarPrefs.v1";
 var _calScrollToToday = true; // one-shot flag: focus the current month, then let scroll position persist across re-renders
 
@@ -3348,7 +3348,9 @@ function saveCalendarPrefs(){
       search: calendarState.search,
       transpose: calendarState.transpose,
       controlsCollapsed: calendarState.controlsCollapsed,
-      expanded: calendarState.expanded
+      expanded: calendarState.expanded,
+      scrollTop: calendarState.scrollTop,
+      scrollLeft: calendarState.scrollLeft
     }));
   } catch(e){}
 }
@@ -3637,10 +3639,20 @@ function renderCalendar(){
     if(!_calScrollToToday && savedScrollTop !== null){
       scrollEl.scrollTop = savedScrollTop;
       scrollEl.scrollLeft = savedScrollLeft;
+    } else if(!_calScrollToToday && calendarState.scrollTop !== null){
+      scrollEl.scrollTop = calendarState.scrollTop;
+      scrollEl.scrollLeft = calendarState.scrollLeft || 0;
     } else {
       scrollCalendarToMonth(scrollEl, currentMonthKey());
       _calScrollToToday = false;
     }
+    var scrollSaveTimer;
+    scrollEl.addEventListener("scroll", function(){
+      calendarState.scrollTop = scrollEl.scrollTop;
+      calendarState.scrollLeft = scrollEl.scrollLeft;
+      clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = setTimeout(saveCalendarPrefs, 180);
+    }, {passive:true});
   }
 }
 
@@ -3712,6 +3724,9 @@ function initCalendarControls(){
     if(typeof prefs.transpose === "boolean") calendarState.transpose = prefs.transpose;
     if(typeof prefs.controlsCollapsed === "boolean") calendarState.controlsCollapsed = prefs.controlsCollapsed;
     if(prefs.expanded && typeof prefs.expanded === "object") calendarState.expanded = prefs.expanded;
+    if(typeof prefs.scrollTop === "number") calendarState.scrollTop = prefs.scrollTop;
+    if(typeof prefs.scrollLeft === "number") calendarState.scrollLeft = prefs.scrollLeft;
+    if(typeof prefs.scrollTop === "number" || typeof prefs.scrollLeft === "number") _calScrollToToday = false;
   }
   document.getElementById("calSearch").value = calendarState.search || "";
 

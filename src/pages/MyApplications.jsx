@@ -38,7 +38,9 @@ export default function MyApplications() {
   const [applications, setApplications] = useState([])
   const [total, setTotal]               = useState(0)
   const [loading, setLoading]           = useState(true)
+  const [loadError, setLoadError]       = useState('')
   const [withdrawing, setWithdrawing]   = useState(null)
+  const loadRequestRef                  = React.useRef(0)
 
   const STORAGE_KEY = 'my_applications_filters'
   function getSaved() {
@@ -60,27 +62,47 @@ export default function MyApplications() {
     setPage(1)
   }, [search])
 
-  useEffect(() => { load() }, [page, pageSize, search])
+  useEffect(() => { load() }, [page, pageSize, search, user?.id])
 
   async function load() {
+    if (!user?.id) return
+    const requestId = ++loadRequestRef.current
     setLoading(true)
+    setLoadError('')
     const from = (page - 1) * pageSize
     const to   = from + pageSize - 1
 
     let query = supabase
       .from('applications_full')
       .select('*', { count: 'exact' })
+      .eq('submitted_by', user.id)
+      .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .range(from, to)
 
-    if (search) {
+    const searchTerm = search.trim().replace(/[,%()]/g, ' ').trim()
+    if (searchTerm) {
       query = query.or(
-        `ref_number.ilike.%${search}%,payment_reason.ilike.%${search}%,company_name.ilike.%${search}%`
+        `ref_number.ilike.%${searchTerm}%,payment_reason.ilike.%${searchTerm}%,company_name.ilike.%${searchTerm}%`
       )
     }
 
     const { data, count, error } = await query
-    if (error) console.error(error)
+    if (requestId !== loadRequestRef.current) return
+    if (error) {
+      console.error(error)
+      setApplications([])
+      setTotal(0)
+      setLoadError(`Could not load your applications: ${error.message}`)
+      setLoading(false)
+      return
+    }
+
+    const lastPage = Math.max(1, Math.ceil((count || 0) / pageSize))
+    if (page > lastPage) {
+      setPage(lastPage)
+      return
+    }
     setApplications(data || [])
     setTotal(count || 0)
     setLoading(false)
@@ -161,6 +183,13 @@ export default function MyApplications() {
         <div className="table-wrap">
           {loading ? (
             <div className="empty-state"><p>Loading…</p></div>
+          ) : loadError ? (
+            <div className="empty-state">
+              <div className="icon">⚠</div>
+              <h3>Applications could not be loaded</h3>
+              <p>{loadError}</p>
+              <button className="btn btn-outline btn-sm" onClick={load}>Try again</button>
+            </div>
           ) : applications.length === 0 ? (
             <div className="empty-state">
               <div className="icon">📋</div>

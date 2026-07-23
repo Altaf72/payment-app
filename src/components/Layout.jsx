@@ -205,7 +205,7 @@ export default function Layout() {
           </>
         )}
 
-        {['finance','cfo','ceo','superadmin'].includes(profile?.role) && (
+        {['staff','finance','cfo','ceo','superadmin'].includes(profile?.role) && (
           <>
             <div className="sidebar-section">{text.finance}</div>
             <button className={`sidebar-link ${isActive('/vouchers') ? 'active' : ''}`}

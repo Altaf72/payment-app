@@ -7,6 +7,7 @@ import { formatCurrency } from '../lib/utils'
 import { COMPANY_PALETTE, buildFilename } from '../lib/companyColors'
 import { buildQboJournalCsv } from '../lib/qboExport'
 import { formatPfsDisplay } from '../lib/pfs'
+import QRCode from 'qrcode'
 
 function toProperCase(str) {
   if (!str) return ''
@@ -179,8 +180,46 @@ function AuditTimeline({ log }) {
   )
 }
 
+function countAttachmentTypes(attachments = []) {
+  return attachments.reduce((counts, attachment) => {
+    const name = String(attachment.file_name || attachment.name || '').toLowerCase()
+    const mime = String(attachment.mime_type || attachment.mimeType || '').toLowerCase()
+    const source = String(attachment.source || '').toLowerCase()
+    if (source === 'screenshot' || name.startsWith('screenshot-')) counts.screenshot += 1
+    else if (mime === 'application/pdf' || name.endsWith('.pdf')) counts.pdf += 1
+    else if (mime.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(name)) counts.photo += 1
+    return counts
+  }, { pdf: 0, photo: 0, screenshot: 0 })
+}
+
+function PrintAttachmentIcon({ type }) {
+  if (type === 'pdf') {
+    return (
+      <span style={{ width:'16px', height:'19px', border:'1px solid #333', borderRadius:'1px',
+        display:'inline-flex', alignItems:'center', justifyContent:'center',
+        fontFamily:'Arial, sans-serif', fontSize:'6px', fontWeight:'bold' }}>PDF</span>
+    )
+  }
+  if (type === 'photo') {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="1" fill="none" stroke="#333" strokeWidth="1.5"/>
+        <circle cx="9" cy="10" r="2" fill="none" stroke="#333" strokeWidth="1.5"/>
+        <path d="M5 17l5-4 3 2 3-3 3 5" fill="none" stroke="#333" strokeWidth="1.5"/>
+      </svg>
+    )
+  }
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="4" width="16" height="16" rx="1" fill="none" stroke="#333" strokeWidth="1.5"/>
+      <path d="M8 4v3H4M16 4v3h4M8 20v-3H4M16 20v-3h4" fill="none" stroke="#333" strokeWidth="1.5"/>
+    </svg>
+  )
+}
+
 // ── Print/PDF layout — original table format + colour strip ─
-function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null, finance:null, cfo:null } }) {
+function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataUrl,
+  sigFile = { manager:null, finance:null, cfo:null } }) {
   const date   = fmtDate(app.submitted_at || app.created_at)
   const accent = companyColor?.accent || '#8b6914'
   const pastel = companyColor?.pastel || '#fef3c7'
@@ -483,6 +522,48 @@ function PrintView({ app, companyColor, auditLog = [], sigFile = { manager:null,
         </div>
       </div>
 
+      {/* ── PRINT FOOTER: ATTACHMENT COUNTS + TRANSACTION QR ── */}
+      <div style={{
+        marginTop:'7px',
+        paddingTop:'6px',
+        borderTop:'1px solid #d8d0c2',
+        display:'flex',
+        alignItems:'center',
+        justifyContent:'space-between',
+        breakInside:'avoid',
+        pageBreakInside:'avoid',
+        fontFamily:"Georgia, 'Times New Roman', serif",
+      }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap' }}>
+          {[
+            { type:'pdf', label:'PDF', count:attachmentCounts?.pdf || 0 },
+            { type:'photo', label:'PHOTO', count:attachmentCounts?.photo || 0 },
+            { type:'screenshot', label:'SCREENSHOT', count:attachmentCounts?.screenshot || 0 },
+          ].filter(item => item.count > 0).map(item => (
+            <div key={item.type} style={{ display:'inline-flex', alignItems:'center', gap:'5px', color:'#333' }}>
+              <PrintAttachmentIcon type={item.type} />
+              <span style={{ fontSize:'8px', letterSpacing:'.5px' }}>{item.label}</span>
+              <span style={{
+                minWidth:'16px', height:'16px', padding:'0 3px', border:'1px solid #555',
+                borderRadius:'8px', display:'inline-flex', alignItems:'center', justifyContent:'center',
+                boxSizing:'border-box', fontFamily:'Arial, sans-serif', fontSize:'8px', fontWeight:'bold',
+              }}>{item.count}</span>
+            </div>
+          ))}
+        </div>
+        <div>
+          {qrDataUrl && (
+            <img data-print-qr="true" src={qrDataUrl} alt={`QR code for ${app.ref_number}`}
+              style={{
+                // The existing 750px print sheet is reduced slightly to fit A4.
+                // 1.57cm renders at approximately 1.5cm after that scaling.
+                width:'1.57cm', height:'1.57cm', maxHeight:'none',
+                display:'block', objectFit:'contain',
+              }} />
+          )}
+        </div>
+      </div>
+
     </div>
   )
 }
@@ -516,6 +597,7 @@ export default function ApplicationDetail() {
   const [allCompanies, setAllCompanies]   = useState([])
   const [downloading, setDownloading]     = useState(false)
   const [sigFile,     setSigFile]         = useState({ manager:null, finance:null, cfo:null })
+  const [qrDataUrl, setQrDataUrl]         = useState('')
   const [showDuplicate,    setShowDuplicate]    = useState(false)
   const [showReturnInline, setShowReturnInline] = useState(false)
   const [showRejectInline, setShowRejectInline] = useState(false)
@@ -648,6 +730,27 @@ export default function ApplicationDetail() {
     image.src = capturedPhoto
   }, [capturedPhoto, cameraRotation, cameraCropX, cameraCropY])
 
+  useEffect(() => {
+    if (!app?.id) {
+      setQrDataUrl('')
+      return
+    }
+    let active = true
+    const transactionUrl = `${window.location.origin}/application/${app.id}`
+    QRCode.toDataURL(transactionUrl, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 180,
+      color: { dark:'#000000', light:'#ffffff' },
+    }).then(dataUrl => {
+      if (active) setQrDataUrl(dataUrl)
+    }).catch(error => {
+      console.error('Could not generate transaction QR code', error)
+      if (active) setQrDataUrl('')
+    })
+    return () => { active = false }
+  }, [app?.id])
+
   async function load() {
     setLoading(true)
     const [{ data: appData }, { data: pfsData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }] = await Promise.all([
@@ -761,7 +864,13 @@ export default function ApplicationDetail() {
         <style>
           body { margin:0; padding:0; font-family:'Cormorant Garamond',serif; }
           @media print { @page { margin:10mm; } }
-          img { display:block !important; max-height:36px; }
+          img:not([data-print-qr]) { display:block !important; max-height:36px; }
+          img[data-print-qr] {
+            display:block !important;
+            width:1.57cm !important;
+            height:1.57cm !important;
+            max-height:none !important;
+          }
         </style>
         </head><body>${html}</body></html>`)
       printWindow.document.close()
@@ -1221,6 +1330,10 @@ export default function ApplicationDetail() {
           path,
           name: fileToUpload.name,
           size: fileToUpload.size,
+          mime_type: fileToUpload.type,
+          source: fileToUpload.name.startsWith('screenshot-')
+            ? 'screenshot'
+            : fileToUpload.name.startsWith('camera-document-') ? 'camera' : 'file',
         }),
       })
       if (logError) {
@@ -1534,7 +1647,7 @@ export default function ApplicationDetail() {
   const isOwner = app.submitted_by === user?.id
   const canEdit = isOwner && ['draft','returned'].includes(app.status)
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
-  const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
+  const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role) || (profile?.role === 'staff' && isOwner)
   const canExportQbo = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
   const canAddFinanceAttachment = ['finance','superadmin'].includes(profile?.role) &&
     ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
@@ -1558,6 +1671,10 @@ export default function ApplicationDetail() {
       : []),
     ...applicantAttachments,
   ]
+  const attachmentCounts = countAttachmentTypes([
+    ...savedApplicationAttachments,
+    ...additionalAttachments,
+  ])
   const roleComments = auditLog.filter(e =>
     e.note &&
     !e.note.startsWith('CommentDeleted: ') &&
@@ -1581,7 +1698,10 @@ export default function ApplicationDetail() {
     <div>
       {/* Hidden print/download target */}
       <div style={{ position: 'fixed', left: '-9999px', top: 0, width: '800px' }}>
-        <div ref={printRef}><PrintView app={app} companyColor={companyColor} auditLog={auditLog} sigFile={sigFile} /></div>
+        <div ref={printRef}>
+          <PrintView app={app} companyColor={companyColor} auditLog={auditLog}
+            attachmentCounts={attachmentCounts} qrDataUrl={qrDataUrl} sigFile={sigFile} />
+        </div>
       </div>
 
       {/* Header */}
@@ -1619,7 +1739,7 @@ export default function ApplicationDetail() {
             )}
             {canCreatePaymentVoucher && (
               <button className="btn btn-success btn-sm" onClick={() => navigate(`/application/${id}/payment-voucher`)}>
-                Create Payment Voucher
+                {profile?.role === 'staff' ? 'Make Payment Voucher' : 'Create Payment Voucher'}
               </button>
             )}
             {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}

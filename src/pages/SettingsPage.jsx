@@ -257,7 +257,9 @@ export default function SettingsPage() {
     const { error: upErr } = await supabase.storage.from('attachments').upload(path, file, { upsert: true })
     if (upErr) { flash('error', upErr.message); setLogoUploading(null); return }
     const { data: pub } = supabase.storage.from('attachments').getPublicUrl(path)
-    await supabase.from('companies').update({ logo_url: pub.publicUrl }).eq('id', companyId)
+    // The version changes on every upload, so browsers fetch the new logo once
+    // and do not reuse an older locally cached copy.
+    await supabase.from('companies').update({ logo_url: `${pub.publicUrl}?v=${Date.now()}` }).eq('id', companyId)
     flash('success', 'Logo uploaded')
     setLogoUploading(null)
     load()
