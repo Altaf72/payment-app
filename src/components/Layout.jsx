@@ -33,6 +33,7 @@ const TEXT = {
     chinese: 'Chinese',
     roles: {
       staff: 'Staff',
+      gro: 'GRO',
       manager: 'Manager',
       finance: 'Finance Officer',
       ceo: 'CEO',
@@ -86,7 +87,7 @@ function readDisplayLanguage() {
 }
 
 export default function Layout() {
-  const { profile, signOut, isFinanceOrAbove, isSuperAdmin } = useAuth()
+  const { profile, signOut, isFinanceOrAbove, isSuperAdmin, hasModule } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -121,6 +122,7 @@ export default function Layout() {
 
   const roleLabel = {
     staff: text.roles.staff,
+    gro: text.roles.gro,
     manager: text.roles.manager,
     finance: text.roles.finance,
     ceo: text.roles.ceo,
@@ -175,6 +177,7 @@ export default function Layout() {
 
         {renderLanguageSwitch()}
 
+        {hasModule('payment_applications') && <>
         <div className="sidebar-section">{text.applications}</div>
 
         <button className={`sidebar-link ${isActive('/new-application') ? 'active' : ''}`}
@@ -186,6 +189,8 @@ export default function Layout() {
           onClick={() => go('/my-applications')}>
           <span className="icon">📋</span> {text.myApplications}
         </button>
+
+        </>}
 
         {isFinanceOrAbove && (
           <button className={`sidebar-link ${isActive('/dashboard') ? 'active' : ''}`}
@@ -205,13 +210,16 @@ export default function Layout() {
           </>
         )}
 
-        {['staff','finance','cfo','ceo','superadmin'].includes(profile?.role) && (
+        {(hasModule('vouchers') || hasModule('holiday_home_receipts')) && (
           <>
             <div className="sidebar-section">{text.finance}</div>
-            <button className={`sidebar-link ${isActive('/vouchers') ? 'active' : ''}`}
+            {hasModule('vouchers') && <button className={`sidebar-link ${isActive('/vouchers') ? 'active' : ''}`}
               onClick={() => go('/vouchers')}>
               <span className="icon">V</span> {text.vouchers}
-            </button>
+            </button>}
+            {hasModule('holiday_home_receipts') && <button className={`sidebar-link ${isActive('/holiday-home-receipts') ? 'active' : ''}`} onClick={() => go('/holiday-home-receipts')}>
+              <span className="icon">R</span> Holiday Home Receipts
+            </button>}
             {['finance','cfo','superadmin'].includes(profile?.role) && (
               <button className={`sidebar-link ${isActive('/payroll-workbook') ? 'active' : ''}`}
                 onClick={() => go('/payroll-workbook')}>

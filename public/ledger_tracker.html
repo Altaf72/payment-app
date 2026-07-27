@@ -2573,6 +2573,7 @@ function openPropertyForm(existing, onSave, initial){
     rec.ownerNationality = document.getElementById("pf_nat").value.trim();
     rec.managementType = document.getElementById("pf_mgmt").value.trim();
     if(!existing) A.STATE.properties.push(rec);
+    try{ window.parent.postMessage({type:"chequeflow:property-save", property:rec}, window.location.origin); }catch(e){}
     A.toast(isEdit?"Record updated.":"Record added.", "ok");
     A.closeModal();
     onSave && onSave();

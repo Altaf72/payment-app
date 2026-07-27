@@ -5,11 +5,26 @@ import { supabase } from '../lib/supabase'
 export default function LedgerTrackerWorkspace() {
   const { profile, user } = useAuth()
   const iframeRef = useRef(null)
-  const canEdit = profile?.role === 'finance'
+  const normalizedRole = String(profile?.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+  const canEdit = ['finance', 'finance_officer'].includes(normalizedRole)
+  // The iframe may finish loading before the asynchronous user profile arrives.
+  // Recreate it once the role is known, so an initial "view only" configuration
+  // can never remain attached to a Finance Officer session.
+  const trackerKey = normalizedRole || 'role-loading'
 
   useEffect(() => {
     async function syncWorkbook(event) {
-      if (event.origin !== window.location.origin || event.data?.type !== 'chequeflow:workbook-import' || !user?.id) return
+      if (event.origin !== window.location.origin || !['chequeflow:workbook-import', 'chequeflow:property-save'].includes(event.data?.type) || !user?.id) return
+      if (event.data.type === 'chequeflow:property-save') {
+        try {
+          const p = event.data.property
+          const row = { property_key: String(p.propertyKey || '').trim(), record_type: p.recordType || 'Property', property_unit: p.propertyUnit ? String(p.propertyUnit) : null, entity: p.entity || null, payee_owner: p.payeeOwner || null, contract_start: isoDate(p.contractStart), contract_end: isoDate(p.contractEnd), annual_rent: Number(p.annualRent || 0), total_installments: Number(p.totalInstallments || 0) || null, property_status: p.propertyStatus || null, owner_nationality: p.ownerNationality || null, management_type: p.managementType || null, created_by: user.id, updated_by: user.id }
+          const { error } = await supabase.from('cheque_flow_properties').upsert(row, { onConflict: 'property_key' })
+          if (error) throw error
+          iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: true }, window.location.origin)
+        } catch (error) { iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: false, message: error.message }, window.location.origin) }
+        return
+      }
       const state = event.data.state || {}
       try {
         const properties = (state.properties || []).filter(p => p.propertyKey).map(p => ({ property_key: String(p.propertyKey).trim(), record_type: p.recordType || 'Property', property_unit: p.propertyUnit ? String(p.propertyUnit) : null, entity: p.entity || null, payee_owner: p.payeeOwner || null, contract_start: isoDate(p.contractStart), contract_end: isoDate(p.contractEnd), annual_rent: Number(p.annualRent || 0), total_installments: Number(p.totalInstallments || 0) || null, property_status: p.propertyStatus || null, owner_nationality: p.ownerNationality || null, management_type: p.managementType || null, created_by: user.id, updated_by: user.id }))
@@ -63,7 +78,7 @@ export default function LedgerTrackerWorkspace() {
   }
 
   return <div style={{ height: 'calc(100vh - 64px)', minHeight: 720, margin: '-24px -32px' }}>
-    <iframe ref={iframeRef} onLoad={configureTracker} title="Ledger & Term Tracker" src="/ledger_tracker.html" style={{ display: 'block', width: '100%', height: '100%', border: 0, background: '#edefe8' }} />
+    <iframe key={trackerKey} ref={iframeRef} onLoad={configureTracker} title="Ledger & Term Tracker" src="/ledger_tracker.html" style={{ display: 'block', width: '100%', height: '100%', border: 0, background: '#edefe8' }} />
   </div>
 }
 

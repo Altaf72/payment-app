@@ -1,0 +1,76 @@
+-- Holiday Home Receipt module: run once in Supabase SQL Editor.
+alter table public.users add column if not exists holiday_home_receipts_enabled boolean not null default false;
+alter table public.users drop constraint if exists users_role_check;
+alter table public.users add constraint users_role_check check (role in ('staff','gro','manager','finance','ceo','cfo','superadmin'));
+alter table public.cheque_flow_properties add column if not exists actual_bedrooms integer;
+alter table public.cheque_flow_properties add column if not exists display_bedrooms text;
+
+-- Correct stale imported property display data.
+update public.cheque_flow_properties
+set property_unit = 'Creek Edge T1-1706',
+    entity = 'HH'
+where property_key = 'P005';
+
+create table if not exists public.holiday_home_receipts (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id),
+  receipt_number text not null unique,
+  receipt_date date not null default current_date,
+  received_from text not null,
+  id_passport text,
+  property_key text not null references public.cheque_flow_properties(property_key),
+  check_in_date date not null,
+  check_out_date date not null,
+  nights integer not null check (nights > 0),
+  rental_payment numeric(14,2) not null default 0,
+  security_deposit numeric(14,2) not null default 0,
+  admin_fee numeric(14,2) not null default 0,
+  additional_service numeric(14,2) not null default 0,
+  description text,
+  payment_mode text,
+  reference_no text,
+  received_by_name text,
+  administrator_name text,
+  accounts_name text,
+  customer_name text,
+  created_by uuid not null references public.users(id),
+  updated_by uuid references public.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists holiday_home_receipts_company_idx on public.holiday_home_receipts(company_id, receipt_date desc);
+
+create or replace function public.next_holiday_home_receipt_number(p_company_id uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare p text; n integer;
+begin
+  if not exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=p_company_id) then raise exception 'Company access denied'; end if;
+  select upper(prefix) into p from public.companies where id=p_company_id;
+  select coalesce(max((substring(receipt_number from ('^'||p||'R-([0-9]+)$'))::integer)),0) into n from public.holiday_home_receipts where company_id=p_company_id;
+  return p||'R-'||lpad((n+1)::text,4,'0');
+end; $$;
+
+alter table public.holiday_home_receipts enable row level security;
+drop policy if exists "Holiday receipt access" on public.holiday_home_receipts;
+create policy "Holiday receipt access" on public.holiday_home_receipts for select to authenticated using (
+  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo') or holiday_home_receipts_enabled))
+  and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
+);
+drop policy if exists "Holiday receipt create" on public.holiday_home_receipts;
+create policy "Holiday receipt create" on public.holiday_home_receipts for insert to authenticated with check (
+  created_by=auth.uid() and exists (select 1 from public.users where id=auth.uid() and (role='superadmin' or holiday_home_receipts_enabled))
+  and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
+);
+drop policy if exists "Holiday receipt update" on public.holiday_home_receipts;
+create policy "Holiday receipt update" on public.holiday_home_receipts for update to authenticated using (
+  exists (select 1 from public.users where id=auth.uid() and (role='superadmin' or holiday_home_receipts_enabled))
+  and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
+) with check (updated_by=auth.uid());
+grant select,insert,update on public.holiday_home_receipts to authenticated;
+grant execute on function public.next_holiday_home_receipt_number(uuid) to authenticated;
+
+-- Allows authorised Holiday Home Receipt users to read only company-mapped properties.
+drop policy if exists "Holiday receipt users view properties" on public.cheque_flow_properties;
+create policy "Holiday receipt users view properties" on public.cheque_flow_properties for select to authenticated using (
+  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo') or holiday_home_receipts_enabled))
+);

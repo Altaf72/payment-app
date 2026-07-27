@@ -7,6 +7,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [moduleAccess, setModuleAccess] = useState([])
 
   async function fetchProfile(userId) {
     const { data } = await supabase
@@ -15,6 +16,8 @@ export function AuthProvider({ children }) {
       .eq('id', userId)
       .single()
     setProfile(data)
+    const { data: modules } = await supabase.from('user_module_access').select('module_key').eq('user_id', userId).eq('granted', true)
+    setModuleAccess((modules || []).map(row => row.module_key))
   }
 
   useEffect(() => {
@@ -27,7 +30,7 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
       if (session?.user) fetchProfile(session.user.id)
-      else setProfile(null)
+      else { setProfile(null); setModuleAccess([]) }
     })
 
     return () => subscription.unsubscribe()
@@ -60,12 +63,16 @@ export function AuthProvider({ children }) {
   const isFinanceOrAbove = profile?.role && ['finance','manager','ceo','cfo','superadmin'].includes(profile.role)
   const isSuperAdmin = profile?.role === 'superadmin'
   const isUpperManagement = profile?.role && ['ceo','cfo'].includes(profile.role)
+  const hasModule = (moduleKey) => profile?.role === 'superadmin' ||
+    moduleAccess.includes(moduleKey) ||
+    (moduleKey === 'holiday_home_receipts' && ['finance','cfo'].includes(profile?.role)) ||
+    (moduleKey === 'holiday_home_receipts' && profile?.holiday_home_receipts_enabled === true)
 
   return (
     <AuthContext.Provider value={{
       user, profile, loading,
       signIn, signOut,
-      isFinanceOrAbove, isSuperAdmin, isUpperManagement
+      isFinanceOrAbove, isSuperAdmin, isUpperManagement, moduleAccess, hasModule
     }}>
       {children}
     </AuthContext.Provider>

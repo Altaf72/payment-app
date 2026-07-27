@@ -13,6 +13,7 @@ import PaymentVoucher from './pages/PaymentVoucher'
 import QboSettings from './pages/QboSettings'
 import VouchersDashboard from './pages/VouchersDashboard'
 import PaymentVoucherApplicationPicker from './pages/PaymentVoucherApplicationPicker'
+import HolidayHomeReceipts from './pages/HolidayHomeReceipts'
 import PayrollWorkbookDashboard from './pages/PayrollWorkbookDashboard'
 import DtcmReport from './pages/DtcmReport'
 import ImprestFundManagement from './pages/ImprestFundManagement'
@@ -24,6 +25,13 @@ function PrivateRoute({ children, allowedRoles }) {
   if (loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b6b8a'}}>Loading…</div>
   if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
   if (allowedRoles && profile && !allowedRoles.includes(profile.role)) return <Navigate to="/" replace />
+  return children
+}
+
+function ModuleRoute({ children, moduleKey }) {
+  const { profile, loading, hasModule } = useAuth()
+  if (loading) return null
+  if (profile && !hasModule(moduleKey)) return <Navigate to="/" replace />
   return children
 }
 
@@ -52,32 +60,33 @@ export default function App() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<HomeRedirect />} />
-        <Route path="my-applications" element={<MyApplications />} />
-        <Route path="new-application" element={<NewApplication />} />
-        <Route path="application/:id" element={<ApplicationDetail />} />
+        <Route path="my-applications" element={<ModuleRoute moduleKey="payment_applications"><MyApplications /></ModuleRoute>} />
+        <Route path="new-application" element={<ModuleRoute moduleKey="payment_applications"><NewApplication /></ModuleRoute>} />
+        <Route path="application/:id" element={<ModuleRoute moduleKey="payment_applications"><ApplicationDetail /></ModuleRoute>} />
         <Route path="application/:applicationId/payment-voucher" element={
           <PrivateRoute allowedRoles={['staff','finance','ceo','cfo','superadmin']}>
-            <PaymentVoucher />
+            <ModuleRoute moduleKey="vouchers"><PaymentVoucher /></ModuleRoute>
           </PrivateRoute>
         } />
         <Route path="payment-voucher/new" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
-            <PaymentVoucher />
+            <ModuleRoute moduleKey="vouchers"><PaymentVoucher /></ModuleRoute>
           </PrivateRoute>
         } />
         <Route path="payment-voucher/select-application" element={
-          <PrivateRoute allowedRoles={['staff']}><PaymentVoucherApplicationPicker /></PrivateRoute>
+          <PrivateRoute allowedRoles={['staff']}><ModuleRoute moduleKey="vouchers"><PaymentVoucherApplicationPicker /></ModuleRoute></PrivateRoute>
         } />
         <Route path="receipt-voucher/new" element={
           <PrivateRoute allowedRoles={['staff','finance','ceo','cfo','superadmin']}>
-            <PaymentVoucher voucherType="receipt" />
+            <ModuleRoute moduleKey="vouchers"><PaymentVoucher voucherType="receipt" /></ModuleRoute>
           </PrivateRoute>
         } />
         <Route path="vouchers" element={
           <PrivateRoute allowedRoles={['staff','finance','ceo','cfo','superadmin']}>
-            <VouchersDashboard />
+            <ModuleRoute moduleKey="vouchers"><VouchersDashboard /></ModuleRoute>
           </PrivateRoute>
         } />
+        <Route path="holiday-home-receipts" element={<ModuleRoute moduleKey="holiday_home_receipts"><HolidayHomeReceipts /></ModuleRoute>} />
         <Route path="payroll-workbook" element={
           <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>
             <PayrollWorkbookDashboard />

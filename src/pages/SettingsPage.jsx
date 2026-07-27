@@ -121,11 +121,13 @@ export default function SettingsPage() {
   const [users, setUsers]               = useState([])
   const [methods, setMethods]           = useState([])
   const [userCompanies, setUserCompanies] = useState([])
+  const [moduleAssignments, setModuleAssignments] = useState([])
   const [deletedLog, setDeletedLog]     = useState([])
   const [loading, setLoading]           = useState(true)
   const [msg, setMsg]                   = useState({ type: '', text: '' })
   const [newCompany, setNewCompany]     = useState({ name: '', prefix: '' })
   const [logoUploading, setLogoUploading] = useState(null)
+  const [receiptHeaderUploading, setReceiptHeaderUploading] = useState(null)
   const [savingColor, setSavingColor]     = useState(null)
   const [editingCompanyName, setEditingCompanyName] = useState(null)
   const [companyNameDraft, setCompanyNameDraft] = useState('')
@@ -151,21 +153,23 @@ export default function SettingsPage() {
   const [exportCompany, setExportCompany] = useState('')
   const [exporting, setExporting]       = useState(false)
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(true) }, [])
 
-  async function load() {
-    setLoading(true)
-    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }] = await Promise.all([
+  async function load(initial = false) {
+    if (initial) setLoading(true)
+    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }, { data: ma }] = await Promise.all([
       supabase.from('companies').select('*').order('name'),
       supabase.from('users').select('*').order('full_name'),
       supabase.from('payment_methods').select('*').order('name'),
       supabase.from('user_companies').select('*'),
       supabase.from('deleted_applications_log').select('*').order('deleted_at', { ascending: false }),
+      supabase.from('user_module_access').select('*'),
     ])
     setCompanies(co || [])
     setUsers(us || [])
     setMethods(me || [])
     setUserCompanies(uc || [])
+    setModuleAssignments(ma || [])
     setDeletedLog(dl || [])
 
     // Load transaction counts per user per company
@@ -190,7 +194,7 @@ export default function SettingsPage() {
     const { data: pref } = await supabase.from('system_settings').select('value').eq('key','finance_self_approval').single()
     if (pref) setSelfApproval(pref.value === 'true')
 
-    setLoading(false)
+    if (initial) setLoading(false)
   }
 
   async function loadDbStats() {
@@ -265,12 +269,51 @@ export default function SettingsPage() {
     load()
   }
 
+  async function uploadReceiptHeader(companyId, file) {
+    if (!file) return
+    if (file.size > 3 * 1024 * 1024 || file.type !== 'image/png') return flash('error', 'Receipt header must be a PNG under 3MB')
+    setReceiptHeaderUploading(companyId)
+    const path = `receipt-headers/${companyId}.png`
+    const { error } = await supabase.storage.from('attachments').upload(path, file, { upsert:true })
+    if (error) { flash('error', error.message); setReceiptHeaderUploading(null); return }
+    const { data } = supabase.storage.from('attachments').getPublicUrl(path)
+    await supabase.from('companies').update({ holiday_receipt_header_url:`${data.publicUrl}?v=${Date.now()}` }).eq('id', companyId)
+    setReceiptHeaderUploading(null); flash('success','Holiday receipt header uploaded'); load()
+  }
+
+  async function previewReceiptHeader(companyId) {
+    const { data, error } = await supabase.storage.from('attachments').createSignedUrl(`receipt-headers/${companyId}.png`, 3600)
+    if (error || !data?.signedUrl) return flash('error', error?.message || 'Receipt header was not found')
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  async function previewCompanyLogo(logoUrl) {
+    const marker = '/attachments/'
+    const path = logoUrl?.split(marker)[1]?.split('?')[0]
+    if (!path) return flash('error', 'Company logo path was not found')
+    const { data, error } = await supabase.storage.from('attachments').createSignedUrl(decodeURIComponent(path), 3600)
+    if (error || !data?.signedUrl) return flash('error', error?.message || 'Company logo was not found')
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+  }
+
   async function toggleUserActive(userId, currentlyActive) {
     const action = currentlyActive ? 'deactivate' : 'activate'
     if (!confirm(`${action.charAt(0).toUpperCase()+action.slice(1)} this user? ${currentlyActive ? 'They will not be able to log in.' : 'They will be able to log in again.'}`)) return
     await supabase.from('users').update({ is_active: !currentlyActive }).eq('id', userId)
     flash('success', `User ${action}d successfully`)
     load()
+  }
+
+  async function toggleHolidayHomeReceipts(userId, enabled) {
+    const { error } = await supabase.from('users').update({ holiday_home_receipts_enabled: enabled }).eq('id', userId)
+    if (error) return flash('error', error.message)
+    await load()
+  }
+
+  async function toggleModuleAccess(userId, moduleKey, granted) {
+    const { error } = await supabase.from('user_module_access').upsert({ user_id:userId, module_key:moduleKey, granted }, { onConflict:'user_id,module_key' })
+    if (error) return flash('error', error.message)
+    setModuleAssignments(current => [...current.filter(row => !(row.user_id === userId && row.module_key === moduleKey)), { user_id:userId, module_key:moduleKey, granted }])
   }
 
   async function mergeUsers(sourceId, targetId) {
@@ -362,7 +405,8 @@ export default function SettingsPage() {
   }
 
   async function updateUserRole(id, role) {
-    await supabase.from('users').update({ role }).eq('id', id)
+    const { error } = await supabase.from('users').update({ role }).eq('id', id)
+    if (error) return flash('error', error.message)
     flash('success', 'Role updated')
     load()
   }
@@ -427,6 +471,7 @@ export default function SettingsPage() {
   const tabs = [
     { id: 'companies', label: '🏢 Companies' },
     { id: 'users',     label: '👥 Users & Access' },
+    { id: 'modules',   label: '🔐 Module Access' },
     { id: 'methods',   label: '💳 Payment Methods' },
     { id: 'rules',     label: '⚙ Rules' },
     { id: 'health',    label: '📊 System Health' },
@@ -444,7 +489,7 @@ export default function SettingsPage() {
       {msg.text && <div className={`alert alert-${msg.type}`}>{msg.text}</div>}
 
       {/* Tabs */}
-      <div style={{ display:'flex', gap:'2px', marginBottom:'20px', borderBottom:'1px solid var(--border)', flexWrap:'wrap' }}>
+      <div style={{ display:'flex', gap:'2px', marginBottom:'20px', borderBottom:'1px solid var(--border)', flexWrap:'wrap', position:'sticky', top:0, zIndex:20, background:'var(--cream)', paddingTop:'6px' }}>
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             padding:'10px 16px', background:'none', border:'none', cursor:'pointer',
@@ -523,11 +568,16 @@ export default function SettingsPage() {
                         </td>
                         <td>
                           <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
-                            {c.logo_url && <img src={c.logo_url} alt="logo" style={{height:'28px',objectFit:'contain',border:'1px solid var(--border)',borderRadius:'4px',padding:'2px'}} />}
                             <label className="btn btn-outline btn-sm" style={{cursor:'pointer',marginBottom:0}}>
-                              {logoUploading===c.id ? 'Uploading…' : c.logo_url ? '↑ Replace' : '↑ Upload'}
-                              <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>uploadLogo(c.id,e.target.files[0])} />
+                              {logoUploading===c.id ? 'Uploading…' : 'Logo PNG'}
+                              <input type="file" accept="image/png" style={{display:'none'}} onChange={e=>uploadLogo(c.id,e.target.files[0])} />
                             </label>
+                            <label className="btn btn-outline btn-sm" style={{cursor:'pointer',marginBottom:0}}>
+                              {receiptHeaderUploading===c.id ? 'Uploading…' : 'Receipt Header PNG'}
+                              <input type="file" accept="image/png" style={{display:'none'}} onChange={e=>uploadReceiptHeader(c.id,e.target.files[0])} />
+                            </label>
+                            {c.logo_url && <button className="btn btn-outline btn-sm" title="View company logo" aria-label="View company logo" onClick={() => previewCompanyLogo(c.logo_url)}>👁</button>}
+                            {c.holiday_receipt_header_url && <button className="btn btn-outline btn-sm" title="View receipt header" aria-label="View receipt header" onClick={() => previewReceiptHeader(c.id)}>👁</button>}
                           </div>
                         </td>
                         <td><span className={`badge badge-${c.active?'approved':'rejected'}`}>{c.active?'Active':'Inactive'}</span></td>
@@ -599,6 +649,7 @@ export default function SettingsPage() {
                             value={u.role} onChange={e=>updateUserRole(u.id,e.target.value)}
                             disabled={isMerged}>
                             <option value="staff">Staff</option>
+                            <option value="gro">GRO</option>
                             <option value="manager">Manager</option>
                             <option value="finance">Finance Officer</option>
                             <option value="ceo">CEO</option>
@@ -607,6 +658,12 @@ export default function SettingsPage() {
                           </select>
                         </div>
                       </div>
+
+                      <label style={{display:'flex',alignItems:'center',gap:'7px',fontSize:'12px',paddingTop:'4px'}}>
+                        <input type="checkbox" checked={Boolean(u.holiday_home_receipts_enabled)} disabled={isMerged || u.role === 'superadmin'}
+                          onChange={event => toggleHolidayHomeReceipts(u.id, event.target.checked)} />
+                        Holiday Home Receipts
+                      </label>
 
                       {/* Company assignments + tx counts */}
                       <div style={{flex:1,minWidth:'200px'}}>
@@ -714,6 +771,16 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {tab === 'modules' && (
+          <div className="card"><div className="card-header"><h2>User · Role · Module Access</h2><span className="text-sm text-muted">Roles do not grant modules automatically.</span></div>
+            <div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Payment Applications</th><th>Vouchers</th><th>Holiday Home Receipts</th></tr></thead><tbody>
+              {users.filter(u => !u.merged_into).map(u => <tr key={u.id}><td>{u.full_name}<div className="text-sm text-muted">{u.email}</div></td><td>{u.role}</td>
+                {['payment_applications','vouchers','holiday_home_receipts'].map(key => { const granted = u.role === 'superadmin' || moduleAssignments.some(row => row.user_id===u.id && row.module_key===key && row.granted); return <td key={key}><input type="checkbox" checked={granted} disabled={u.role==='superadmin'} onChange={e => toggleModuleAccess(u.id,key,e.target.checked)} /></td> })}
+              </tr>)}
+            </tbody></table></div>
           </div>
         )}
 
