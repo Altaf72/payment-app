@@ -10,30 +10,58 @@ export function AuthProvider({ children }) {
   const [moduleAccess, setModuleAccess] = useState([])
 
   async function fetchProfile(userId) {
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    setProfile(data)
-    const { data: modules } = await supabase.from('user_module_access').select('module_key').eq('user_id', userId).eq('granted', true)
-    setModuleAccess((modules || []).map(row => row.module_key))
+    const [{ data: profileData }, { data: modules }] = await Promise.all([
+      supabase.from('users').select('*').eq('id', userId).single(),
+      supabase.from('user_module_access').select('module_key').eq('user_id', userId).eq('granted', true),
+    ])
+
+    return {
+      profile: profileData ?? null,
+      moduleAccess: (modules || []).map(row => row.module_key),
+    }
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (session?.user) fetchProfile(session.user.id)
-      setLoading(false)
-    })
+    let active = true
+    let requestId = 0
+
+    async function applySession(session) {
+      const currentRequest = ++requestId
+      const nextUser = session?.user ?? null
+
+      setLoading(true)
+      setUser(nextUser)
+
+      if (!nextUser) {
+        if (active && currentRequest === requestId) {
+          setProfile(null)
+          setModuleAccess([])
+          setLoading(false)
+        }
+        return
+      }
+
+      // Keep routes and the sidebar paused until both the role and the module
+      // permissions are known. Previously the session was marked ready first,
+      // which could leave staff users on a blank, non-interactive shell.
+      const nextAccess = await fetchProfile(nextUser.id)
+      if (active && currentRequest === requestId) {
+        setProfile(nextAccess.profile)
+        setModuleAccess(nextAccess.moduleAccess)
+        setLoading(false)
+      }
+    }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user) fetchProfile(session.user.id)
-      else { setProfile(null); setModuleAccess([]) }
+      applySession(session)
     })
 
-    return () => subscription.unsubscribe()
+    supabase.auth.getSession().then(({ data: { session } }) => applySession(session))
+
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function signIn(email, password) {
