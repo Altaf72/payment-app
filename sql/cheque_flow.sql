@@ -175,10 +175,12 @@ begin
     coalesce((select jsonb_agg(to_jsonb(s) order by s.list_name) from public.cheque_flow_setup_lists s), '[]'::jsonb)
   returning id into v_archive_id;
 
-  delete from public.cheque_flow_entries;
-  delete from public.cheque_flow_deposits;
-  delete from public.cheque_flow_properties;
-  delete from public.cheque_flow_setup_lists;
+  -- Explicit predicates satisfy Supabase's safe-update protection while still
+  -- clearing the complete dataset inside this guarded transaction.
+  delete from public.cheque_flow_entries where id is not null;
+  delete from public.cheque_flow_deposits where id is not null;
+  delete from public.cheque_flow_properties where id is not null;
+  delete from public.cheque_flow_setup_lists where list_name is not null;
 
   insert into public.cheque_flow_properties (
     property_key, record_type, property_unit, entity, payee_owner,
