@@ -76,7 +76,7 @@ export default function HolidayHomeReceipts() {
   const filteredRows = useMemo(() => {
     const term = dashboardSearch.trim().toLowerCase()
     return rows.filter(receipt => {
-      const property = properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key
+      const property = receipt.property_display || properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key
       const companyName = companies.find(item => item.id === receipt.company_id)?.name || ''
       const receiptTotal = Number(receipt.rental_payment || 0) + Number(receipt.security_deposit || 0) + Number(receipt.admin_fee || 0) + Number(receipt.additional_service || 0)
       const matchesTerm = !term || [receipt.receipt_number, receipt.received_from, receipt.id_passport, property, companyName, receipt.description, receiptTotal, formatCurrency(receiptTotal), receipt.rental_payment, receipt.security_deposit, receipt.admin_fee, receipt.additional_service].some(value => String(value || '').toLowerCase().includes(term))
@@ -148,7 +148,8 @@ export default function HolidayHomeReceipts() {
   const save = async event => {
     event.preventDefault()
     if (!form.company_id || !form.received_from || !form.property_key || !form.check_in_date || !form.check_out_date || nights < 0) return setError('Enter company, guest, property, check-in and check-out.')
-    const payload = { ...form, nights, rental_payment:Number(form.rental_payment || 0), security_deposit:Number(form.security_deposit || 0), admin_fee:Number(form.admin_fee || 0), additional_service:Number(form.additional_service || 0), updated_by:user.id }
+    const selectedProperty = properties.find(item => item.property_key === form.property_key)
+    const payload = { ...form, property_display:selectedProperty?.property_unit || propertyDisplay || form.property_key, nights, rental_payment:Number(form.rental_payment || 0), security_deposit:Number(form.security_deposit || 0), admin_fee:Number(form.admin_fee || 0), additional_service:Number(form.additional_service || 0), updated_by:user.id }
     const { error:saveError } = await supabase.from('holiday_home_receipts').insert({ ...payload, created_by:user.id })
     if (saveError) return setError(saveError.message)
     rememberGuest()
@@ -156,7 +157,7 @@ export default function HolidayHomeReceipts() {
     setOpen(false); load()
   }
   const printReceipt = async receipt => {
-    const property = properties.find(item => item.property_key === receipt.property_key) || {}
+    const property = properties.find(item => item.property_key === receipt.property_key) || { property_unit:receipt.property_display }
     const receiptCompany = companies.find(item => item.id === receipt.company_id)
     const win = window.open('', '_blank')
     if (!win) return

@@ -91,6 +91,22 @@ create table if not exists public.cheque_flow_dataset_archives (
 );
 create index if not exists cheque_flow_archives_date_idx on public.cheque_flow_dataset_archives(archived_at desc);
 
+-- Receipts are historical records. Preserve their property label before
+-- detaching them from the replaceable workbook property master.
+do $$
+begin
+  if to_regclass('public.holiday_home_receipts') is not null then
+    alter table public.holiday_home_receipts add column if not exists property_display text;
+    update public.holiday_home_receipts r
+    set property_display = coalesce(p.property_unit, r.property_key)
+    from public.cheque_flow_properties p
+    where p.property_key = r.property_key
+      and nullif(trim(r.property_display), '') is null;
+    alter table public.holiday_home_receipts
+      drop constraint if exists holiday_home_receipts_property_key_fkey;
+  end if;
+end $$;
+
 create or replace function public.set_cheque_flow_updated_at() returns trigger language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
 drop trigger if exists cheque_flow_set_updated_at on public.cheque_flow_entries;
 create trigger cheque_flow_set_updated_at before update on public.cheque_flow_entries for each row execute function public.set_cheque_flow_updated_at();

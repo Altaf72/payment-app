@@ -18,7 +18,8 @@ create table if not exists public.holiday_home_receipts (
   receipt_date date not null default current_date,
   received_from text not null,
   id_passport text,
-  property_key text not null references public.cheque_flow_properties(property_key),
+  property_key text not null,
+  property_display text,
   check_in_date date not null,
   check_out_date date not null,
   nights integer not null check (nights > 0),
@@ -38,6 +39,13 @@ create table if not exists public.holiday_home_receipts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.holiday_home_receipts add column if not exists property_display text;
+update public.holiday_home_receipts r
+set property_display = coalesce(p.property_unit, r.property_key)
+from public.cheque_flow_properties p
+where p.property_key = r.property_key
+  and nullif(trim(r.property_display), '') is null;
+alter table public.holiday_home_receipts drop constraint if exists holiday_home_receipts_property_key_fkey;
 create index if not exists holiday_home_receipts_company_idx on public.holiday_home_receipts(company_id, receipt_date desc);
 
 create or replace function public.next_holiday_home_receipt_number(p_company_id uuid)
