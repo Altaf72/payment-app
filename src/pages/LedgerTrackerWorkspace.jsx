@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase'
 export default function LedgerTrackerWorkspace() {
   const { profile, user } = useAuth()
   const iframeRef = useRef(null)
+  const replaceInProgressRef = useRef(false)
+  const ignoreStateSaveUntilRef = useRef(0)
   const normalizedRole = String(profile?.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
   const canEdit = ['finance', 'finance_officer'].includes(normalizedRole)
   // The iframe may finish loading before the asynchronous user profile arrives.
@@ -15,6 +17,8 @@ export default function LedgerTrackerWorkspace() {
   useEffect(() => {
     async function syncWorkbook(event) {
       if (event.origin !== window.location.origin || !['chequeflow:workbook-import', 'chequeflow:state-save', 'chequeflow:property-save'].includes(event.data?.type) || !user?.id) return
+      if (event.data.type === 'chequeflow:state-save' &&
+          (replaceInProgressRef.current || Date.now() < ignoreStateSaveUntilRef.current)) return
       if (event.data.type === 'chequeflow:property-save') {
         try {
           const p = event.data.property
@@ -31,13 +35,51 @@ export default function LedgerTrackerWorkspace() {
         const propertyKeys = new Set(properties.map(p => p.property_key))
         const entries = (state.cheques || []).map((c, index) => ({ source_import_key: `workbook-${index}-${String(c.propertyKey || '').trim()}-${c.chequeDate || ''}`, direction: String(c.direction || 'Payable').toLowerCase() === 'receivable' ? 'receivable' : 'payable', cheque_no: c.chequeNo || null, property_key: c.propertyKey || null, entity: c.entity || null, due_date: isoDate(c.chequeDate) || new Date().toISOString().slice(0, 10), property_name: c.description || null, counterparty: c.counterparty || c.description || c.propertyKey || 'Unassigned', category: c.paymentPurpose || null, recurrence_frequency: c.recurrenceFrequency || null, amount: Number(c.amount || 0.01) || 0.01, currency: 'AED', status: mapStatus(c.status), source_status: c.status || null, notes: c.description || null, created_by: user.id, updated_by: user.id }))
         const deposits = (state.deposits || []).filter(d => propertyKeys.has(String(d.propertyKey || '').trim())).map(d => ({ property_key: String(d.propertyKey).trim(), rental_deposit: Number(d.rentalDeposit || 0), dewa_deposit: Number(d.dewaDeposit || 0), chiller_deposit: Number(d.chillerDeposit || 0), gas_deposit: Number(d.gasDeposit || 0), other_deposit: Number(d.otherDeposit || 0), remark: d.remark || null, created_by: user.id, updated_by: user.id }))
+        const setup = Object.entries(state.setupLists || {}).map(([list_name, values_json]) => ({ list_name, values_json, updated_by: user.id }))
+
+        if (event.data.type === 'chequeflow:workbook-import') {
+          replaceInProgressRef.current = true
+          ignoreStateSaveUntilRef.current = Date.now() + 3000
+          const { data: result, error } = await supabase.rpc('replace_cheque_flow_dataset', {
+            p_entries: entries,
+            p_properties: properties,
+            p_deposits: deposits,
+            p_setup_lists: setup,
+            p_expected_entries: entries.length,
+            p_expected_properties: properties.length,
+            p_expected_deposits: deposits.length,
+            p_expected_setup_lists: setup.length,
+          })
+          if (error) throw new Error(`${error.message}. Run the latest sql/cheque_flow.sql in Supabase, then retry.`)
+          if (Number(result?.entries) !== entries.length ||
+              Number(result?.properties) !== properties.length ||
+              Number(result?.deposits) !== deposits.length ||
+              Number(result?.setup_lists) !== setup.length) {
+            throw new Error('Replacement verification failed. The previous dataset was retained.')
+          }
+          iframeRef.current?.contentWindow?.postMessage({
+            type: 'chequeflow:sync-result',
+            ok: true,
+            replace: true,
+            counts: result,
+          }, window.location.origin)
+          replaceInProgressRef.current = false
+          return
+        }
+
         if (properties.length) { const { error } = await supabase.from('cheque_flow_properties').upsert(properties, { onConflict: 'property_key' }); if (error) throw error }
         if (deposits.length) { const { error } = await supabase.from('cheque_flow_deposits').upsert(deposits, { onConflict: 'property_key' }); if (error) throw error }
         if (entries.length) { const { error } = await supabase.from('cheque_flow_entries').upsert(entries, { onConflict: 'source_import_key' }); if (error) throw error }
-        const setup = Object.entries(state.setupLists || {}).map(([list_name, values_json]) => ({ list_name, values_json, updated_by: user.id }))
         if (setup.length) { const { error } = await supabase.from('cheque_flow_setup_lists').upsert(setup, { onConflict: 'list_name' }); if (error) throw error }
         iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: true }, window.location.origin)
-      } catch (error) { iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: false, message: error.message }, window.location.origin) }
+      } catch (error) {
+        replaceInProgressRef.current = false
+        ignoreStateSaveUntilRef.current = Date.now() + 3000
+        iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: false, message: error.message }, window.location.origin)
+        if (event.data.type === 'chequeflow:workbook-import' && iframeRef.current?.contentDocument) {
+          await hydrateTrackerFromSupabase(iframeRef.current.contentDocument)
+        }
+      }
     }
     window.addEventListener('message', syncWorkbook)
     return () => window.removeEventListener('message', syncWorkbook)
@@ -94,7 +136,11 @@ export default function LedgerTrackerWorkspace() {
       const notice = doc.getElementById('setupSyncMessage')
       if (notice && notice.style.display !== 'none') {
         notice.style.color = event.data.ok ? '#17624F' : '#B42318'
-        notice.textContent = event.data.ok ? 'Workbook uploaded — all available sheets are now updated in Supabase.' : `Workbook upload failed: ${event.data.message}`
+        notice.textContent = event.data.ok && event.data.replace
+          ? `Replacement verified — ${event.data.counts?.entries || 0} cheques, ${event.data.counts?.properties || 0} properties, ${event.data.counts?.deposits || 0} deposits. Previous data archived.`
+          : event.data.ok
+            ? 'Changes saved to Supabase.'
+            : `Workbook upload failed: ${event.data.message}`
       }
     })
     hydrateTrackerFromSupabase(doc)

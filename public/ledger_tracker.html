@@ -2993,9 +2993,12 @@ function handleExcelImportFile(file){
       A.STATE.cheques = A.backfillDirection(incoming.cheques);
       A.STATE.properties = A.backfillRecordTypes(incoming.properties);
       A.STATE.deposits = incoming.deposits;
-      if(incoming.setupLists) A.STATE.setupLists = Object.assign({}, A.STATE.setupLists, incoming.setupLists);
-      // The host application listens for this message and upserts every
-      // imported workbook sheet into Supabase. The tracker remains usable
+      A.STATE.setupLists = incoming.setupLists || {};
+      // Persist the imported dataset immediately so stale browser data cannot
+      // briefly reappear while the host performs the atomic database replace.
+      A.persistState();
+      // The host application listens for this message and atomically replaces
+      // the Supabase dataset after archiving it. The tracker remains usable
       // standalone, where postMessage simply has no listener.
       try{ window.parent.postMessage({ type:"chequeflow:workbook-import", state:{cheques:A.STATE.cheques,properties:A.STATE.properties,deposits:A.STATE.deposits,setupLists:A.STATE.setupLists} }, window.location.origin); }catch(e){}
       A.toast("Replaced ledger data from workbook.", "ok");

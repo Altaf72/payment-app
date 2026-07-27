@@ -193,6 +193,7 @@ export default function FinanceDashboard() {
   const [filterStatus,     setFilterStatus]     = useState(saved.filterStatus     || (isManager ? 'pending' : ''))
   const [filterCompany,    setFilterCompany]    = useState(saved.filterCompany    || '')
   const [filterBatch,      setFilterBatch]      = useState(saved.filterBatch      || '')
+  const [batchTotalSearch, setBatchTotalSearch] = useState(saved.batchTotalSearch || '')
   const [filterAttachment, setFilterAttachment] = useState(saved.filterAttachment || '')
 
   // Pagination — restored from session
@@ -202,20 +203,20 @@ export default function FinanceDashboard() {
   // Persist filter state to sessionStorage whenever it changes
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-      search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment, page, pageSize
+      search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize
     }))
-  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment, page, pageSize])
+  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize])
 
   // Reset to page 1 when filters change (but not on page/size changes themselves)
   const isFirstRender = React.useRef(true)
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment])
+  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment])
 
   useEffect(() => {
     load()
-  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
+  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
 
   useEffect(() => {
     let active = true
@@ -301,7 +302,7 @@ export default function FinanceDashboard() {
 
     // When searching/filtering: query ALL matching rows (no pagination limit)
     // When browsing: paginate to avoid loading unnecessary data
-    const isSearching = !!(search.trim() || amountSearch.trim())
+    const isSearching = !!(search.trim() || amountSearch.trim() || batchTotalSearch.trim())
     if (Array.isArray(allowedCompanyIds) && allowedCompanyIds.length === 0) {
       if (requestId !== loadRequestRef.current) return
       setApplications([])
@@ -312,6 +313,58 @@ export default function FinanceDashboard() {
 
     const textTerm = search.trim().replace(/[,%()]/g, ' ').trim()
     const batchTerm = filterBatch.trim().replace(/[,%()]/g, ' ').trim()
+    const requestedBatchTotal = Number(batchTotalSearch)
+    let batchTotalMatchNumbers = null
+    if (batchTotalSearch.trim() && (!Number.isFinite(requestedBatchTotal) || requestedBatchTotal < 0)) {
+      setApplications([])
+      setTotal(0)
+      setLoadError('Enter a valid batch total amount.')
+      setLoading(false)
+      return
+    }
+    if (batchTotalSearch.trim() && Number.isFinite(requestedBatchTotal)) {
+      const batchRows = []
+      let batchOffset = 0
+      while (true) {
+        let batchQuery = supabase
+          .from('applications_full')
+          .select('batch_number,amount,company_id,company_name')
+          .not('batch_number', 'is', null)
+          .is('deleted_at', null)
+          .range(batchOffset, batchOffset + QUERY_PAGE_SIZE - 1)
+        if (Array.isArray(allowedCompanyIds)) batchQuery = batchQuery.in('company_id', allowedCompanyIds)
+        if (filterCompany) batchQuery = batchQuery.eq('company_name', filterCompany)
+        if (batchTerm) batchQuery = batchQuery.ilike('batch_number', `%${batchTerm}%`)
+        const batchResult = await batchQuery
+        if (requestId !== loadRequestRef.current) return
+        if (batchResult.error) {
+          console.error('Batch total search failed', batchResult.error)
+          setLoadError(`Could not calculate batch totals: ${batchResult.error.message}`)
+          setApplications([])
+          setTotal(0)
+          setLoading(false)
+          return
+        }
+        batchRows.push(...(batchResult.data || []))
+        if ((batchResult.data || []).length < QUERY_PAGE_SIZE) break
+        batchOffset += QUERY_PAGE_SIZE
+      }
+      const totals = new Map()
+      batchRows.forEach(row => {
+        totals.set(row.batch_number, (totals.get(row.batch_number) || 0) + Number(row.amount || 0))
+      })
+      batchTotalMatchNumbers = [...totals.entries()]
+        .filter(([, totalAmount]) => Math.abs(totalAmount - requestedBatchTotal) < 0.005)
+        .map(([batchNumber]) => batchNumber)
+    }
+
+    if (Array.isArray(batchTotalMatchNumbers) && batchTotalMatchNumbers.length === 0) {
+      if (requestId !== loadRequestRef.current) return
+      setApplications([])
+      setTotal(0)
+      setLoading(false)
+      return
+    }
     let commentMatchIds = []
     if (textTerm) {
       let commentOffset = 0
@@ -346,6 +399,7 @@ export default function FinanceDashboard() {
       if (filterStatus)  query = query.eq('status', filterStatus)
       if (filterCompany) query = query.eq('company_name', filterCompany)
       if (batchTerm) query = query.ilike('batch_number', `%${batchTerm}%`)
+      if (Array.isArray(batchTotalMatchNumbers)) query = query.in('batch_number', batchTotalMatchNumbers)
       if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
       if (filterAttachment === 'no')  query = query.is('attachment_path', null)
       if (includeTextSearch && textTerm) {
@@ -485,8 +539,8 @@ export default function FinanceDashboard() {
     // Export ALL matching records (no pagination)
     if (Array.isArray(allowedCompanyIds) && allowedCompanyIds.length === 0) return
     const exportSearch = search.trim().replace(/[,%()]/g, ' ').trim()
-    let rows = exportSearch || amountSearch.trim() ? [...applications] : []
-    if (!exportSearch && !amountSearch.trim()) {
+    let rows = exportSearch || amountSearch.trim() || batchTotalSearch.trim() ? [...applications] : []
+    if (!exportSearch && !amountSearch.trim() && !batchTotalSearch.trim()) {
       let offset = 0
       while (true) {
         let query = supabase
@@ -857,7 +911,7 @@ export default function FinanceDashboard() {
     }
   }
 
-  const isSearching = !!(search.trim() || amountSearch.trim())
+  const isSearching = !!(search.trim() || amountSearch.trim() || batchTotalSearch.trim())
   const visibleApplications = showUncheckedOnly
     ? applications.filter(app => !reviewedIds.has(app.id))
     : applications
@@ -939,16 +993,20 @@ export default function FinanceDashboard() {
         <input className="form-control" style={{width:'175px'}}
           placeholder="Batch number"
           value={filterBatch} onChange={e => setFilterBatch(e.target.value)} />
+        <input className="form-control" style={{width:'150px'}}
+          placeholder="Batch total"
+          type="number" step="0.01" min="0"
+          value={batchTotalSearch} onChange={e => setBatchTotalSearch(e.target.value)} />
         <select className="form-control" style={{width:'auto'}} value={filterAttachment}
           onChange={e => setFilterAttachment(e.target.value)}>
           <option value="">All (attach.)</option>
           <option value="yes">📎 Has attachment</option>
           <option value="no">No attachment</option>
         </select>
-        {(search||amountSearch||filterStatus||filterCompany||filterBatch||filterAttachment) && (
+        {(search||amountSearch||filterStatus||filterCompany||filterBatch||batchTotalSearch||filterAttachment) && (
           <button className="btn btn-outline btn-sm" onClick={() => {
             setSearch(''); setAmountSearch(''); setFilterStatus('');
-            setFilterCompany(''); setFilterBatch(''); setFilterAttachment(''); setPage(1)
+            setFilterCompany(''); setFilterBatch(''); setBatchTotalSearch(''); setFilterAttachment(''); setPage(1)
             sessionStorage.removeItem('finance_dashboard_filters')
           }}>✕ Clear all</button>
         )}
@@ -1023,6 +1081,7 @@ export default function FinanceDashboard() {
           <span>
             Searching <strong>all {total} matching records</strong> across the entire database
             {amountSearch && ` · Amount contains "${amountSearch}"`}
+            {batchTotalSearch && ` · Batch total: AED ${batchTotalSearch}`}
             {search && ` · Text: "${search}"`}
           </span>
           <span style={{marginLeft:'auto',fontSize:'11px',color:'#b45309'}}>
