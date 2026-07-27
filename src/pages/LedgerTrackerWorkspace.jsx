@@ -33,7 +33,7 @@ export default function LedgerTrackerWorkspace() {
       try {
         const properties = (state.properties || []).filter(p => p.propertyKey).map(p => ({ property_key: String(p.propertyKey).trim(), record_type: p.recordType || 'Property', property_unit: p.propertyUnit ? String(p.propertyUnit) : null, entity: p.entity || null, payee_owner: p.payeeOwner || null, contract_start: isoDate(p.contractStart), contract_end: isoDate(p.contractEnd), annual_rent: Number(p.annualRent || 0), total_installments: Number(p.totalInstallments || 0) || null, property_status: p.propertyStatus || null, owner_nationality: p.ownerNationality || null, management_type: p.managementType || null, created_by: user.id, updated_by: user.id }))
         const propertyKeys = new Set(properties.map(p => p.property_key))
-        const entries = (state.cheques || []).map((c, index) => ({ source_import_key: `workbook-${index}-${String(c.propertyKey || '').trim()}-${c.chequeDate || ''}`, direction: String(c.direction || 'Payable').toLowerCase() === 'receivable' ? 'receivable' : 'payable', cheque_no: c.chequeNo || null, property_key: c.propertyKey || null, entity: c.entity || null, due_date: isoDate(c.chequeDate) || new Date().toISOString().slice(0, 10), property_name: c.description || null, counterparty: c.counterparty || c.description || c.propertyKey || 'Unassigned', category: c.paymentPurpose || null, recurrence_frequency: c.recurrenceFrequency || null, amount: Number(c.amount || 0.01) || 0.01, currency: 'AED', status: mapStatus(c.status), source_status: c.status || null, notes: c.description || null, created_by: user.id, updated_by: user.id }))
+        const entries = (state.cheques || []).map((c, index) => ({ source_import_key: c.sourceImportKey || `workbook-${index}-${String(c.propertyKey || '').trim()}-${c.chequeDate || ''}`, direction: String(c.direction || 'Payable').toLowerCase() === 'receivable' ? 'receivable' : 'payable', cheque_no: c.chequeNo || null, property_key: c.propertyKey || null, entity: c.entity || null, due_date: isoDate(c.chequeDate) || new Date().toISOString().slice(0, 10), property_name: c.description || null, counterparty: c.counterparty || c.description || c.propertyKey || 'Unassigned', category: c.paymentPurpose || null, recurrence_frequency: c.recurrenceFrequency || null, amount: Number(c.amount || 0.01) || 0.01, currency: 'AED', status: mapStatus(c.status), source_status: c.status || null, notes: c.description || null, created_by: user.id, updated_by: user.id }))
         const deposits = (state.deposits || []).filter(d => propertyKeys.has(String(d.propertyKey || '').trim())).map(d => ({ property_key: String(d.propertyKey).trim(), rental_deposit: Number(d.rentalDeposit || 0), dewa_deposit: Number(d.dewaDeposit || 0), chiller_deposit: Number(d.chillerDeposit || 0), gas_deposit: Number(d.gasDeposit || 0), other_deposit: Number(d.otherDeposit || 0), remark: d.remark || null, created_by: user.id, updated_by: user.id }))
         const setup = Object.entries(state.setupLists || {}).map(([list_name, values_json]) => ({ list_name, values_json, updated_by: user.id }))
 
@@ -56,6 +56,9 @@ export default function LedgerTrackerWorkspace() {
               Number(result?.deposits) !== deposits.length ||
               Number(result?.setup_lists) !== setup.length) {
             throw new Error('Replacement verification failed. The previous dataset was retained.')
+          }
+          if (iframeRef.current?.contentDocument) {
+            await hydrateTrackerFromSupabase(iframeRef.current.contentDocument)
           }
           iframeRef.current?.contentWindow?.postMessage({
             type: 'chequeflow:sync-result',
@@ -176,6 +179,7 @@ export default function LedgerTrackerWorkspace() {
         managementType: property.management_type || '',
       }))
       const cheques = (entriesResult.data || []).map(entry => ({
+        sourceImportKey: entry.source_import_key,
         chequeDate: entry.due_date || '',
         amount: entry.amount ?? '',
         entity: entry.entity || '',
