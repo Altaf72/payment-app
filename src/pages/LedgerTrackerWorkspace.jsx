@@ -115,6 +115,12 @@ export default function LedgerTrackerWorkspace() {
       if (notice) { notice.style.display = 'block'; notice.style.color = '#5B665F'; notice.textContent = 'Uploading workbook and updating Supabase…' }
     })
     const originalPersistState = doc.defaultView?.APP?.persistState
+    const dataSnapshot = state => JSON.stringify({
+      cheques: (state.cheques || []).map(({ _id, ...row }) => row),
+      properties: (state.properties || []).map(({ _id, ...row }) => row),
+      deposits: (state.deposits || []).map(({ _id, ...row }) => row),
+      setupLists: state.setupLists || {},
+    })
     let saveTimer
     if (originalPersistState && !doc.defaultView.__chequeFlowSupabaseBridge) {
       doc.defaultView.__chequeFlowSupabaseBridge = true
@@ -123,6 +129,16 @@ export default function LedgerTrackerWorkspace() {
         clearTimeout(saveTimer)
         saveTimer = setTimeout(() => {
           const state = doc.defaultView.APP.STATE
+          // Rendering and tab navigation also call persistState in the
+          // standalone tracker. They must remain database read-only.
+          if (!doc.defaultView.__chequeFlowDataBaseline) return
+          ;(state.cheques || []).forEach(cheque => {
+            if (!cheque.sourceImportKey) cheque.sourceImportKey = `entry-${crypto.randomUUID()}`
+          })
+          const nextSnapshot = dataSnapshot(state)
+          if (nextSnapshot === doc.defaultView.__chequeFlowDataBaseline) return
+          doc.defaultView.__chequeFlowPreviousBaseline = doc.defaultView.__chequeFlowDataBaseline
+          doc.defaultView.__chequeFlowDataBaseline = nextSnapshot
           doc.defaultView.parent.postMessage({ type: 'chequeflow:state-save', state: { cheques: state.cheques, properties: state.properties, deposits: state.deposits, setupLists: state.setupLists } }, window.location.origin)
         }, 350)
       }
@@ -135,6 +151,12 @@ export default function LedgerTrackerWorkspace() {
     if (!canEdit) headerActions?.insertAdjacentHTML('beforeend', '<span style="font-size:12px;color:#5B665F">View only</span>')
     doc.defaultView?.addEventListener('message', event => {
       if (event.origin !== window.location.origin || event.data?.type !== 'chequeflow:sync-result') return
+      if (event.data.ok) {
+        doc.defaultView.__chequeFlowPreviousBaseline = null
+      } else if (doc.defaultView.__chequeFlowPreviousBaseline) {
+        doc.defaultView.__chequeFlowDataBaseline = doc.defaultView.__chequeFlowPreviousBaseline
+        doc.defaultView.__chequeFlowPreviousBaseline = null
+      }
       doc.defaultView?.APP?.toast?.(event.data.ok ? 'Saved to Supabase.' : `Supabase sync failed: ${event.data.message}`, event.data.ok ? 'ok' : 'err')
       const notice = doc.getElementById('setupSyncMessage')
       if (notice && notice.style.display !== 'none') {
@@ -204,6 +226,12 @@ export default function LedgerTrackerWorkspace() {
       app.STATE.cheques = app.backfillDirection(cheques.map(app.withId))
       app.STATE.deposits = deposits.map(app.withId)
       app.STATE.setupLists = { ...app.STATE.setupLists, ...setupLists }
+      doc.defaultView.__chequeFlowDataBaseline = JSON.stringify({
+        cheques: app.STATE.cheques.map(({ _id, ...row }) => row),
+        properties: app.STATE.properties.map(({ _id, ...row }) => row),
+        deposits: app.STATE.deposits.map(({ _id, ...row }) => row),
+        setupLists: app.STATE.setupLists,
+      })
       app.refreshAllViews?.()
       if (!properties.length && !cheques.length) app.toast?.('No ChequeFlow records are in Supabase yet. Import the workbook from Setup to populate it.', 'err')
     } catch (error) {
