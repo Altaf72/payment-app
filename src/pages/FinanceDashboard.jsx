@@ -192,6 +192,7 @@ export default function FinanceDashboard() {
   const [amountSearch,     setAmountSearch]     = useState(saved.amountSearch     || '')
   const [filterStatus,     setFilterStatus]     = useState(saved.filterStatus     || (isManager ? 'pending' : ''))
   const [filterCompany,    setFilterCompany]    = useState(saved.filterCompany    || '')
+  const [filterBatch,      setFilterBatch]      = useState(saved.filterBatch      || '')
   const [filterAttachment, setFilterAttachment] = useState(saved.filterAttachment || '')
 
   // Pagination — restored from session
@@ -201,20 +202,20 @@ export default function FinanceDashboard() {
   // Persist filter state to sessionStorage whenever it changes
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-      search, amountSearch, filterStatus, filterCompany, filterAttachment, page, pageSize
+      search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment, page, pageSize
     }))
-  }, [search, amountSearch, filterStatus, filterCompany, filterAttachment, page, pageSize])
+  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment, page, pageSize])
 
   // Reset to page 1 when filters change (but not on page/size changes themselves)
   const isFirstRender = React.useRef(true)
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [search, amountSearch, filterStatus, filterCompany, filterAttachment])
+  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment])
 
   useEffect(() => {
     load()
-  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
+  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterBatch, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
 
   useEffect(() => {
     let active = true
@@ -310,6 +311,7 @@ export default function FinanceDashboard() {
     }
 
     const textTerm = search.trim().replace(/[,%()]/g, ' ').trim()
+    const batchTerm = filterBatch.trim().replace(/[,%()]/g, ' ').trim()
     let commentMatchIds = []
     if (textTerm) {
       let commentOffset = 0
@@ -343,11 +345,12 @@ export default function FinanceDashboard() {
       if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
       if (filterStatus)  query = query.eq('status', filterStatus)
       if (filterCompany) query = query.eq('company_name', filterCompany)
+      if (batchTerm) query = query.ilike('batch_number', `%${batchTerm}%`)
       if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
       if (filterAttachment === 'no')  query = query.is('attachment_path', null)
       if (includeTextSearch && textTerm) {
         query = query.or(
-          `ref_number.ilike.%${textTerm}%,payment_reason.ilike.%${textTerm}%,submitted_by_name.ilike.%${textTerm}%,payee_name.ilike.%${textTerm}%,attachment_name.ilike.%${textTerm}%,remarks.ilike.%${textTerm}%`
+          `ref_number.ilike.%${textTerm}%,batch_number.ilike.%${textTerm}%,payment_reason.ilike.%${textTerm}%,submitted_by_name.ilike.%${textTerm}%,payee_name.ilike.%${textTerm}%,attachment_name.ilike.%${textTerm}%,remarks.ilike.%${textTerm}%`
         )
       }
       return query
@@ -495,6 +498,7 @@ export default function FinanceDashboard() {
         if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
         if (filterStatus)  query = query.eq('status', filterStatus)
         if (filterCompany) query = query.eq('company_name', filterCompany)
+        if (filterBatch.trim()) query = query.ilike('batch_number', `%${filterBatch.trim()}%`)
         if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
         if (filterAttachment === 'no')  query = query.is('attachment_path', null)
         const { data, error } = await query
@@ -932,16 +936,19 @@ export default function FinanceDashboard() {
           <option value="">All companies</option>
           {companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
         </select>
+        <input className="form-control" style={{width:'175px'}}
+          placeholder="Batch number"
+          value={filterBatch} onChange={e => setFilterBatch(e.target.value)} />
         <select className="form-control" style={{width:'auto'}} value={filterAttachment}
           onChange={e => setFilterAttachment(e.target.value)}>
           <option value="">All (attach.)</option>
           <option value="yes">📎 Has attachment</option>
           <option value="no">No attachment</option>
         </select>
-        {(search||amountSearch||filterStatus||filterCompany||filterAttachment) && (
+        {(search||amountSearch||filterStatus||filterCompany||filterBatch||filterAttachment) && (
           <button className="btn btn-outline btn-sm" onClick={() => {
             setSearch(''); setAmountSearch(''); setFilterStatus('');
-            setFilterCompany(''); setFilterAttachment(''); setPage(1)
+            setFilterCompany(''); setFilterBatch(''); setFilterAttachment(''); setPage(1)
             sessionStorage.removeItem('finance_dashboard_filters')
           }}>✕ Clear all</button>
         )}
@@ -1153,11 +1160,15 @@ export default function FinanceDashboard() {
                           </div>
                           {app.batch_number && (
                             <div style={{marginTop:'3px',display:'flex',alignItems:'center',gap:'4px',flexWrap:'wrap'}}>
-                              <span style={{
+                              <button type="button"
+                                title={`Show all transactions in ${app.batch_number}`}
+                                onClick={() => setFilterBatch(app.batch_number)}
+                                style={{
                                 fontSize:'9px',fontWeight:600,padding:'1px 6px',
                                 borderRadius:'20px',background:'#dbeafe',color:'#1e40af',
                                 fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',
-                              }}>Batch {app.batch_number}</span>
+                                border:'1px solid #bfdbfe',cursor:'pointer',
+                              }}>Batch {app.batch_number}</button>
                               {canUndoBatch && (app.batch_id || app.batch_number) && (
                                 <button
                                   title={`Undo batch ${app.batch_number}`}

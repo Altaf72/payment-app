@@ -14,7 +14,7 @@ export default function LedgerTrackerWorkspace() {
 
   useEffect(() => {
     async function syncWorkbook(event) {
-      if (event.origin !== window.location.origin || !['chequeflow:workbook-import', 'chequeflow:property-save'].includes(event.data?.type) || !user?.id) return
+      if (event.origin !== window.location.origin || !['chequeflow:workbook-import', 'chequeflow:state-save', 'chequeflow:property-save'].includes(event.data?.type) || !user?.id) return
       if (event.data.type === 'chequeflow:property-save') {
         try {
           const p = event.data.property
@@ -55,7 +55,7 @@ export default function LedgerTrackerWorkspace() {
     tabs.appendChild(setupTab)
     const setupView = doc.createElement('section')
     setupView.id = 'view-setup'; setupView.className = 'view'
-    setupView.innerHTML = `<div class="panel"><div class="panel-head"><h2>Setup</h2><span class="hint">Data exchange tools</span></div><p style="color:#5B665F;margin:0 0 14px">ChequeFlow is managed in Supabase. Use Excel only for controlled import and export.</p><div class="row-flex"><button class="btn btn-primary" id="setupExcelExport">Excel Export</button><button class="btn" id="setupExcelImport">Excel Import</button></div></div>`
+    setupView.innerHTML = `<div class="panel"><div class="panel-head"><h2>Setup</h2><span class="hint">Data exchange tools</span></div><p style="color:#5B665F;margin:0 0 14px">ChequeFlow saves changes to Supabase automatically. Use Excel only for controlled import and export.</p><div class="row-flex"><button class="btn btn-primary" id="setupExcelExport">Excel Export</button><button class="btn" id="setupExcelImport">Excel Import</button></div><p id="setupSyncMessage" style="display:none;margin:14px 0 0;color:#17624F;font-weight:700"></p></div>`
     doc.querySelector('main')?.appendChild(setupView)
     const showSetup = () => {
       doc.querySelectorAll('.view').forEach(view => view.classList.remove('active'))
@@ -65,6 +65,23 @@ export default function LedgerTrackerWorkspace() {
     setupTab.addEventListener('click', showSetup)
     doc.getElementById('setupExcelExport')?.addEventListener('click', () => doc.defaultView?.APP?.exportFullWorkbook?.())
     doc.getElementById('setupExcelImport')?.addEventListener('click', () => doc.getElementById('fileExcelImport')?.click())
+    doc.getElementById('fileExcelImport')?.addEventListener('change', () => {
+      const notice = doc.getElementById('setupSyncMessage')
+      if (notice) { notice.style.display = 'block'; notice.style.color = '#5B665F'; notice.textContent = 'Uploading workbook and updating Supabase…' }
+    })
+    const originalPersistState = doc.defaultView?.APP?.persistState
+    let saveTimer
+    if (originalPersistState && !doc.defaultView.__chequeFlowSupabaseBridge) {
+      doc.defaultView.__chequeFlowSupabaseBridge = true
+      doc.defaultView.APP.persistState = function persistAndSync() {
+        originalPersistState()
+        clearTimeout(saveTimer)
+        saveTimer = setTimeout(() => {
+          const state = doc.defaultView.APP.STATE
+          doc.defaultView.parent.postMessage({ type: 'chequeflow:state-save', state: { cheques: state.cheques, properties: state.properties, deposits: state.deposits, setupLists: state.setupLists } }, window.location.origin)
+        }, 350)
+      }
+    }
     if (!canEdit) {
       const style = doc.createElement('style')
       style.textContent = `.view input,.view select,.view textarea,.view button:not(.tab-btn){pointer-events:none!important;opacity:.62!important}.view #setupExcelExport,.view #setupExcelImport{display:none!important}`
@@ -73,8 +90,75 @@ export default function LedgerTrackerWorkspace() {
     if (!canEdit) headerActions?.insertAdjacentHTML('beforeend', '<span style="font-size:12px;color:#5B665F">View only</span>')
     doc.defaultView?.addEventListener('message', event => {
       if (event.origin !== window.location.origin || event.data?.type !== 'chequeflow:sync-result') return
-      doc.defaultView?.APP?.toast?.(event.data.ok ? 'Workbook synced to Supabase.' : `Supabase sync failed: ${event.data.message}`, event.data.ok ? 'ok' : 'err')
+      doc.defaultView?.APP?.toast?.(event.data.ok ? 'Saved to Supabase.' : `Supabase sync failed: ${event.data.message}`, event.data.ok ? 'ok' : 'err')
+      const notice = doc.getElementById('setupSyncMessage')
+      if (notice && notice.style.display !== 'none') {
+        notice.style.color = event.data.ok ? '#17624F' : '#B42318'
+        notice.textContent = event.data.ok ? 'Workbook uploaded — all available sheets are now updated in Supabase.' : `Workbook upload failed: ${event.data.message}`
+      }
     })
+    hydrateTrackerFromSupabase(doc)
+  }
+
+  async function hydrateTrackerFromSupabase(doc) {
+    try {
+      const [propertiesResult, entriesResult, depositsResult, setupResult] = await Promise.all([
+        supabase.from('cheque_flow_properties').select('*').order('property_key'),
+        supabase.from('cheque_flow_entries').select('*').order('due_date'),
+        supabase.from('cheque_flow_deposits').select('*').order('property_key'),
+        supabase.from('cheque_flow_setup_lists').select('*'),
+      ])
+      // The setup table was added later; it must not prevent the master data
+      // from loading for an installation that has not run that migration yet.
+      const criticalError = propertiesResult.error || entriesResult.error || depositsResult.error
+      if (criticalError) throw criticalError
+
+      const app = doc.defaultView?.APP
+      if (!app?.STATE) return
+      const properties = (propertiesResult.data || []).map(property => ({
+        propertyKey: property.property_key,
+        recordType: property.record_type || 'Property',
+        propertyUnit: property.property_unit || '',
+        entity: property.entity || '',
+        payeeOwner: property.payee_owner || '',
+        contractStart: property.contract_start || '',
+        contractEnd: property.contract_end || '',
+        annualRent: property.annual_rent ?? '',
+        totalInstallments: property.total_installments ?? '',
+        propertyStatus: property.property_status || '',
+        ownerNationality: property.owner_nationality || '',
+        managementType: property.management_type || '',
+      }))
+      const cheques = (entriesResult.data || []).map(entry => ({
+        chequeDate: entry.due_date || '',
+        amount: entry.amount ?? '',
+        entity: entry.entity || '',
+        direction: entry.direction === 'receivable' ? 'Receivable' : 'Payable',
+        propertyKey: entry.property_key || '',
+        counterparty: entry.counterparty || '',
+        description: entry.notes || entry.property_name || '',
+        paymentPurpose: entry.category || '',
+        recurrenceFrequency: entry.recurrence_frequency || '',
+        chequeNo: entry.cheque_no || '',
+        status: entry.source_status || trackerStatus(entry.status),
+      }))
+      const deposits = (depositsResult.data || []).map(deposit => ({
+        propertyKey: deposit.property_key,
+        rentalDeposit: deposit.rental_deposit ?? '', dewaDeposit: deposit.dewa_deposit ?? '',
+        chillerDeposit: deposit.chiller_deposit ?? '', gasDeposit: deposit.gas_deposit ?? '',
+        otherDeposit: deposit.other_deposit ?? '', remark: deposit.remark || '',
+      }))
+      const setupLists = Object.fromEntries((setupResult.data || []).map(row => [row.list_name, row.values_json]))
+
+      app.STATE.properties = app.backfillRecordTypes(properties.map(app.withId))
+      app.STATE.cheques = app.backfillDirection(cheques.map(app.withId))
+      app.STATE.deposits = deposits.map(app.withId)
+      app.STATE.setupLists = { ...app.STATE.setupLists, ...setupLists }
+      app.refreshAllViews?.()
+      if (!properties.length && !cheques.length) app.toast?.('No ChequeFlow records are in Supabase yet. Import the workbook from Setup to populate it.', 'err')
+    } catch (error) {
+      doc.defaultView?.APP?.toast?.(`Could not load ChequeFlow data from Supabase: ${error.message}`, 'err')
+    }
   }
 
   return <div style={{ height: 'calc(100vh - 64px)', minHeight: 720, margin: '-24px -32px' }}>
@@ -89,3 +173,4 @@ function isoDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10)
 }
 function mapStatus(value) { const text = String(value || '').toLowerCase(); if (text.includes('cleared') || text === 'cash') return 'cleared'; if (text.includes('return') || text.includes('cancel')) return 'returned'; if (text.includes('hold')) return 'on_hold'; return 'pending' }
+function trackerStatus(value) { return ({ cleared: 'Paid/Cleared', returned: 'Returned/Cancelled', on_hold: 'Hold', pending: 'Pending' })[value] || 'Pending' }
