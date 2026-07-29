@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
@@ -8,6 +8,7 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [moduleAccess, setModuleAccess] = useState([])
+  const activeUserIdRef = useRef(undefined)
 
   async function fetchProfile(userId) {
     const [{ data: profileData }, { data: modules }] = await Promise.all([
@@ -28,6 +29,13 @@ export function AuthProvider({ children }) {
     async function applySession(session) {
       const currentRequest = ++requestId
       const nextUser = session?.user ?? null
+      const nextUserId = nextUser?.id ?? null
+
+      // Supabase refreshes access tokens when a hidden window regains focus.
+      // A refreshed token is still the same session, so reloading the profile
+      // here would show the app-wide Loading screen and remount the route.
+      if (activeUserIdRef.current === nextUserId) return
+      activeUserIdRef.current = nextUserId
 
       setLoading(true)
       setUser(nextUser)
@@ -52,7 +60,8 @@ export function AuthProvider({ children }) {
       }
     }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED') return
       applySession(session)
     })
 
