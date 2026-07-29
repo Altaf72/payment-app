@@ -69,6 +69,10 @@ export function AuthProvider({ children }) {
 
     return () => {
       active = false
+      // React Strict Mode deliberately mounts, cleans up, and mounts effects
+      // again in development. Reset this per-effect guard so the new effect
+      // performs its own initial session load instead of leaving loading true.
+      activeUserIdRef.current = undefined
       subscription.unsubscribe()
     }
   }, [])
