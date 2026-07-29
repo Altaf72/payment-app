@@ -27,6 +27,10 @@ export function AuthProvider({ children }) {
     let requestId = 0
 
     async function applySession(session) {
+      // An initial getSession call from a cleaned-up Strict Mode pass can
+      // resolve later. It must not claim the shared session guard or update
+      // loading state after a newer effect has taken over.
+      if (!active) return
       const currentRequest = ++requestId
       const nextUser = session?.user ?? null
       const nextUserId = nextUser?.id ?? null
