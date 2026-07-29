@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
@@ -8,7 +8,6 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [moduleAccess, setModuleAccess] = useState([])
-  const activeUserIdRef = useRef(undefined)
 
   async function fetchProfile(userId) {
     const [{ data: profileData }, { data: modules }] = await Promise.all([
@@ -25,21 +24,17 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let active = true
     let requestId = 0
+    let loadedUserId
 
     async function applySession(session) {
-      // An initial getSession call from a cleaned-up Strict Mode pass can
-      // resolve later. It must not claim the shared session guard or update
-      // loading state after a newer effect has taken over.
       if (!active) return
       const currentRequest = ++requestId
       const nextUser = session?.user ?? null
       const nextUserId = nextUser?.id ?? null
 
-      // Supabase refreshes access tokens when a hidden window regains focus.
-      // A refreshed token is still the same session, so reloading the profile
-      // here would show the app-wide Loading screen and remount the route.
-      if (activeUserIdRef.current === nextUserId) return
-      activeUserIdRef.current = nextUserId
+      // The same user may emit SIGNED_IN again when a browser window regains
+      // focus. Keep the existing app mounted once their profile is loaded.
+      if (loadedUserId === nextUserId) return
 
       setLoading(true)
       setUser(nextUser)
@@ -48,6 +43,7 @@ export function AuthProvider({ children }) {
         if (active && currentRequest === requestId) {
           setProfile(null)
           setModuleAccess([])
+          loadedUserId = null
           setLoading(false)
         }
         return
@@ -56,11 +52,25 @@ export function AuthProvider({ children }) {
       // Keep routes and the sidebar paused until both the role and the module
       // permissions are known. Previously the session was marked ready first,
       // which could leave staff users on a blank, non-interactive shell.
-      const nextAccess = await fetchProfile(nextUser.id)
-      if (active && currentRequest === requestId) {
-        setProfile(nextAccess.profile)
-        setModuleAccess(nextAccess.moduleAccess)
-        setLoading(false)
+      try {
+        const nextAccess = await fetchProfile(nextUser.id)
+        if (active && currentRequest === requestId) {
+          setProfile(nextAccess.profile)
+          setModuleAccess(nextAccess.moduleAccess)
+          loadedUserId = nextUserId
+          setLoading(false)
+        }
+      } catch (error) {
+        // Do not leave the whole application on an infinite loading screen if
+        // a temporary profile request fails. The next explicit auth event can
+        // retry, while the current signed-in session remains usable.
+        if (active && currentRequest === requestId) {
+          console.error('Could not load user profile', error)
+          setProfile(null)
+          setModuleAccess([])
+          loadedUserId = nextUserId
+          setLoading(false)
+        }
       }
     }
 
@@ -73,10 +83,6 @@ export function AuthProvider({ children }) {
 
     return () => {
       active = false
-      // React Strict Mode deliberately mounts, cleans up, and mounts effects
-      // again in development. Reset this per-effect guard so the new effect
-      // performs its own initial session load instead of leaving loading true.
-      activeUserIdRef.current = undefined
       subscription.unsubscribe()
     }
   }, [])
