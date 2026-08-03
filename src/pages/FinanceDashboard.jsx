@@ -111,6 +111,12 @@ function parseDeletedFinanceAttachment(note) {
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const USED_REFS_KEY = 'finance_dashboard_used_refs'
 const QUERY_PAGE_SIZE = 1000
+const DASHBOARD_FIELDS = [
+  'id', 'ref_number', 'batch_id', 'batch_number', 'company_id', 'company_name',
+  'submitted_by_name', 'payment_reason', 'payee_name', 'amount', 'created_at',
+  'payment_method_name', 'bank_name', 'bank_account', 'status', 'outcome_note',
+  'remarks', 'attachment_path', 'attachment_name', 'deleted_at',
+].join(',')
 
 function loadUsedRefs() {
   try {
@@ -390,7 +396,10 @@ export default function FinanceDashboard() {
     function buildQuery(from, to, includeCount = false, includeTextSearch = true) {
       let query = supabase
         .from('applications_full')
-        .select('*', includeCount ? { count: 'exact' } : {})
+        // An exact count makes Postgres scan the entire applications_full view
+        // before returning a single row. That regularly times out for CFO users
+        // with broad company access. The planner estimate keeps pagination fast.
+        .select(DASHBOARD_FIELDS, includeCount ? { count: 'planned' } : {})
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(from, to)
@@ -423,7 +432,7 @@ export default function FinanceDashboard() {
         }
         data.push(...(result.data || []))
         if (offset === 0) count = result.count || 0
-        if ((result.data || []).length < QUERY_PAGE_SIZE || data.length >= count) break
+        if ((result.data || []).length < QUERY_PAGE_SIZE) break
         offset += QUERY_PAGE_SIZE
       }
 
