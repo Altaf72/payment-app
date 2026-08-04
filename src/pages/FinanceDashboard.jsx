@@ -186,9 +186,15 @@ export default function FinanceDashboard() {
   const loadRequestRef = useRef(0)
 
   // Restore filter state from sessionStorage on mount
-  const STORAGE_KEY = 'finance_dashboard_filters'
+  const STORAGE_KEY = `finance_dashboard_filters:${user?.id || 'anonymous'}:${profile?.role || 'unknown'}`
   function getSaved() {
-    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}') } catch { return {} }
+    try {
+      const value = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}')
+      // Do not let an old, invisible filter make a later dashboard visit look
+      // as if applications have disappeared.
+      if (!value.savedAt || Date.now() - value.savedAt > 30 * 60 * 1000) return {}
+      return value
+    } catch { return {} }
   }
   const saved = getSaved()
   const isManager = profile?.role === 'manager'
@@ -209,7 +215,8 @@ export default function FinanceDashboard() {
   // Persist filter state to sessionStorage whenever it changes
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-      search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize
+      search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize,
+      savedAt: Date.now(),
     }))
   }, [search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize])
 
@@ -396,10 +403,9 @@ export default function FinanceDashboard() {
     function buildQuery(from, to, includeCount = false, includeTextSearch = true) {
       let query = supabase
         .from('applications_full')
-        // An exact count makes Postgres scan the entire applications_full view
-        // before returning a single row. That regularly times out for CFO users
-        // with broad company access. The planner estimate keeps pagination fast.
-        .select(DASHBOARD_FIELDS, includeCount ? { count: 'planned' } : {})
+        // Finance must receive the authoritative count. Company-scoped review
+        // roles retain the planner estimate to avoid broad-view timeouts.
+        .select(DASHBOARD_FIELDS, includeCount ? { count: ['finance','superadmin'].includes(profile?.role) ? 'exact' : 'planned' } : {})
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(from, to)
@@ -1016,7 +1022,7 @@ export default function FinanceDashboard() {
           <button className="btn btn-outline btn-sm" onClick={() => {
             setSearch(''); setAmountSearch(''); setFilterStatus('');
             setFilterCompany(''); setFilterBatch(''); setBatchTotalSearch(''); setFilterAttachment(''); setPage(1)
-            sessionStorage.removeItem('finance_dashboard_filters')
+            sessionStorage.removeItem(STORAGE_KEY)
           }}>✕ Clear all</button>
         )}
       </div>
