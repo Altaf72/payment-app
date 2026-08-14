@@ -5,6 +5,43 @@ import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
 
+function AttachmentPreview({ path, name, onClose }) {
+  const [url, setUrl] = useState(null)
+  const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
+  const isPdf = /\.pdf$/i.test(name || '')
+
+  useEffect(() => {
+    supabase.storage.from('attachments').createSignedUrl(path, 3600)
+      .then(({ data }) => setUrl(data?.signedUrl || null))
+  }, [path])
+
+  return <div className="modal-overlay" style={{zIndex:2000}} onClick={event => event.target === event.currentTarget && onClose()}>
+    <div className="modal" style={{maxWidth:'820px'}}>
+      <div className="modal-header">
+        <h3 style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{name}</h3>
+        <button className="modal-close" onClick={onClose}>×</button>
+      </div>
+      <div style={{minHeight:'380px',maxHeight:'70vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f3f4f6'}}>
+        {!url ? <p className="text-muted">Loading document…</p>
+          : isImage ? <img src={url} alt={name} style={{maxWidth:'100%',maxHeight:'70vh',objectFit:'contain'}} />
+          : isPdf ? <iframe src={url} title={name} style={{width:'100%',height:'70vh',border:0}} />
+          : <a className="btn btn-primary" href={url} target="_blank" rel="noreferrer">Download document</a>}
+      </div>
+    </div>
+  </div>
+}
+
+function AttachmentPill({ path, name }) {
+  const [show, setShow] = useState(false)
+  return <>
+    <button type="button" className="btn btn-outline btn-sm" onClick={() => setShow(true)}
+      title={`View ${name}`} style={{maxWidth:'130px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+      📎 {name}
+    </button>
+    {show && <AttachmentPreview path={path} name={name} onClose={() => setShow(false)} />}
+  </>
+}
+
 function minutesAgo(dateStr) {
   if (!dateStr) return Infinity
   return (Date.now() - new Date(dateStr).getTime()) / 1000 / 60
@@ -103,7 +140,21 @@ export default function MyApplications() {
       setPage(lastPage)
       return
     }
-    setApplications(data || [])
+    const rows = data || []
+    if (rows.length > 0) {
+      const { data: attachments, error: attachmentError } = await supabase
+        .from('application_attachments')
+        .select('application_id,storage_path,file_name,file_size,created_at')
+        .in('application_id', rows.map(app => app.id))
+        .order('created_at')
+      if (attachmentError) console.error('Could not load application attachments', attachmentError)
+      const attachmentsByApplication = (attachments || []).reduce((grouped, attachment) => {
+        ;(grouped[attachment.application_id] ||= []).push(attachment)
+        return grouped
+      }, {})
+      rows.forEach(app => { app.applicant_attachments = attachmentsByApplication[app.id] || [] })
+    }
+    setApplications(rows)
     setTotal(count || 0)
     setLoading(false)
   }
@@ -205,6 +256,7 @@ export default function MyApplications() {
                   <th>Payment Reason</th>
                   <th>Amount (AED)</th>
                   <th>Date</th>
+                  <th>Attachments</th>
                   <th>Status</th>
                   <th></th>
                 </tr>
@@ -227,6 +279,17 @@ export default function MyApplications() {
                       </td>
                       <td style={{fontWeight:500}}>{formatCurrency(app.amount)}</td>
                       <td className="text-muted">{formatDate(app.created_at)}</td>
+                      <td>
+                        {(app.attachment_path || app.applicant_attachments?.length > 0) ? (
+                          <div style={{display:'flex',gap:'4px',flexWrap:'wrap',maxWidth:'180px'}}>
+                            {app.attachment_path && <AttachmentPill path={app.attachment_path} name={app.attachment_name || 'Attachment'} />}
+                            {(app.applicant_attachments || [])
+                              .filter(attachment => attachment.storage_path !== app.attachment_path)
+                              .map(attachment => <AttachmentPill key={attachment.storage_path}
+                                path={attachment.storage_path} name={attachment.file_name || 'Attachment'} />)}
+                          </div>
+                        ) : <span className="text-muted">—</span>}
+                      </td>
                       <td>
                         <StatusBadge status={app.status} />
                         {withinWindow && <CountdownTimer submittedAt={app.submitted_at} />}

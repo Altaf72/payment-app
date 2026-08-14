@@ -577,6 +577,7 @@ export default function ApplicationDetail() {
   const isCFO     = profile?.role === 'cfo'
   const printRef    = useRef()
   const financeFileRef = useRef()
+  const applicantFileRef = useRef()
   const cameraVideoRef = useRef()
   const cameraCanvasRef = useRef()
   const cameraReviewCanvasRef = useRef()
@@ -609,6 +610,9 @@ export default function ApplicationDetail() {
   const [financeAttLabel, setFinanceAttLabel]     = useState('')
   const [financeAttError, setFinanceAttError]     = useState('')
   const [uploadingFinanceAtt, setUploadingFinanceAtt] = useState(false)
+  const [applicantAttError, setApplicantAttError] = useState('')
+  const [applicantAttLabel, setApplicantAttLabel] = useState('')
+  const [uploadingApplicantAtt, setUploadingApplicantAtt] = useState(false)
   const [hasClipboardImage, setHasClipboardImage] = useState(false)
   const [financeComment, setFinanceComment]       = useState('')
   const [financeCommentStatus, setFinanceCommentStatus] = useState('')
@@ -1350,6 +1354,52 @@ export default function ApplicationDetail() {
     }
   }
 
+  async function addApplicantAttachment(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    setApplicantAttError('')
+    setApplicantAttLabel('')
+    if (!file) return
+    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
+      setApplicantAttError('Only PDF, JPG and PNG files can be added.')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setApplicantAttError('File must be under 5MB.')
+      return
+    }
+
+    setUploadingApplicantAtt(true)
+    try {
+      const fallbackExt = file.type === 'application/pdf' ? 'pdf' : file.type === 'image/jpeg' ? 'jpg' : 'png'
+      const extension = file.name.split('.').pop() || fallbackExt
+      const path = `${user.id}/${id}/supporting-${Date.now()}.${extension}`
+      const { error: uploadError } = await supabase.storage.from('attachments').upload(path, file)
+      if (uploadError) throw uploadError
+
+      const { error: recordError } = await supabase.from('application_attachments').insert({
+        application_id: id,
+        storage_path: path,
+        file_name: file.name,
+        file_size: file.size,
+        mime_type: file.type,
+        source: 'file',
+        uploaded_by: user.id,
+      })
+      if (recordError) {
+        await supabase.storage.from('attachments').remove([path])
+        throw recordError
+      }
+
+      setApplicantAttLabel(`${file.name} added.`)
+      await load()
+    } catch (err) {
+      setApplicantAttError(err.message || 'Could not add supporting document.')
+    } finally {
+      setUploadingApplicantAtt(false)
+    }
+  }
+
   async function deleteFinanceAttachment(att) {
     if (!window.confirm(`Remove ${att.name}?`)) return
     setActionLoading(true)
@@ -1646,6 +1696,9 @@ export default function ApplicationDetail() {
     (isSuperAdmin && ['pending','mgr_approved','fin_approved','escalated'].includes(app.status))
   const isOwner = app.submitted_by === user?.id
   const canEdit = isOwner && ['draft','returned'].includes(app.status)
+  // Supporting evidence must remain available to the submitting user after
+  // approval; it does not alter the application or its workflow status.
+  const canAddSupportingAttachment = isOwner
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
   const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role) || (profile?.role === 'staff' && isOwner)
   const canExportQbo = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
@@ -2300,10 +2353,10 @@ export default function ApplicationDetail() {
                 </>
               )}
               {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
-              {savedApplicationAttachments.length > 0 && (
+              {(savedApplicationAttachments.length > 0 || canAddSupportingAttachment) && (
                 <div className="form-group">
                   <div className="form-label">Supporting Documents ({savedApplicationAttachments.length})</div>
-                  <div style={{display:'flex',flexDirection:'column',gap:'7px'}}>
+                  {savedApplicationAttachments.length > 0 && <div style={{display:'flex',flexDirection:'column',gap:'7px'}}>
                     {savedApplicationAttachments.map((attachment, index) => (
                       <div key={attachment.id || attachment.storage_path} style={{
                         display:'flex',alignItems:'center',justifyContent:'space-between',
@@ -2322,7 +2375,21 @@ export default function ApplicationDetail() {
                         <DetailAttachmentLink path={attachment.storage_path} name={attachment.file_name || 'Attachment'} />
                       </div>
                     ))}
-                  </div>
+                  </div>}
+                  {canAddSupportingAttachment && (
+                    <div style={{ marginTop: savedApplicationAttachments.length > 0 ? '10px' : 0 }}>
+                      <input ref={applicantFileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                        onChange={addApplicantAttachment} style={{ display:'none' }} />
+                      <button className="btn btn-outline btn-sm" type="button"
+                        disabled={uploadingApplicantAtt}
+                        onClick={() => applicantFileRef.current?.click()}>
+                        {uploadingApplicantAtt ? 'Adding document...' : '📎 Add supporting document'}
+                      </button>
+                      {applicantAttLabel && <p className="form-hint" style={{ color:'var(--status-approved)' }}>✓ {applicantAttLabel}</p>}
+                      {applicantAttError && <p className="form-error">{applicantAttError}</p>}
+                      <p className="form-hint">You can add documents at any stage. This will not change the application status or approvals.</p>
+                    </div>
+                  )}
                 </div>
               )}
               {(canAddFinanceAttachment || additionalAttachments.length > 0) && (

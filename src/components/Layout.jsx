@@ -18,7 +18,7 @@ const TEXT = {
     dashboard: 'Dashboard',
     finance: 'Finance',
     vouchers: 'Vouchers',
-    payrollWorkbook: 'Payroll Workbook',
+    payrollIntegration: 'Payroll Integration',
     dtcmReport: 'DTCM Report',
     imprestFunds: 'Imprest Fund Management',
     chequeFlow: 'ChequeFlow',
@@ -53,7 +53,7 @@ const TEXT = {
     dashboard: '仪表板',
     finance: '财务',
     vouchers: '凭证',
-    payrollWorkbook: '工资工作簿',
+    payrollIntegration: '工资整合',
     dtcmReport: 'DTCM Report',
     imprestFunds: 'Imprest Fund Management',
     chequeFlow: 'ChequeFlow',
@@ -221,9 +221,9 @@ export default function Layout() {
               <span className="icon">R</span> Holiday Home Receipts
             </button>}
             {['finance','cfo','superadmin'].includes(profile?.role) && (
-              <button className={`sidebar-link ${isActive('/payroll-workbook') ? 'active' : ''}`}
-                onClick={() => go('/payroll-workbook')}>
-                <span className="icon">P</span> {text.payrollWorkbook}
+              <button className={`sidebar-link ${isActive('/payroll-integration') ? 'active' : ''}`}
+                onClick={() => go('/payroll-integration')}>
+                <span className="icon">P</span> {text.payrollIntegration}
               </button>
             )}
             {['finance','cfo','superadmin'].includes(profile?.role) && (

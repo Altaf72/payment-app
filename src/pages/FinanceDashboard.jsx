@@ -481,21 +481,34 @@ export default function FinanceDashboard() {
       const ids = rows.map(a => a.id)
       const idChunks = []
       for (let index = 0; index < ids.length; index += 200) idChunks.push(ids.slice(index, index + 200))
-      const logResults = await Promise.all(idChunks.map(chunk => supabase
+      const [logResults, applicantAttachmentResults] = await Promise.all([
+        Promise.all(idChunks.map(chunk => supabase
         .from('audit_log')
         .select('application_id,action,note,created_at')
         .in('application_id', chunk)
         .in('action', ['attachment_added','attachment_deleted','edited'])
-        .order('created_at', { ascending: true })))
+        .order('created_at', { ascending: true }))),
+        Promise.all(idChunks.map(chunk => supabase
+          .from('application_attachments')
+          .select('application_id,storage_path,file_name,file_size,mime_type,source,created_at')
+          .in('application_id', chunk)
+          .order('created_at', { ascending: true }))),
+      ])
       const logError = logResults.find(result => result.error)?.error
+      const applicantAttachmentError = applicantAttachmentResults.find(result => result.error)?.error
       const financeLogs = logResults.flatMap(result => result.data || [])
 
-      if (logError) {
-        console.error(logError)
+      if (logError || applicantAttachmentError) {
+        console.error(logError || applicantAttachmentError)
       } else {
         const byApp = {}
         const deletedByApp = {}
         const commentsByApp = {}
+        const applicantAttachmentsByApp = {}
+        applicantAttachmentResults.flatMap(result => result.data || []).forEach(attachment => {
+          if (!applicantAttachmentsByApp[attachment.application_id]) applicantAttachmentsByApp[attachment.application_id] = []
+          applicantAttachmentsByApp[attachment.application_id].push(attachment)
+        })
         ;(financeLogs || []).forEach(log => {
           const deleted = parseDeletedFinanceAttachment(log.note)
           if (deleted) {
@@ -515,6 +528,7 @@ export default function FinanceDashboard() {
         })
         rows = rows.map(app => ({
           ...app,
+          applicant_attachments: applicantAttachmentsByApp[app.id] || [],
           finance_attachments: (byApp[app.id] || []).filter(att => !deletedByApp[app.id]?.has(att.path)),
           finance_comments: commentsByApp[app.id] || [],
         }))
@@ -1320,14 +1334,24 @@ export default function FinanceDashboard() {
                         <td style={{verticalAlign:'middle',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
                           <CopyableField
-                            copyText={[app.attachment_name, ...(app.finance_attachments || []).map(att => att.name)].filter(Boolean).join(', ')}
+                            copyText={[
+                              app.attachment_name,
+                              ...(app.applicant_attachments || []).map(att => att.file_name),
+                              ...(app.finance_attachments || []).map(att => att.name),
+                            ].filter(Boolean).join(', ')}
                             label="Attachment names"
                           >
-                          {(app.attachment_path || app.finance_attachments?.length > 0) ? (
+                          {(app.attachment_path || app.applicant_attachments?.length > 0 || app.finance_attachments?.length > 0) ? (
                             <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', maxWidth:'170px' }}>
                               {app.attachment_path && (
                                 <AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} />
                               )}
+                              {(app.applicant_attachments || [])
+                                .filter(att => att.storage_path !== app.attachment_path)
+                                .map((att, index) => (
+                                  <AttachmentPill key={`${att.storage_path}-${index}`} path={att.storage_path}
+                                    name={att.file_name} size={att.file_size} tabIndex={-1} />
+                                ))}
                               {(app.finance_attachments || []).map((att, index) => (
                                 <AttachmentPill key={`${att.path}-${index}`} path={att.path} name={att.name} size={att.size} tabIndex={-1} />
                               ))}

@@ -87,11 +87,12 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="holiday-home-receipts" element={<ModuleRoute moduleKey="holiday_home_receipts"><HolidayHomeReceipts /></ModuleRoute>} />
-        <Route path="payroll-workbook" element={
+        <Route path="payroll-integration" element={
           <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>
             <PayrollWorkbookDashboard />
           </PrivateRoute>
         } />
+        <Route path="payroll-workbook" element={<Navigate to="/payroll-integration" replace />} />
         <Route path="dtcm-report" element={
           <PrivateRoute allowedRoles={['finance','cfo','manager','superadmin']}>
             <DtcmReport />

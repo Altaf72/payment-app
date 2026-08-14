@@ -150,6 +150,9 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
   margin:0 auto;
   padding:24px 28px 90px;
 }
+.main-stage.expanded{
+  max-width:calc(100vw - 48px);
+}
 
 /* ---------------- settings drawer ---------------- */
 .drawer-overlay{
@@ -824,6 +827,13 @@ select, input[type=text]{
   margin-bottom:18px;
 }
 @media (max-width:760px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
+.recon-layout{display:flex;align-items:flex-start;gap:16px;}
+.recon-left-panel{flex:0 0 300px;width:300px;min-width:0;display:flex;flex-direction:column;gap:10px;position:sticky;top:12px;max-height:calc(100vh - 24px);overflow-y:auto;padding-right:4px;}
+.recon-left-panel .stat-grid{grid-template-columns:1fr;margin-bottom:0;gap:8px;}
+.recon-left-panel .recon-filter-toprow,.recon-left-panel .recon-filter-bottomrow,.recon-left-panel .recon-filter-options{flex-direction:column;align-items:stretch;}
+.recon-left-panel .recon-filter-toprow .recon-guest-filter-input{width:100%;}
+.recon-right-panel{flex:1;min-width:0;}
+@media (max-width:980px){.recon-layout{flex-direction:column;}.recon-left-panel{position:static;width:100%;flex:1 1 auto;max-height:none;}.recon-left-panel .stat-grid{grid-template-columns:repeat(2,1fr);}}
 .stat-card{
   background:var(--paper-raised);
   border:1px solid var(--line);
@@ -1336,9 +1346,10 @@ const state = {
   reconColumnWidths: {},
   reconScrollTop: 0,
   reconScrollLeft: 0,
+  reconLeftPanelScrollTop: 0,
   columnsPanelOpen: false, // transient UI state — NOT persisted — so re-renders don't collapse the Columns dropdown
   activeMode: "report", // "report" | "reconcile" | "summary" | "hostaway"
-  dtcmReconcile: { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "source", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} },
+  dtcmReconcile: { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "status", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {}, checkedFilter: "all" },
   reconWorkspaceId: "",
   reconArchive: [],
   hostawayReconcile: { parsed: null, error: null, loading: false, review: {}, manualPairs: [], sortColumn: "status", sortDirection: "asc", statusFilter: ["all"], guestFilter: "", amountOverrides: {}, remarks: {} },
@@ -1351,6 +1362,7 @@ Object.assign(state.viewPrefs, config.viewPrefs);
 state.viewPrefs.hiddenColumns = (state.viewPrefs.hiddenColumns || []).filter(k=>k !== "guestName");
 state.reconColumnWidths = Object.assign({}, config.reconColumnWidths || {});
 state.hostawayNightlyRate = config.hostawayNightlyRate != null ? config.hostawayNightlyRate : 10;
+state.mainStageExpanded = !!config.mainStageExpanded;
 
 /* ================================================================
    localStorage config (lightweight, synchronous)
@@ -1385,6 +1397,7 @@ function defaultConfig(){
     viewPrefs: { groupByClass: false, sortColumn: "date", sortDirection: "asc", hiddenColumns: [] },
     reconColumnWidths: {},
     hostawayNightlyRate: 10, // AED per night — Dubai holiday-home Tourism Dirham rate; adjustable in the Hostaway tab
+    mainStageExpanded: false,
   };
 }
 function saveConfig(){
@@ -3310,21 +3323,34 @@ function dtcmFindHeaderMap(rows){
   }
   return null;
 }
-function dtcmExtractExcelMeta(rows){
+function dtcmExtractExcelMeta(rows, headerRowIndex, txRows){
   const meta = { companyName:"", registrationId:"", dedLicNo:"", fromDateStr:"", toDateStr:"" };
-  rows.slice(0, 8).forEach((row, idx)=>{
-    const line = (row || []).map(dtcmExcelCellText).filter(Boolean).join(" | ");
-    if(idx === 0 && line) meta.companyName = line;
-    const period = line.match(/Period:\s*([^|]+?)\s+to\s+([^|]+?)(?:\s*\||$)/i);
-    if(period){
-      meta.fromDateStr = period[1].trim();
-      meta.toDateStr = period[2].trim();
+  const scanLimit = headerRowIndex != null ? headerRowIndex : 8;
+  const fullText = rows.slice(0, scanLimit).map(row => (row || []).map(dtcmExcelCellText).filter(Boolean).join(" ")).filter(Boolean).join(" ");
+  const labels = "(?:Name|Registration ID|DED Lic No|From|To|Period)";
+  function extractAfter(label){
+    const match = fullText.match(new RegExp(label + ":?\\s*([\\s\\S]*?)(?=\\s*" + labels + ":|$)", "i"));
+    return match && match[1] ? match[1].trim() : "";
+  }
+  meta.companyName = extractAfter("Name");
+  meta.registrationId = extractAfter("Registration ID");
+  meta.dedLicNo = extractAfter("DED Lic No");
+  meta.fromDateStr = extractAfter("From");
+  meta.toDateStr = extractAfter("To");
+  const period = fullText.match(new RegExp("Period:\\s*(.+?)\\s+to\\s+(.+?)(?=\\s*" + labels + ":|$)", "i"));
+  if(period){ meta.fromDateStr = period[1].trim(); meta.toDateStr = period[2].trim(); }
+  if(!meta.companyName){
+    const firstRowCells = (rows[0] || []).map(dtcmExcelCellText).filter(Boolean);
+    if(firstRowCells.length && !/^transaction (report|id)\b/i.test(firstRowCells[0])) meta.companyName = firstRowCells.join(" | ");
+  }
+  if((!meta.fromDateStr || !meta.toDateStr) && txRows && txRows.length){
+    const dates = txRows.map(r=>parseAnyDate(r.checkIn)).filter(Boolean);
+    if(dates.length){
+      const minMs = Math.min(...dates.map(d=>d.getTime())), maxMs = Math.max(...dates.map(d=>d.getTime()));
+      if(!meta.fromDateStr) meta.fromDateStr = fmtDateSlash(new Date(minMs));
+      if(!meta.toDateStr) meta.toDateStr = fmtDateSlash(new Date(maxMs));
     }
-    const reg = line.match(/Registration ID:\s*([^|]+)/i);
-    if(reg) meta.registrationId = reg[1].trim();
-    const ded = line.match(/DED Lic No:\s*([^|]+)/i);
-    if(ded) meta.dedLicNo = ded[1].trim();
-  });
+  }
   return meta;
 }
 async function parseDtcmExcelFile(file){
@@ -3339,7 +3365,6 @@ async function parseDtcmExcelFile(file){
     return { rows: [], footerTotal: null, meta: null, sourceType:"excel", error: "Couldn't find the DTCM Excel header row. Expected columns include Transaction ID, Unit Number, Guest Name, Check-in Date and TD Fees (AED)." };
   }
 
-  const meta = dtcmExtractExcelMeta(chosen.rows);
   const { rowIndex, map } = chosen.header;
   const rows = [];
   for(let i=rowIndex+1; i<chosen.rows.length; i++){
@@ -3348,7 +3373,7 @@ async function parseDtcmExcelFile(file){
     const guestName = dtcmExcelCellText(row[map.guestName]);
     const unitNumber = dtcmExcelCellText(row[map.unitNumber]);
     const fees = toNumber(row[map.fees]);
-    const hasData = transactionId || guestName || unitNumber || fees != null;
+    const hasData = !!(guestName && unitNumber);
     if(!hasData) continue;
     rows.push({
       transactionId,
@@ -3361,6 +3386,7 @@ async function parseDtcmExcelFile(file){
       fees,
     });
   }
+  const meta = dtcmExtractExcelMeta(chosen.rows, rowIndex, rows);
   if(rows.length === 0){
     return { rows: [], footerTotal: null, meta, sourceType:"excel", error: "The Excel file opened, but no transaction rows were found under the DTCM header." };
   }
@@ -3563,6 +3589,15 @@ function dtcmReconcile(dtcmRows, internalRows){
 }
 
 // ---------------- rendering ----------------
+function setMainStageExpanded(value){
+  state.mainStageExpanded = !!value;
+  config.mainStageExpanded = state.mainStageExpanded;
+  saveConfig();
+  const stage = document.querySelector(".main-stage");
+  if(stage) stage.classList.toggle("expanded", state.mainStageExpanded);
+  const btn = document.getElementById("expandViewBtn");
+  if(btn) btn.textContent = state.mainStageExpanded ? "⤡ Collapse view" : "⤢ Expand view";
+}
 function setActiveMode(mode){
   state.activeMode = mode;
   $("#modeTabReport").classList.toggle("active", mode==="report");
@@ -3753,6 +3788,8 @@ function buildReconWorkspaceArchive(){
 
 function renderReconcileArea(){
   const area = $("#reconcileArea");
+  const existingLeftPanel = area.querySelector(".recon-left-panel");
+  if(existingLeftPanel) state.reconLeftPanelScrollTop = existingLeftPanel.scrollTop;
   area.innerHTML = "";
   const rc = state.dtcmReconcile;
 
@@ -3819,22 +3856,26 @@ function renderReconcileArea(){
   const internalTotal = internalRows.reduce((s,r)=>s+(r.amount||0),0);
   const variance = sumFees - internalTotal;
 
-  area.appendChild(el("div", {class:"stat-grid", style:"margin-bottom:10px;"}, [
+  const statGrid = el("div", {class:"stat-grid"}, [
     statCard("DTCM Total", fmtMoney(sumFees), "AED", true),
     statCard("Internal Total", fmtMoney(internalTotal), "AED", true),
     statCard("Variance", fmtMoney(variance), "AED", Math.abs(variance)>0.01,
       Math.abs(variance)<0.01 ? "Fully reconciled" : (variance>0 ? "DTCM higher than internal" : "Internal higher than DTCM")),
     statCard("Matched", fmtInt(counts.matched+counts.low_confidence), "", false,
       `${counts.amount_mismatch} amount mismatch · ${counts.missing_internal} missing internally · ${counts.missing_dtcm} missing from DTCM`),
-  ]));
+  ]);
 
   const filteredResults = filterReconResults(results);
-  area.appendChild(buildReconStatusFilter(results, filteredResults.length, {
+  const filterBar = buildReconStatusFilter(results, filteredResults.length, {
     onExport: ()=>exportReconciliationResults(results, meta, sumFees, internalTotal, variance, counts),
     onExportPdf: ()=>exportReconciliationToPdf(results, meta, sumFees, internalTotal, variance, counts),
-  }));
-  area.appendChild(buildManualMatchTray());
-  area.appendChild(buildReconTable(filteredResults));
+  });
+  const layout = el("div", {class:"recon-layout"});
+  const leftPanel = el("div", {class:"recon-left-panel"}, [statGrid, filterBar, buildManualMatchTray()]);
+  const rightPanel = el("div", {class:"recon-right-panel"}, [buildReconTable(filteredResults)]);
+  layout.append(leftPanel, rightPanel);
+  area.appendChild(layout);
+  leftPanel.scrollTop = state.reconLeftPanelScrollTop || 0;
 }
 
 function exportReconciliationResults(results, meta, sumFees, internalTotal, variance, counts){
@@ -4350,11 +4391,24 @@ function buildReconStatusFilter(results, filteredCount, opts){
     el("button", {class:"btn secondary small", onclick: opts.onExportPdf}, ["Export to PDF"]),
     buildReconGuestFilterInput(),
     el("button", {
+      id:"expandViewBtn",
       class:"btn secondary small",
-      title:"Return to the original reconciliation row order",
-      disabled:(state.dtcmReconcile.sortColumn || "source") === "source",
-      onclick:resetReconSort,
-    }, ["Reset sort"]),
+      title:"Use the full browser width for this page",
+      onclick: ()=>setMainStageExpanded(!state.mainStageExpanded),
+    }, [state.mainStageExpanded ? "⤡ Collapse view" : "⤢ Expand view"]),
+  ]);
+  const checked = results.filter(r=>reconReviewState(r).checked).length;
+  const checkedFilter = state.dtcmReconcile.checkedFilter || "all";
+  const checkedRow = el("div", {class:"recon-filter-checkedrow", style:"display:flex; flex-direction:column; gap:6px; padding-bottom:9px; border-bottom:1px solid var(--line);"}, [
+    el("label", {}, ["Show"]),
+    el("div", {class:"recon-filter-options"}, [
+      ["all", `All (${results.length})`], ["checked", `Checked only (${checked})`], ["unchecked", `Unchecked only (${results.length - checked})`],
+    ].map(([key,label])=>{
+      const radio = el("input", {type:"radio", name:"reconCheckedFilter", value:key});
+      radio.checked = checkedFilter === key;
+      radio.addEventListener("change", ()=>setReconCheckedFilter(key));
+      return el("label", {class:"recon-filter-chip" + (checkedFilter === key ? " active" : "")}, [radio, label]);
+    }))
   ]);
   const bottomRow = el("div", {class:"recon-filter-bottomrow"}, [
     el("label", {}, ["Status"]),
@@ -4365,7 +4419,7 @@ function buildReconStatusFilter(results, filteredCount, opts){
       el("span", {class:"recon-filter-total"}, ["Checked visible: DTCM ", el("b",{},[fmtMoney(checkedTotals.dtcm)]), " AED · Internal ", el("b",{},[fmtMoney(checkedTotals.internal)]), " AED"]),
     ]),
   ]);
-  return el("div", {class:"recon-filter-bar"}, [topRow, bottomRow]);
+  return el("div", {class:"recon-filter-bar"}, [topRow, checkedRow, bottomRow]);
 }
 function draftLabel(kind){
   const item = state.reconManualDraft && state.reconManualDraft[kind];
@@ -4590,11 +4644,20 @@ function reconMatchesGuestFilter(r, needle){
 }
 function filterReconResults(results){
   const needle = reconGuestFilterText();
-  const guestFiltered = needle ? results.filter(r=>reconMatchesGuestFilter(r, needle)) : results;
+  let guestFiltered = needle ? results.filter(r=>reconMatchesGuestFilter(r, needle)) : results;
+  const checkedFilter = state.dtcmReconcile.checkedFilter || "all";
+  if(checkedFilter === "checked") guestFiltered = guestFiltered.filter(r=>reconReviewState(r).checked);
+  if(checkedFilter === "unchecked") guestFiltered = guestFiltered.filter(r=>!reconReviewState(r).checked);
   const selected = reconSelectedStatusFilters();
   if(selected.includes("all")) return guestFiltered;
   const allowed = new Set(selected);
   return guestFiltered.filter(r=>reconStatusFilterKeys(r).some(k=>allowed.has(k)));
+}
+function setReconCheckedFilter(value){
+  state.dtcmReconcile.checkedFilter = value;
+  state.activeReconRowId = "";
+  renderReconcileArea();
+  persistReconState();
 }
 function summarizeReconAmounts(results){
   return results.reduce((acc,r)=>{
