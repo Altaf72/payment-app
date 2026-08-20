@@ -183,6 +183,11 @@ export default function Layout() {
         {hasModule('payment_applications') && <>
         <div className="sidebar-section">{text.applications}</div>
 
+        {profile?.role === 'supervisor' && <button className={`sidebar-link ${isActive('/supervisor-dashboard') ? 'active' : ''}`}
+          onClick={() => go('/supervisor-dashboard')}>
+          <span className="icon">📊</span> Supervisor Dashboard
+        </button>}
+
         <button className={`sidebar-link ${isActive('/new-application') ? 'active' : ''}`}
           onClick={() => go('/new-application')}>
           <span className="icon">＋</span> {text.newApplication}

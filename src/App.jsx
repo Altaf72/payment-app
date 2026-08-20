@@ -40,6 +40,9 @@ function HomeRedirect() {
   const { profile } = useAuth()
   if (!profile) return null
   if (['finance','ceo','cfo','superadmin'].includes(profile.role)) return <Navigate to="/dashboard" replace />
+  if (profile.role === 'supervisor') return <Navigate to="/supervisor-dashboard" replace />
+  if (profile.role === 'supervisor') return <Navigate to="/supervisor-dashboard" replace />
+  if (profile.role === 'supervisor') return <Navigate to="/supervisor-dashboard" replace />
   return <Navigate to="/my-applications" replace />
 }
 
@@ -62,6 +65,9 @@ export default function App() {
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<HomeRedirect />} />
         <Route path="my-applications" element={<ModuleRoute moduleKey="payment_applications"><MyApplications /></ModuleRoute>} />
+        <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><ModuleRoute moduleKey="payment_applications"><MyApplications supervisorDashboard /></ModuleRoute></PrivateRoute>} />
+        <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><ModuleRoute moduleKey="payment_applications"><MyApplications supervisorDashboard /></ModuleRoute></PrivateRoute>} />
+        <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><ModuleRoute moduleKey="payment_applications"><MyApplications supervisorDashboard /></ModuleRoute></PrivateRoute>} />
         <Route path="new-application" element={<ModuleRoute moduleKey="payment_applications"><NewApplication /></ModuleRoute>} />
         <Route path="application/:id" element={<ModuleRoute moduleKey="payment_applications"><ApplicationDetail /></ModuleRoute>} />
         <Route path="application/:applicationId/payment-voucher" element={

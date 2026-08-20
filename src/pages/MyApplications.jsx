@@ -68,7 +68,7 @@ function CountdownTimer({ submittedAt }) {
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 
-export default function MyApplications() {
+export default function MyApplications({ supervisorDashboard = false }) {
   const { user, profile } = useAuth()
   const navigate   = useNavigate()
 
@@ -205,8 +205,8 @@ export default function MyApplications() {
     <div>
       <div className="page-header flex justify-between items-center">
         <div>
-          <h1>{profile?.role === 'supervisor' ? 'My & Supervised Applications' : 'My Applications'}</h1>
-          <p>{profile?.role === 'supervisor' ? 'Track your applications and oversee assigned staff requests' : 'Track and manage your payment requests'}</p>
+          <h1>{supervisorDashboard ? 'Supervisor Dashboard' : 'My Applications'}</h1>
+          <p>{supervisorDashboard ? 'View your applications and read-only oversight of assigned staff requests' : 'Track and manage your payment requests'}</p>
         </div>
         <button className="btn btn-primary" onClick={() => navigate('/new-application')}>
           ＋ New Application

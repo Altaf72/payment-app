@@ -116,7 +116,7 @@ export function AuthProvider({ children }) {
   const isUpperManagement = profile?.role && ['ceo','cfo'].includes(profile.role)
   const hasModule = (moduleKey) => profile?.role === 'superadmin' ||
     moduleAccess.includes(moduleKey) ||
-    (moduleKey === 'holiday_home_receipts' && ['finance','cfo'].includes(profile?.role)) ||
+    (moduleKey === 'holiday_home_receipts' && ['finance','cfo','supervisor'].includes(profile?.role)) ||
     (moduleKey === 'holiday_home_receipts' && profile?.holiday_home_receipts_enabled === true)
 
   return (

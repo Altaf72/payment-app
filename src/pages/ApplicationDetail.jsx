@@ -242,7 +242,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
       color: '#111',
       background: '#fff',
       width: '750px',
-      padding: '32px 40px',
+      padding: '30px 40px',
       margin: '0',
       boxSizing: 'border-box',
       lineHeight: '1.4',
@@ -251,7 +251,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
     lc: {
       background: '#f5f0e8',
       border: '1px solid #c8b99a',
-      padding: '10px 12px',
+      padding: '8px 12px',
       width: '125px',
       textAlign: 'center',
       verticalAlign: 'middle',
@@ -265,7 +265,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
     // Right value column
     vc: {
       border: '1px solid #c8b99a',
-      padding: '8px 14px',
+      padding: '7px 14px',
       textAlign: 'center',
       verticalAlign: 'middle',
       fontSize: '13px',
@@ -289,7 +289,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
     <div style={s.wrap}>
 
       {/* ── HEADER ── */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px' }}>
         {/* Logo */}
         <div style={{ width:'80px', flexShrink:0 }}>
           {app.logo_url
@@ -316,7 +316,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
       </div>
 
       {/* Gold divider */}
-      <div style={{ borderTop:'1.5px solid #8b6914', marginBottom:'12px' }} />
+      <div style={{ borderTop:'1.5px solid #8b6914', marginBottom:'10px' }} />
 
       {/* ── MAIN TABLE ── */}
       <table style={{ width:'100%', borderCollapse:'collapse', border:'1.5px solid #8b6914' }}>
@@ -328,7 +328,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
               申请部门
               <span style={s.sub}>Application<br/>Department</span>
             </td>
-            <td style={{ ...s.vc, width:'28%', fontWeight:'bold' }}>
+            <td style={{ ...s.vc, width:'34%', fontWeight:'bold' }}>
               {toProperCase(app.company_name)}
             </td>
             <td style={{ ...s.lc, borderLeft:'1.5px solid #8b6914' }}>
@@ -351,7 +351,18 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 3: Payment Method — full width */}
+          {/* Row 3: Class */}
+          <tr>
+            <td style={s.lc}>
+              类别
+              <span style={s.sub}>Class</span>
+            </td>
+            <td style={{ ...s.vc, textAlign:'left' }} colSpan={3}>
+              {app.class_name || '—'}
+            </td>
+          </tr>
+
+          {/* Row 4: Payment Method — full width */}
           <tr>
             <td style={s.lc}>
               付款方式
@@ -362,7 +373,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 4: Amount — full width, larger */}
+          {/* Row 5: Amount — full width, larger */}
           <tr>
             <td style={s.lc}>
               付款金额
@@ -373,7 +384,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 5: Amount in Words */}
+          {/* Row 6: Amount in Words */}
           <tr>
             <td style={s.lc}>
               大写金额
@@ -384,7 +395,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 6: Receiving Company */}
+          {/* Row 7: Receiving Company */}
           <tr>
             <td style={s.lc}>
               收款单位
@@ -395,7 +406,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 7: Bank */}
+          {/* Row 8: Bank */}
           <tr>
             <td style={s.lc}>
               开户银行
@@ -406,7 +417,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 8: Bank Account */}
+          {/* Row 9: Bank Account */}
           <tr>
             <td style={s.lc}>
               银行账号
@@ -417,7 +428,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 9: Remarks */}
+          {/* Row 10: Remarks */}
           <tr>
             <td style={{ ...s.lc, verticalAlign:'top', paddingTop:'10px' }}>
               备注说明
@@ -428,7 +439,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 10: Signatures — 4-stage approval chain */}
+          {/* Row 11: Signatures — 4-stage approval chain */}
           <tr>
             <td colSpan={4} style={{ border:'1px solid #c8b99a', padding:'0' }}>
               <div style={{ display:'flex' }}>
@@ -624,6 +635,10 @@ export default function ApplicationDetail() {
     bank_account: '',
   })
   const [paymentMethodOptions, setPaymentMethodOptions] = useState([])
+  const [applicationClasses, setApplicationClasses] = useState([])
+  const [className, setClassName] = useState('')
+  const [classSaving, setClassSaving] = useState(false)
+  const [classError, setClassError] = useState('')
   const [bankEditSaving, setBankEditSaving] = useState(false)
   const [bankEditError, setBankEditError] = useState('')
   const [showCameraModal, setShowCameraModal] = useState(false)
@@ -757,15 +772,16 @@ export default function ApplicationDetail() {
 
   async function load() {
     setLoading(true)
-    const [{ data: appData }, { data: pfsData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }] = await Promise.all([
+    const [{ data: appData }, { data: pfsData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }, { data: classes }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
-      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by').eq('id', id).single(),
+      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by,class_name').eq('id', id).single(),
       supabase.from('audit_log')
         .select('id, action, note, created_at, action_by, users!action_by(full_name,role)')
         .eq('application_id', id).order('created_at'),
       supabase.from('users').select('id,full_name,role').in('role', ['ceo','cfo']),
       supabase.from('companies').select('*').order('created_at'),
       supabase.from('application_attachments').select('*').eq('application_id', id).order('created_at'),
+      supabase.from('application_classes').select('id,name').eq('active', true).order('name'),
     ])
 
     let logoUrl = null
@@ -775,6 +791,8 @@ export default function ApplicationDetail() {
     }
 
     setApp(appData ? { ...appData, ...(pfsData || {}), logo_url: logoUrl } : null)
+    setClassName(pfsData?.class_name || '')
+    setApplicationClasses(classes || [])
     setApplicantAttachments(applicantFiles || [])
     const mappedLog = (logData || []).map(l => ({
       ...l,
@@ -1176,6 +1194,28 @@ export default function ApplicationDetail() {
       setBankEditError(err.message || 'Could not save payment, receiving and bank details')
     } finally {
       setBankEditSaving(false)
+    }
+  }
+
+  async function saveClass() {
+    setClassSaving(true)
+    setClassError('')
+    try {
+      const nextClass = className || null
+      const { error } = await supabase.from('applications').update({ class_name: nextClass }).eq('id', id)
+      if (error) throw error
+      const { error: logError } = await supabase.from('audit_log').insert({
+        application_id: id,
+        action_by: user.id,
+        action: 'edited',
+        note: `Class assigned by Finance: ${nextClass || 'None'}`,
+      })
+      if (logError) throw logError
+      setApp(current => ({ ...current, class_name: nextClass }))
+    } catch (err) {
+      setClassError(err.message || 'Could not save Class')
+    } finally {
+      setClassSaving(false)
     }
   }
 
@@ -1706,6 +1746,7 @@ export default function ApplicationDetail() {
     ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
   const canAddFinancePostApprovalComment = ['finance','superadmin'].includes(profile?.role) && app.status !== 'draft'
   const canEditBankDetails = ['finance','superadmin'].includes(profile?.role)
+  const canEditClass = ['finance','superadmin'].includes(profile?.role)
   const deletedFinanceAttachmentPaths = new Set(
     auditLog.map(e => parseDeletedAttachmentNote(e.note)?.path).filter(Boolean)
   )
@@ -2353,6 +2394,21 @@ export default function ApplicationDetail() {
                 </>
               )}
               {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
+              <div className="form-group">
+                <div className="form-label">Class</div>
+                {canEditClass ? <>
+                  <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+                    <select className="form-control" value={className} onChange={event => setClassName(event.target.value)} style={{maxWidth:'300px'}}>
+                      <option value="">No Class assigned</option>
+                      {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+                    </select>
+                    <button type="button" className="btn btn-success btn-sm" disabled={classSaving || className === (app.class_name || '')} onClick={saveClass}>
+                      {classSaving ? 'Saving...' : 'Save Class'}
+                    </button>
+                  </div>
+                  {classError && <p className="form-error">{classError}</p>}
+                </> : <div>{app.class_name || '—'}</div>}
+              </div>
               {(savedApplicationAttachments.length > 0 || canAddSupportingAttachment) && (
                 <div className="form-group">
                   <div className="form-label">Supporting Documents ({savedApplicationAttachments.length})</div>

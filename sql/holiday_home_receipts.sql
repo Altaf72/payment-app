@@ -1,7 +1,7 @@
 -- Holiday Home Receipt module: run once in Supabase SQL Editor.
 alter table public.users add column if not exists holiday_home_receipts_enabled boolean not null default false;
 alter table public.users drop constraint if exists users_role_check;
-alter table public.users add constraint users_role_check check (role in ('staff','gro','manager','finance','ceo','cfo','superadmin'));
+alter table public.users add constraint users_role_check check (role in ('staff','supervisor','gro','manager','finance','ceo','cfo','superadmin'));
 alter table public.cheque_flow_properties add column if not exists actual_bedrooms integer;
 alter table public.cheque_flow_properties add column if not exists display_bedrooms text;
 
@@ -61,17 +61,17 @@ end; $$;
 alter table public.holiday_home_receipts enable row level security;
 drop policy if exists "Holiday receipt access" on public.holiday_home_receipts;
 create policy "Holiday receipt access" on public.holiday_home_receipts for select to authenticated using (
-  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo') or holiday_home_receipts_enabled))
+  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo','supervisor') or holiday_home_receipts_enabled))
   and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
 );
 drop policy if exists "Holiday receipt create" on public.holiday_home_receipts;
 create policy "Holiday receipt create" on public.holiday_home_receipts for insert to authenticated with check (
-  created_by=auth.uid() and exists (select 1 from public.users where id=auth.uid() and (role='superadmin' or holiday_home_receipts_enabled))
+  created_by=auth.uid() and exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','supervisor') or holiday_home_receipts_enabled))
   and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
 );
 drop policy if exists "Holiday receipt update" on public.holiday_home_receipts;
 create policy "Holiday receipt update" on public.holiday_home_receipts for update to authenticated using (
-  exists (select 1 from public.users where id=auth.uid() and (role='superadmin' or holiday_home_receipts_enabled))
+  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','supervisor') or holiday_home_receipts_enabled))
   and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
 ) with check (updated_by=auth.uid());
 grant select,insert,update on public.holiday_home_receipts to authenticated;
@@ -80,5 +80,5 @@ grant execute on function public.next_holiday_home_receipt_number(uuid) to authe
 -- Allows authorised Holiday Home Receipt users to read only company-mapped properties.
 drop policy if exists "Holiday receipt users view properties" on public.cheque_flow_properties;
 create policy "Holiday receipt users view properties" on public.cheque_flow_properties for select to authenticated using (
-  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo') or holiday_home_receipts_enabled))
+  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo','supervisor') or holiday_home_receipts_enabled))
 );

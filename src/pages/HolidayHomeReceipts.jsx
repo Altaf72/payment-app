@@ -32,6 +32,7 @@ export default function HolidayHomeReceipts() {
   const { user, profile, moduleAccess } = useAuth()
   const [rows, setRows] = useState([])
   const [companies, setCompanies] = useState([])
+  const [createCompanyIds, setCreateCompanyIds] = useState([])
   const [properties, setProperties] = useState([])
   const [form, setForm] = useState(empty)
   const [open, setOpen] = useState(false)
@@ -62,17 +63,21 @@ export default function HolidayHomeReceipts() {
     const ids = new Set((a.data || []).map(item => item.company_id))
     const allowed = (c.data || []).filter(item => ids.has(item.id))
     setRows(r.data || [])
-    setCompanies(allowed)
+    // Keep all company names available for supervised receipt history, while
+    // restricting new receipts to the supervisor's own company assignments.
+    setCompanies(c.data || [])
+    setCreateCompanyIds([...ids])
     setProperties(p.data || [])
     if (allowed.length === 1) setForm(current => current.company_id ? current : { ...current, company_id:allowed[0].id })
   }
 
   useEffect(() => { if (user?.id) load() }, [user?.id])
+  const createCompanies = companies.filter(item => createCompanyIds.includes(item.id))
   const company = companies.find(item => item.id === form.company_id)
   const choices = properties.filter(item => !company || [company.prefix, company.name].some(value => String(item.entity || '').toLowerCase().includes(String(value).toLowerCase())))
   const nights = useMemo(() => form.check_in_date && form.check_out_date ? Math.max(0, Math.round((new Date(`${form.check_out_date}T00:00:00`) - new Date(`${form.check_in_date}T00:00:00`)) / 86400000)) : 0, [form.check_in_date, form.check_out_date])
   const total = ['rental_payment', 'security_deposit', 'admin_fee', 'additional_service'].reduce((sum, key) => sum + Number(form[key] || 0), 0)
-  const canCreate = profile?.role === 'superadmin' || moduleAccess.includes('holiday_home_receipts') || profile?.holiday_home_receipts_enabled === true
+  const canCreate = ['superadmin','supervisor'].includes(profile?.role) || moduleAccess.includes('holiday_home_receipts') || profile?.holiday_home_receipts_enabled === true
   const filteredRows = useMemo(() => {
     const term = dashboardSearch.trim().toLowerCase()
     return rows.filter(receipt => {
@@ -105,9 +110,9 @@ export default function HolidayHomeReceipts() {
   const openNew = async () => {
     const next = empty()
     next.received_by_name = profile?.full_name || ''
-    if (companies.length === 1) {
-      next.company_id = companies[0].id
-      const { data } = await supabase.rpc('next_holiday_home_receipt_number', { p_company_id:companies[0].id })
+    if (createCompanies.length === 1) {
+      next.company_id = createCompanies[0].id
+      const { data } = await supabase.rpc('next_holiday_home_receipt_number', { p_company_id:createCompanies[0].id })
       next.receipt_number = data || ''
     }
     setForm(next); setNightInput(''); setPropertyDisplay(''); setQuick(''); setError(''); setOpen(true)
@@ -177,7 +182,7 @@ export default function HolidayHomeReceipts() {
     {error && <div className="alert alert-error">{error}</div>}
     {open && <form className="card" onSubmit={save}><div className="card-header"><h2>Holiday Home Receipt</h2></div><div className="card-body">
       <label className="form-group"><span className="form-label">Quick stay entry</span><div style={{display:'flex',gap:8}}><input className="form-control" value={quick} onChange={event => setQuick(event.target.value)} placeholder="Emel C, Imperial Ave 3405 (2026-07-21 15:00 - 2026-07-24 11:00)"/><button className="btn btn-outline" type="button" onClick={autofill}>Auto fill</button></div></label>
-      <div className="form-row-3"><label className="form-group">Company<select className="form-control" required value={form.company_id} onChange={event => chooseCompany(event.target.value)}><option value="">Select company</option>{companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Receipt No.<input className="form-control" readOnly value={form.receipt_number}/></label><label className="form-group">Date<input className="form-control" type="date" value={form.receipt_date} onChange={event => set('receipt_date', event.target.value)}/></label></div>
+      <div className="form-row-3"><label className="form-group">Company<select className="form-control" required value={form.company_id} onChange={event => chooseCompany(event.target.value)}><option value="">Select company</option>{createCompanies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Receipt No.<input className="form-control" readOnly value={form.receipt_number}/></label><label className="form-group">Date<input className="form-control" type="date" value={form.receipt_date} onChange={event => set('receipt_date', event.target.value)}/></label></div>
       <div className="form-row"><label className="form-group">Received From<input className="form-control" required list="received-from-list" value={form.received_from} onChange={event => chooseGuest(event.target.value)}/><datalist id="received-from-list">{guests.map(item => <option key={item.name} value={item.name}/>)}</datalist></label><label className="form-group">ID / Passport<input className="form-control" value={form.id_passport} onChange={event => set('id_passport', event.target.value)}/></label></div>
       <div className="form-row-3"><label className="form-group">Apartment / Property<input className="form-control" required list="property-list" placeholder="Type to search property" value={propertyDisplay} onChange={event => chooseProperty(event.target.value)}/><span className="form-hint">Name / unit</span><datalist id="property-list">{choices.map(item => <option key={item.property_key} value={item.property_unit || item.property_key}/>)}</datalist></label><label className="form-group">Check-in<input className="form-control" type="date" value={form.check_in_date} onChange={event => set('check_in_date', event.target.value)}/></label><label className="form-group">Check-out / Nights<input className="form-control" type="date" value={form.check_out_date} onChange={event => set('check_out_date', event.target.value)}/><input className="form-control" type="number" min="0" placeholder="Number of nights" value={nightInput} onChange={event => setNights(event.target.value)}/><span className="form-hint">{nights} night(s)</span></label></div>
       <div className="form-row-3">{[['Rental Payment','rental_payment'],['Security Deposit','security_deposit'],['Admin Fee','admin_fee'],['Additional Service','additional_service']].map(([label, key]) => <label className="form-group" key={key}>{label}<input className="form-control" type="number" min="0" value={form[key]} onChange={event => set(key, event.target.value)}/></label>)}<div className="form-group"><span className="form-label">Total</span><div className="form-control">AED {formatCurrency(total)}</div></div></div>

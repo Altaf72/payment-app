@@ -67,5 +67,27 @@ using (
   )
 );
 
+-- Supervisors can create receipts for their own company assignments and view
+-- receipts created by any staff member assigned to them.
+drop policy if exists "Holiday receipt access" on public.holiday_home_receipts;
+create policy "Holiday receipt access" on public.holiday_home_receipts for select to authenticated using (
+  (
+    exists (select 1 from public.users where id = auth.uid() and (role in ('superadmin','finance','cfo','supervisor') or holiday_home_receipts_enabled))
+    and exists (select 1 from public.user_companies where user_id = auth.uid() and company_id = holiday_home_receipts.company_id)
+  )
+  or exists (
+    select 1 from public.staff_supervisors
+    where staff_supervisors.staff_id = holiday_home_receipts.created_by
+      and staff_supervisors.supervisor_id = auth.uid()
+  )
+);
+
+drop policy if exists "Holiday receipt create" on public.holiday_home_receipts;
+create policy "Holiday receipt create" on public.holiday_home_receipts for insert to authenticated with check (
+  created_by = auth.uid()
+  and exists (select 1 from public.users where id = auth.uid() and (role in ('superadmin','supervisor') or holiday_home_receipts_enabled))
+  and exists (select 1 from public.user_companies where user_id = auth.uid() and company_id = holiday_home_receipts.company_id)
+);
+
 -- The app reads Class directly from applications, so existing applications_full
 -- views do not need to be rebuilt for this feature.
