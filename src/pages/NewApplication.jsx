@@ -237,6 +237,7 @@ export default function NewApplication() {
   const [companies,       setCompanies]       = useState([])
   const [paymentMethods,  setPaymentMethods]  = useState([])
   const [paymentReasons,  setPaymentReasons]  = useState([])
+  const [applicationClasses, setApplicationClasses] = useState([])
   const [payees,          setPayees]          = useState([])
   const [banks,           setBanks]           = useState([])
 
@@ -244,7 +245,7 @@ export default function NewApplication() {
     company_id: '', payment_reason_id: '', payment_reason_text: '',
     payment_method_id: '', payment_method_text: '',
     amount: '', amount_words: '',
-    payee_name: '', bank_id: '', bank_name: '', bank_account: '', remarks: '',
+    payee_name: '', bank_id: '', bank_name: '', bank_account: '', class_name: '', remarks: '',
   }
   const [form, setForm]               = useState(emptyForm)
   const [savedForm, setSavedForm]     = useState(null)   // for back-navigation restore
@@ -286,13 +287,14 @@ export default function NewApplication() {
 
   async function loadAll() {
     setPageLoading(true)
-    const [{ data: co }, { data: pm }, { data: pr }, { data: py }, { data: bk }, appResult] =
+    const [{ data: co }, { data: pm }, { data: pr }, { data: py }, { data: bk }, { data: classes }, appResult] =
       await Promise.all([
         supabase.from('companies').select('*').eq('active', true).order('name'),
         supabase.from('payment_methods').select('*').eq('active', true).order('name'),
         supabase.from('payment_reasons').select('*').eq('active', true).order('name'),
         supabase.from('payees').select('*').order('last_used_at', { ascending: false }),
         supabase.from('banks').select('*').eq('active', true).order('name'),
+        supabase.from('application_classes').select('*').eq('active', true).order('name'),
         (editId || duplicateId)
           ? supabase.from('applications_full').select('*').eq('id', editId || duplicateId).single()
           : Promise.resolve({ data: null }),
@@ -311,6 +313,7 @@ export default function NewApplication() {
     setPaymentReasons(pr || [])
     setPayees(py || [])
     setBanks(bk || [])
+    setApplicationClasses(classes || [])
 
     // Smart default payment method (most used by this user)
     if (!editId) {
@@ -338,6 +341,13 @@ export default function NewApplication() {
 
     const app = appResult?.data
     if (app) {
+      // applications_full may be an explicit legacy view without class_name.
+      const { data: applicationClass } = await supabase
+        .from('applications')
+        .select('class_name')
+        .eq('id', app.id)
+        .single()
+      const className = applicationClass?.class_name || ''
       if (editId) {
         const { data: savedAttachments } = await supabase
           .from('application_attachments')
@@ -366,6 +376,7 @@ export default function NewApplication() {
           bank_id:             bank?.id || '',
           bank_name:           app.bank_name || '',
           bank_account:        app.bank_account || '',
+          class_name:          className,
           remarks:             app.remarks || '',
         })
         // No outcome note, no existing attachment
@@ -383,6 +394,7 @@ export default function NewApplication() {
           bank_id:             bank?.id || '',
           bank_name:           app.bank_name || '',
           bank_account:        app.bank_account || '',
+          class_name:          className,
           remarks:             app.remarks || '',
         })
         setOutcomeNote(app.outcome_note || '')
@@ -585,6 +597,7 @@ export default function NewApplication() {
         amount_words:      form.amount_words,
         bank_name:         bankName,
         bank_account:      form.bank_account,
+        class_name:        form.class_name || null,
         remarks:           form.remarks,
         status:            asDraft ? 'draft' : 'pending',
         outcome_note:      null,
@@ -791,6 +804,14 @@ export default function NewApplication() {
           </div>
 
           {/* Remarks */}
+          <div className="form-group">
+            <label className="form-label">Class</label>
+            <select className="form-control" value={form.class_name} onChange={e => set('class_name', e.target.value)}>
+              <option value="">Select Class (optional)</option>
+              {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+            </select>
+          </div>
+
           <div className="form-group">
             <label className="form-label">备注说明 <span className="cn">Remarks</span></label>
             <textarea className="form-control" placeholder="Unit numbers, references, additional notes…"

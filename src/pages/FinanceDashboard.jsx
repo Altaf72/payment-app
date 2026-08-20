@@ -473,6 +473,20 @@ export default function FinanceDashboard() {
 
     // Amount: server-side LIKE on cast — done client-side as postgres cant partial-match numerics
     let rows = data || []
+    // applications_full is an older explicit view in some deployments and may
+    // not yet expose class_name. Read it from the base table so dashboard
+    // loading never depends on a view migration.
+    if (rows.length > 0) {
+      const { data: classRows, error: classError } = await supabase
+        .from('applications')
+        .select('id,class_name')
+        .in('id', rows.map(app => app.id))
+      if (classError) console.error('Could not load application classes', classError)
+      else {
+        const classById = new Map((classRows || []).map(row => [row.id, row.class_name]))
+        rows = rows.map(app => ({ ...app, class_name: classById.get(app.id) || '' }))
+      }
+    }
     if (amountSearch.trim()) {
       rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
     }
@@ -595,13 +609,27 @@ export default function FinanceDashboard() {
       }
     }
     if (amountSearch.trim()) rows = rows.filter(a => String(a.amount).includes(amountSearch.trim()))
+    if (rows.length > 0) {
+      const classRows = []
+      const ids = rows.map(row => row.id)
+      for (let index = 0; index < ids.length; index += 200) {
+        const { data, error } = await supabase.from('applications').select('id,class_name').in('id', ids.slice(index, index + 200))
+        if (error) {
+          alert('Could not load application classes: ' + error.message)
+          return
+        }
+        classRows.push(...(data || []))
+      }
+      const classById = new Map(classRows.map(row => [row.id, row.class_name]))
+      rows = rows.map(row => ({ ...row, class_name: classById.get(row.id) || '' }))
+    }
 
     const csv = [
-      ['Ref','Date','Company','Applicant','Payment Reason','Method','Amount','Payee','Bank','Account','Status','Attachment'],
+      ['Ref','Date','Company','Applicant','Payment Reason','Class','Method','Amount','Payee','Bank','Account','Remarks','Status','Attachment'],
       ...rows.map(a => [
         a.ref_number, a.created_at?.slice(0,10), a.company_name, a.submitted_by_name,
-        a.payment_reason, a.payment_method_name, a.amount, a.payee_name,
-        a.bank_name, a.bank_account, a.status, a.attachment_name||''
+        a.payment_reason, a.class_name, a.payment_method_name, a.amount, a.payee_name,
+        a.bank_name, a.bank_account, a.remarks, a.status, a.attachment_name||''
       ])
     ].map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n')
 
@@ -1159,6 +1187,7 @@ export default function FinanceDashboard() {
                   <th>Company</th>
                   <th>Applicant</th>
                   <th>Payment Reason</th>
+                  <th>Class</th>
                   <th>Payee</th>
                   <th>Amount (AED)</th>
                   <th>Date</th>
@@ -1306,6 +1335,12 @@ export default function FinanceDashboard() {
                           <CopyableField copyText={app.payment_reason || ''} label="Payment reason" style={{fontSize:'12px',overflow:'hidden',
                             textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                             {app.payment_reason}
+                          </CopyableField>
+                        </td>
+
+                        <td style={{verticalAlign:'middle',maxWidth:'100px',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          <CopyableField copyText={app.class_name || ''} label="Class" style={{fontSize:'12px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                            {app.class_name || '—'}
                           </CopyableField>
                         </td>
 

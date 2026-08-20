@@ -121,6 +121,7 @@ export default function SettingsPage() {
   const [users, setUsers]               = useState([])
   const [methods, setMethods]           = useState([])
   const [userCompanies, setUserCompanies] = useState([])
+  const [supervisorAssignments, setSupervisorAssignments] = useState([])
   const [moduleAssignments, setModuleAssignments] = useState([])
   const [deletedLog, setDeletedLog]     = useState([])
   const [loading, setLoading]           = useState(true)
@@ -157,19 +158,21 @@ export default function SettingsPage() {
 
   async function load(initial = false) {
     if (initial) setLoading(true)
-    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }, { data: ma }] = await Promise.all([
+    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }, { data: ma }, { data: sa }] = await Promise.all([
       supabase.from('companies').select('*').order('name'),
       supabase.from('users').select('*').order('full_name'),
       supabase.from('payment_methods').select('*').order('name'),
       supabase.from('user_companies').select('*'),
       supabase.from('deleted_applications_log').select('*').order('deleted_at', { ascending: false }),
       supabase.from('user_module_access').select('*'),
+      supabase.from('staff_supervisors').select('*'),
     ])
     setCompanies(co || [])
     setUsers(us || [])
     setMethods(me || [])
     setUserCompanies(uc || [])
     setModuleAssignments(ma || [])
+    setSupervisorAssignments(sa || [])
     setDeletedLog(dl || [])
 
     // Load transaction counts per user per company
@@ -239,6 +242,16 @@ export default function SettingsPage() {
       await supabase.from('user_companies').insert({ user_id: userId, company_id: companyId })
     }
     await load()
+  }
+
+  async function toggleSupervisor(staffId, supervisorId, currentlyAssigned) {
+    const query = supabase.from('staff_supervisors')
+    const { error } = currentlyAssigned
+      ? await query.delete().eq('staff_id', staffId).eq('supervisor_id', supervisorId)
+      : await query.insert({ staff_id: staffId, supervisor_id: supervisorId })
+    if (error) return flash('error', error.message)
+    flash('success', currentlyAssigned ? 'Supervisor removed' : 'Supervisor assigned')
+    load()
   }
 
   async function addCompany() {
@@ -434,13 +447,23 @@ export default function SettingsPage() {
     const { data, error } = await query
     if (error) { flash('error', error.message); setExporting(false); return }
     if (!data || data.length === 0) { flash('error', 'No records found for selected filters'); setExporting(false); return }
+    const classRows = []
+    for (let index = 0; index < data.length; index += 200) {
+      const { data: page, error: classError } = await supabase
+        .from('applications')
+        .select('id,class_name')
+        .in('id', data.slice(index, index + 200).map(application => application.id))
+      if (classError) { flash('error', classError.message); setExporting(false); return }
+      classRows.push(...(page || []))
+    }
+    const classById = new Map(classRows.map(row => [row.id, row.class_name]))
     const rows = [
       ['Ref','Date','Company','Applicant','Payment Reason','Method','Amount AED',
-       'Amount Words','Payee','Bank','Account/IBAN','Remarks','Status','Attachment'],
+       'Amount Words','Payee','Bank','Account/IBAN','Class','Remarks','Status','Attachment'],
       ...data.map(a => [
         a.ref_number, a.created_at?.slice(0,10), a.company_name, a.submitted_by_name,
         a.payment_reason, a.payment_method_name, a.amount, a.amount_words,
-        a.payee_name, a.bank_name, a.bank_account, a.remarks, a.status, a.attachment_name||''
+        a.payee_name, a.bank_name, a.bank_account, classById.get(a.id) || '', a.remarks, a.status, a.attachment_name||''
       ])
     ]
     const csv  = rows.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n')
@@ -649,6 +672,7 @@ export default function SettingsPage() {
                             value={u.role} onChange={e=>updateUserRole(u.id,e.target.value)}
                             disabled={isMerged}>
                             <option value="staff">Staff</option>
+                            <option value="supervisor">Supervisor</option>
                             <option value="gro">GRO</option>
                             <option value="manager">Manager</option>
                             <option value="finance">Finance Officer</option>
@@ -658,6 +682,24 @@ export default function SettingsPage() {
                           </select>
                         </div>
                       </div>
+
+                      {u.role === 'staff' && !isMerged && (
+                        <div style={{flex:'1 1 210px',minWidth:'210px'}}>
+                          <div style={{fontSize:'11px',fontWeight:600,color:'var(--ink-3)',textTransform:'uppercase',letterSpacing:'.07em',marginBottom:'8px'}}>
+                            Supervisors
+                          </div>
+                          <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
+                            {users.filter(candidate => candidate.role === 'supervisor' && candidate.is_active && !candidate.merged_into).map(supervisor => {
+                              const assigned = supervisorAssignments.some(row => row.staff_id === u.id && row.supervisor_id === supervisor.id)
+                              return <label key={supervisor.id} style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',cursor:'pointer'}}>
+                                <input type="checkbox" checked={assigned} onChange={() => toggleSupervisor(u.id, supervisor.id, assigned)} />
+                                {supervisor.full_name}
+                              </label>
+                            })}
+                            {!users.some(candidate => candidate.role === 'supervisor' && candidate.is_active && !candidate.merged_into) && <span className="text-muted text-sm">Create a Supervisor user first.</span>}
+                          </div>
+                        </div>
+                      )}
 
                       <label style={{display:'flex',alignItems:'center',gap:'7px',fontSize:'12px',paddingTop:'4px'}}>
                         <input type="checkbox" checked={Boolean(u.holiday_home_receipts_enabled)} disabled={isMerged || u.role === 'superadmin'}

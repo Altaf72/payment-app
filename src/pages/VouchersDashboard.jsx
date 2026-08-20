@@ -31,7 +31,7 @@ function displayDate(value) {
 export default function VouchersDashboard() {
   const navigate = useNavigate()
   const { profile } = useAuth()
-  const isStaff = profile?.role === 'staff'
+  const isStaff = ['staff','supervisor'].includes(profile?.role)
   const saved = getSavedDashboardState()
   const [vouchers, setVouchers] = useState([])
   const [companies, setCompanies] = useState([])

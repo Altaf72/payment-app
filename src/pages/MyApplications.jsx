@@ -69,7 +69,7 @@ function CountdownTimer({ submittedAt }) {
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 
 export default function MyApplications() {
-  const { user }   = useAuth()
+  const { user, profile } = useAuth()
   const navigate   = useNavigate()
 
   const [applications, setApplications] = useState([])
@@ -99,7 +99,7 @@ export default function MyApplications() {
     setPage(1)
   }, [search])
 
-  useEffect(() => { load() }, [page, pageSize, search, user?.id])
+  useEffect(() => { load() }, [page, pageSize, search, user?.id, profile?.role])
 
   async function load() {
     if (!user?.id) return
@@ -109,10 +109,24 @@ export default function MyApplications() {
     const from = (page - 1) * pageSize
     const to   = from + pageSize - 1
 
+    let visibleSubmitterIds = [user.id]
+    if (profile?.role === 'supervisor') {
+      const { data: assignments, error: assignmentError } = await supabase
+        .from('staff_supervisors')
+        .select('staff_id')
+        .eq('supervisor_id', user.id)
+      if (assignmentError) {
+        setLoadError(`Could not load your supervised staff: ${assignmentError.message}`)
+        setLoading(false)
+        return
+      }
+      visibleSubmitterIds = [...new Set([user.id, ...(assignments || []).map(row => row.staff_id)])]
+    }
+
     let query = supabase
       .from('applications_full')
       .select('*', { count: 'exact' })
-      .eq('submitted_by', user.id)
+      .in('submitted_by', visibleSubmitterIds)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -191,8 +205,8 @@ export default function MyApplications() {
     <div>
       <div className="page-header flex justify-between items-center">
         <div>
-          <h1>My Applications</h1>
-          <p>Track and manage your payment requests</p>
+          <h1>{profile?.role === 'supervisor' ? 'My & Supervised Applications' : 'My Applications'}</h1>
+          <p>{profile?.role === 'supervisor' ? 'Track your applications and oversee assigned staff requests' : 'Track and manage your payment requests'}</p>
         </div>
         <button className="btn btn-primary" onClick={() => navigate('/new-application')}>
           ＋ New Application
@@ -253,6 +267,7 @@ export default function MyApplications() {
                 <tr>
                   <th>Reference</th>
                   <th>Company</th>
+                  {profile?.role === 'supervisor' && <th>Applicant</th>}
                   <th>Payment Reason</th>
                   <th>Amount (AED)</th>
                   <th>Date</th>
@@ -264,8 +279,9 @@ export default function MyApplications() {
               <tbody>
                 {applications.map(app => {
                   const withinWindow = app.status === 'pending' && minutesAgo(app.submitted_at) < 30
-                  const canEdit   = app.status === 'draft' || app.status === 'returned' || app.status === 'mgr_rejected' || withinWindow
-                  const canWithdraw = withinWindow
+                  const isOwner = app.submitted_by === user.id
+                  const canEdit = isOwner && (app.status === 'draft' || app.status === 'returned' || app.status === 'mgr_rejected' || withinWindow)
+                  const canWithdraw = isOwner && withinWindow
                   return (
                     <tr key={app.id}>
                       <td>
@@ -274,6 +290,7 @@ export default function MyApplications() {
                         </span>
                       </td>
                       <td>{app.company_name}</td>
+                      {profile?.role === 'supervisor' && <td>{app.submitted_by_name || '—'}</td>}
                       <td style={{maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                         {app.payment_reason}
                       </td>

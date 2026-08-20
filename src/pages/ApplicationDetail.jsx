@@ -1700,7 +1700,7 @@ export default function ApplicationDetail() {
   // approval; it does not alter the application or its workflow status.
   const canAddSupportingAttachment = isOwner
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
-  const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role) || (profile?.role === 'staff' && isOwner)
+  const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role) || (['staff','supervisor'].includes(profile?.role) && isOwner)
   const canExportQbo = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
   const canAddFinanceAttachment = ['finance','superadmin'].includes(profile?.role) &&
     ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
@@ -1792,7 +1792,7 @@ export default function ApplicationDetail() {
             )}
             {canCreatePaymentVoucher && (
               <button className="btn btn-success btn-sm" onClick={() => navigate(`/application/${id}/payment-voucher`)}>
-                {profile?.role === 'staff' ? 'Make Payment Voucher' : 'Create Payment Voucher'}
+                {['staff','supervisor'].includes(profile?.role) ? 'Make Payment Voucher' : 'Create Payment Voucher'}
               </button>
             )}
             {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}

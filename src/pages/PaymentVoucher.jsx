@@ -267,7 +267,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { user, profile, isSuperAdmin } = useAuth()
-  const isStaff = profile?.role === 'staff'
+  const isStaff = ['staff','supervisor'].includes(profile?.role)
   const isFinanceRole = ['finance', 'cfo', 'ceo', 'superadmin'].includes(profile?.role)
   const openedFromVouchers = searchParams.get('from') === 'vouchers'
   const backPath = isStandalone || openedFromVouchers ? '/vouchers' : `/application/${applicationId}`

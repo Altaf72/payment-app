@@ -33,6 +33,7 @@ const TEXT = {
     chinese: 'Chinese',
     roles: {
       staff: 'Staff',
+      supervisor: 'Supervisor',
       gro: 'GRO',
       manager: 'Manager',
       finance: 'Finance Officer',
@@ -68,6 +69,7 @@ const TEXT = {
     chinese: '中文',
     roles: {
       staff: '员工',
+      supervisor: '主管',
       manager: '经理',
       finance: '财务',
       ceo: 'CEO',
@@ -122,6 +124,7 @@ export default function Layout() {
 
   const roleLabel = {
     staff: text.roles.staff,
+    supervisor: text.roles.supervisor,
     gro: text.roles.gro,
     manager: text.roles.manager,
     finance: text.roles.finance,
@@ -247,6 +250,13 @@ export default function Layout() {
               <span className="icon">L</span> {text.localSettings}
             </button>
           </>
+        )}
+
+        {['finance','superadmin'].includes(profile?.role) && (
+          <button className={`sidebar-link ${isActive('/application-classes') ? 'active' : ''}`}
+            onClick={() => go('/application-classes')}>
+            <span className="icon">C</span> Application Classes
+          </button>
         )}
 
         {isSuperAdmin && (

@@ -18,6 +18,7 @@ import PayrollWorkbookDashboard from './pages/PayrollWorkbookDashboard'
 import DtcmReport from './pages/DtcmReport'
 import ImprestFundManagement from './pages/ImprestFundManagement'
 import LedgerTrackerWorkspace from './pages/LedgerTrackerWorkspace'
+import ApplicationClasses from './pages/ApplicationClasses'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -64,7 +65,7 @@ export default function App() {
         <Route path="new-application" element={<ModuleRoute moduleKey="payment_applications"><NewApplication /></ModuleRoute>} />
         <Route path="application/:id" element={<ModuleRoute moduleKey="payment_applications"><ApplicationDetail /></ModuleRoute>} />
         <Route path="application/:applicationId/payment-voucher" element={
-          <PrivateRoute allowedRoles={['staff','finance','ceo','cfo','superadmin']}>
+          <PrivateRoute allowedRoles={['staff','supervisor','finance','ceo','cfo','superadmin']}>
             <ModuleRoute moduleKey="vouchers"><PaymentVoucher /></ModuleRoute>
           </PrivateRoute>
         } />
@@ -74,15 +75,15 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="payment-voucher/select-application" element={
-          <PrivateRoute allowedRoles={['staff']}><ModuleRoute moduleKey="vouchers"><PaymentVoucherApplicationPicker /></ModuleRoute></PrivateRoute>
+          <PrivateRoute allowedRoles={['staff','supervisor']}><ModuleRoute moduleKey="vouchers"><PaymentVoucherApplicationPicker /></ModuleRoute></PrivateRoute>
         } />
         <Route path="receipt-voucher/new" element={
-          <PrivateRoute allowedRoles={['staff','finance','ceo','cfo','superadmin']}>
+          <PrivateRoute allowedRoles={['staff','supervisor','finance','ceo','cfo','superadmin']}>
             <ModuleRoute moduleKey="vouchers"><PaymentVoucher voucherType="receipt" /></ModuleRoute>
           </PrivateRoute>
         } />
         <Route path="vouchers" element={
-          <PrivateRoute allowedRoles={['staff','finance','ceo','cfo','superadmin']}>
+          <PrivateRoute allowedRoles={['staff','supervisor','finance','ceo','cfo','superadmin']}>
             <ModuleRoute moduleKey="vouchers"><VouchersDashboard /></ModuleRoute>
           </PrivateRoute>
         } />
@@ -105,6 +106,7 @@ export default function App() {
             <FinanceDashboard />
           </PrivateRoute>
         } />
+        <Route path="application-classes" element={<PrivateRoute allowedRoles={['finance','superadmin']}><ApplicationClasses /></PrivateRoute>} />
         <Route path="profile" element={<PrivateRoute><MyProfile /></PrivateRoute>} />
         <Route path="qbo-settings" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>
