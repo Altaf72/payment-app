@@ -78,6 +78,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
   const [loadError, setLoadError]       = useState('')
   const [withdrawing, setWithdrawing]   = useState(null)
   const [subordinates, setSubordinates] = useState([])
+  const [selectedSubordinateId, setSelectedSubordinateId] = useState('')
   const loadRequestRef                  = React.useRef(0)
 
   const STORAGE_KEY = 'my_applications_filters'
@@ -100,7 +101,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
     setPage(1)
   }, [search])
 
-  useEffect(() => { load() }, [page, pageSize, search, user?.id, profile?.role, supervisorDashboard])
+  useEffect(() => { load() }, [page, pageSize, search, user?.id, profile?.role, supervisorDashboard, selectedSubordinateId])
 
   async function load() {
     if (!user?.id) return
@@ -122,7 +123,9 @@ export default function MyApplications({ supervisorDashboard = false }) {
         return
       }
       const staffIds = (assignments || []).map(row => row.staff_id)
-      visibleSubmitterIds = supervisorDashboard ? staffIds : [...new Set([user.id, ...staffIds])]
+      visibleSubmitterIds = supervisorDashboard
+        ? (selectedSubordinateId ? staffIds.filter(staffId => staffId === selectedSubordinateId) : staffIds)
+        : [...new Set([user.id, ...staffIds])]
       if (staffIds.length > 0) {
         const { data: staffRows, error: staffError } = await supabase
           .from('users')
@@ -255,9 +258,12 @@ export default function MyApplications({ supervisorDashboard = false }) {
         <div className="card" style={{marginBottom:'18px'}}>
           <div className="card-header"><h2>My Subordinates</h2><span className="text-muted">{subordinates.length} assigned</span></div>
           <div className="card-body" style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-            {subordinates.length ? subordinates.map(staff => <div key={staff.id} style={{padding:'7px 10px',border:'1px solid var(--border-2)',borderRadius:'var(--radius-sm)',background:'var(--cream)'}}>
-              <strong style={{display:'block',fontSize:'12px'}}>{staff.full_name}</strong><span className="text-muted text-sm">{staff.email}</span>
-            </div>) : <span className="text-muted">No staff are assigned to you yet. A Super Admin can assign staff in Settings.</span>}
+            {subordinates.length ? subordinates.map(staff => {
+              const selected = selectedSubordinateId === staff.id
+              return <button key={staff.id} type="button" onClick={() => { setSelectedSubordinateId(current => current === staff.id ? '' : staff.id); setPage(1) }} style={{padding:'7px 10px',border:`1px solid ${selected ? 'var(--gold)' : 'var(--border-2)'}`,borderRadius:'var(--radius-sm)',background:selected ? '#fef3c7' : 'var(--cream)',cursor:'pointer',textAlign:'left'}}>
+                <strong style={{display:'block',fontSize:'12px'}}>{selected ? '✓ ' : ''}{staff.full_name}</strong><span className="text-muted text-sm">{staff.email}</span>
+              </button>
+            }) : <span className="text-muted">No staff are assigned to you yet. A Super Admin can assign staff in Settings.</span>}
           </div>
         </div>
       )}

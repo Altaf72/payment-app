@@ -721,6 +721,14 @@ export default function NewApplication() {
             />
           </div>
 
+          <div className="form-group">
+            <label className="form-label">Apartment / Property <span className="cn">Class</span></label>
+            <select className="form-control" value={form.class_name} onChange={e => set('class_name', e.target.value)}>
+              <option value="">Select Class (optional)</option>
+              {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+            </select>
+          </div>
+
           {/* Payment Method */}
           <div className="form-group">
             <label className="form-label">付款方式 <span className="cn">Payment Method</span></label>
@@ -804,14 +812,6 @@ export default function NewApplication() {
           </div>
 
           {/* Remarks */}
-          <div className="form-group">
-            <label className="form-label">Class</label>
-            <select className="form-control" value={form.class_name} onChange={e => set('class_name', e.target.value)}>
-              <option value="">Select Class (optional)</option>
-              {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
-            </select>
-          </div>
-
           <div className="form-group">
             <label className="form-label">备注说明 <span className="cn">Remarks</span></label>
             <textarea className="form-control" placeholder="Unit numbers, references, additional notes…"
