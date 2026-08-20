@@ -36,10 +36,6 @@ export default function ApplicationClasses() {
   async function saveEdit(item) {
     const value = editingName.trim()
     if (!value) return setMessage('Class name is required.')
-    if (value !== item.name) {
-      const { error: applicationError } = await supabase.from('applications').update({ class_name: value }).eq('class_name', item.name)
-      if (applicationError) return setMessage(applicationError.message)
-    }
     const { error } = await supabase.from('application_classes').update({ name: value }).eq('id', item.id)
     if (error) return setMessage(error.message)
     setEditingId(null)

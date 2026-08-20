@@ -636,7 +636,7 @@ export default function ApplicationDetail() {
   })
   const [paymentMethodOptions, setPaymentMethodOptions] = useState([])
   const [applicationClasses, setApplicationClasses] = useState([])
-  const [className, setClassName] = useState('')
+  const [classNames, setClassNames] = useState([])
   const [classSaving, setClassSaving] = useState(false)
   const [classError, setClassError] = useState('')
   const [bankEditSaving, setBankEditSaving] = useState(false)
@@ -774,7 +774,7 @@ export default function ApplicationDetail() {
     setLoading(true)
     const [{ data: appData }, { data: pfsData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }, { data: classes }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
-      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by,class_name').eq('id', id).single(),
+      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by,class_name,class_names').eq('id', id).single(),
       supabase.from('audit_log')
         .select('id, action, note, created_at, action_by, users!action_by(full_name,role)')
         .eq('application_id', id).order('created_at'),
@@ -791,7 +791,7 @@ export default function ApplicationDetail() {
     }
 
     setApp(appData ? { ...appData, ...(pfsData || {}), logo_url: logoUrl } : null)
-    setClassName(pfsData?.class_name || '')
+    setClassNames(pfsData?.class_names?.length ? pfsData.class_names : (pfsData?.class_name ? [pfsData.class_name] : []))
     setApplicationClasses(classes || [])
     setApplicantAttachments(applicantFiles || [])
     const mappedLog = (logData || []).map(l => ({
@@ -1201,8 +1201,9 @@ export default function ApplicationDetail() {
     setClassSaving(true)
     setClassError('')
     try {
-      const nextClass = className || null
-      const { error } = await supabase.from('applications').update({ class_name: nextClass }).eq('id', id)
+      const nextClasses = classNames || []
+      const nextClass = nextClasses.join(', ') || null
+      const { error } = await supabase.from('applications').update({ class_name: nextClass, class_names: nextClasses }).eq('id', id)
       if (error) throw error
       const { error: logError } = await supabase.from('audit_log').insert({
         application_id: id,
@@ -1211,7 +1212,7 @@ export default function ApplicationDetail() {
         note: `Class assigned by Finance: ${nextClass || 'None'}`,
       })
       if (logError) throw logError
-      setApp(current => ({ ...current, class_name: nextClass }))
+      setApp(current => ({ ...current, class_name: nextClass, class_names: nextClasses }))
     } catch (err) {
       setClassError(err.message || 'Could not save Class')
     } finally {
@@ -2398,11 +2399,10 @@ export default function ApplicationDetail() {
                 <div className="form-label">Class</div>
                 {canEditClass ? <>
                   <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
-                    <select className="form-control" value={className} onChange={event => setClassName(event.target.value)} style={{maxWidth:'300px'}}>
-                      <option value="">No Class assigned</option>
+                    <select className="form-control" multiple value={classNames} onChange={event => setClassNames(Array.from(event.target.selectedOptions, option => option.value))} style={{maxWidth:'300px',minHeight:'105px'}}>
                       {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
                     </select>
-                    <button type="button" className="btn btn-success btn-sm" disabled={classSaving || className === (app.class_name || '')} onClick={saveClass}>
+                    <button type="button" className="btn btn-success btn-sm" disabled={classSaving || classNames.join(', ') === (app.class_name || '')} onClick={saveClass}>
                       {classSaving ? 'Saving...' : 'Save Class'}
                     </button>
                   </div>

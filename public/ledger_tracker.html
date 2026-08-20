@@ -957,10 +957,10 @@ var STATE = {
   cheques: [],
   properties: [],
   deposits: [],
-  setupLists: { status:[], entity:[], paymentPurpose:[], recurrenceFrequency:[] }
+  setupLists: { status:[], entity:[], paymentPurpose:[], paymentMode:[], recurrenceFrequency:[] }
 };
 
-var CHEQUE_FIELDS = ["chequeDate","amount","entity","direction","propertyKey","counterparty","description","paymentPurpose","recurrenceFrequency","chequeNo","status"];
+var CHEQUE_FIELDS = ["chequeDate","amount","entity","direction","propertyKey","counterparty","description","paymentPurpose","paymentMode","recurrenceFrequency","chequeNo","status"];
 var PROPERTY_FIELDS = ["propertyKey","recordType","propertyUnit","entity","payeeOwner","contractStart","contractEnd","annualRent","totalInstallments","propertyStatus","ownerNationality","managementType"];
 var DEPOSIT_FIELDS = ["propertyKey","rentalDeposit","dewaDeposit","chillerDeposit","gasDeposit","otherDeposit","remark"];
 
@@ -1046,6 +1046,7 @@ function loadSeed(){
     status: (seed.setupLists && seed.setupLists.status) || ["PDC","Paid/Cleared","Cash","Pending","Returned/Cancelled","Hold"],
     entity: (seed.setupLists && seed.setupLists.entity) || ["HH","MH","Other"],
     paymentPurpose: (seed.setupLists && seed.setupLists.paymentPurpose) || ["Rent","Rent Cheque","Commission","Security Deposit","Utility","Government / Tax","License/Permit","Other"],
+    paymentMode: (seed.setupLists && seed.setupLists.paymentMode) || ["Cheque","Auto Debit","Cash Payment","Bank Transfer","Card Payment","Other"],
     recurrenceFrequency: (seed.setupLists && seed.setupLists.recurrenceFrequency) || ["Monthly","Quarterly","Half-yearly","Yearly","Custom"]
   };
   // Always guarantee this core set of recurrence frequencies exists (in a
@@ -1565,6 +1566,7 @@ function chequeFormFieldsHtml(rec){
       '<div class="field"><label id="cf_counterpartyLabel">'+(direction==="Receivable"?"Received from":"Paid to")+'</label><input type="text" id="cf_counterparty" value="'+esc(rec.counterparty||"")+'"></div>' +
       '<div class="field"><label>Description</label><input type="text" id="cf_description" value="'+esc(rec.description||"")+'"></div>' +
       '<div class="field"><label>Payment purpose</label><select id="cf_purpose"><option value="">—</option>'+opts(sl.paymentPurpose, rec.paymentPurpose)+'</select></div>' +
+      '<div class="field"><label>Mode of payment</label><select id="cf_paymentMode"><option value="">—</option>'+opts(sl.paymentMode || [], rec.paymentMode)+'</select></div>' +
       '<div class="field"><label>Recurrence</label><select id="cf_recurrence"><option value="">—</option>'+opts(sl.recurrenceFrequency, rec.recurrenceFrequency)+'</select></div>' +
       '<div class="field"><label>Cheque no.</label><input type="text" id="cf_chequeNo" value="'+esc(rec.chequeNo||"")+'"></div>' +
       '<div class="field"><label class="req">Status</label><select id="cf_status" required><option value="">—</option>'+opts(sl.status, rec.status)+'</select></div>' +
@@ -1617,7 +1619,7 @@ function openChequeForm(existingRec, onSave, initial){
     var add = document.getElementById("cf_addNewProperty");
     if(add) add.addEventListener("click", function(){
       var seed={propertyKey:keyInput.value.trim(),propertyUnit:keyInput.value.trim(),recordType:"Property"};
-      var draft={chequeDate:document.getElementById("cf_date").value,amount:document.getElementById("cf_amount").value,direction:document.getElementById("cf_direction").value,entity:document.getElementById("cf_entity").value,propertyKey:seed.propertyKey,counterparty:document.getElementById("cf_counterparty").value,description:document.getElementById("cf_description").value,paymentPurpose:document.getElementById("cf_purpose").value,recurrenceFrequency:document.getElementById("cf_recurrence").value,chequeNo:document.getElementById("cf_chequeNo").value,status:document.getElementById("cf_status").value};
+      var draft={chequeDate:document.getElementById("cf_date").value,amount:document.getElementById("cf_amount").value,direction:document.getElementById("cf_direction").value,entity:document.getElementById("cf_entity").value,propertyKey:seed.propertyKey,counterparty:document.getElementById("cf_counterparty").value,description:document.getElementById("cf_description").value,paymentPurpose:document.getElementById("cf_purpose").value,paymentMode:document.getElementById("cf_paymentMode").value,recurrenceFrequency:document.getElementById("cf_recurrence").value,chequeNo:document.getElementById("cf_chequeNo").value,status:document.getElementById("cf_status").value};
       A.openPropertyForm(null,function(){ var created=A.STATE.properties.find(function(prop){return A.norm(prop.propertyKey)===A.norm(seed.propertyKey);}); if(created){ draft.propertyKey=created.propertyKey; if(!draft.entity) draft.entity=created.entity||""; if(!draft.counterparty) draft.counterparty=created.payeeOwner||""; if(!draft.description) draft.description=created.propertyUnit||""; } openChequeForm(null,onSave,draft); },seed);
     });
   }
@@ -1641,6 +1643,7 @@ function openChequeForm(existingRec, onSave, initial){
     rec.counterparty = document.getElementById("cf_counterparty").value.trim();
     rec.description = document.getElementById("cf_description").value.trim();
     rec.paymentPurpose = document.getElementById("cf_purpose").value;
+    rec.paymentMode = document.getElementById("cf_paymentMode").value;
     rec.recurrenceFrequency = document.getElementById("cf_recurrence").value;
     rec.chequeNo = document.getElementById("cf_chequeNo").value.trim();
     rec.status = status;
@@ -2285,6 +2288,7 @@ function previewIssue(){
       propertyKey: property.propertyKey,
       description: property.propertyUnit,
       paymentPurpose: purpose,
+      paymentMode: "Cheque",
       recurrenceFrequency: recurrence,
       chequeNo: chequeNo,
       status: status
@@ -3555,13 +3559,41 @@ function chequesForDay(col, dayISO){
   return col.cheques.filter(function(c){ var d = A.parseDate(c.chequeDate); return d && A.toISO(d) === dayISO; });
 }
 
+// The calendar is deliberately compact. Hovering an amount exposes the
+// complete underlying record (and every record behind a monthly total), so a
+// Finance user never has to expand a period just to identify a payment.
+function calendarChequeDetails(c, number){
+  var property = A.findPropertyForCheque(c);
+  var lines = [];
+  if(number) lines.push("Cheque " + number);
+  lines.push("Amount: AED " + A.fmtMoney(c.amount));
+  lines.push("Date: " + A.fmtDateDisplay(c.chequeDate));
+  lines.push("Direction: " + (c.direction || "Payable"));
+  lines.push("Status: " + (c.status || "—"));
+  if(c.propertyKey) lines.push("Property key: " + c.propertyKey);
+  if(property && property.propertyUnit) lines.push("Property: " + property.propertyUnit);
+  if(c.description) lines.push("Description: " + c.description);
+  if(c.counterparty) lines.push("Paid to / received from: " + c.counterparty);
+  else if(property && property.payeeOwner) lines.push("Payee / owner: " + property.payeeOwner);
+  if(c.entity) lines.push("Entity: " + c.entity);
+  if(c.chequeNo) lines.push("Cheque / reference: " + c.chequeNo);
+  if(c.paymentPurpose) lines.push("Purpose: " + c.paymentPurpose);
+  if(c.paymentMode) lines.push("Mode of payment: " + c.paymentMode);
+  if(c.recurrenceFrequency) lines.push("Recurrence: " + c.recurrenceFrequency);
+  return lines.join("\n");
+}
+function calendarAggregateDetails(chs){
+  return chs.length + " cheque(s) — click to expand this month\n\n" +
+    chs.map(function(c, index){ return calendarChequeDetails(c, index + 1); }).join("\n\n");
+}
+
 /* ---------------- cell rendering ---------------- */
 function renderAggCell(col, monthKey){
   var chs = chequesForMonth(col, monthKey);
   if(!chs.length) return '<span class="cal-cell-empty">–</span>';
   var total = chs.reduce(function(s,c){ var n=parseFloat(c.amount); return s+(isNaN(n)?0:n); }, 0);
   var color = dominantColor(chs);
-  return '<span class="cal-agg" data-agg-month="'+esc(monthKey)+'" title="'+chs.length+' cheque(s) — click to expand this month">' +
+  return '<span class="cal-agg" data-agg-month="'+esc(monthKey)+'" title="'+esc(calendarAggregateDetails(chs))+'" aria-label="'+esc(calendarAggregateDetails(chs))+'">' +
     '<span class="dot dot-'+color+'"></span>AED '+esc(A.fmtMoney(total))+' · '+chs.length+'</span>';
 }
 function renderDayCell(col, dayISO){
@@ -3570,9 +3602,9 @@ function renderDayCell(col, dayISO){
   return chs.map(function(c){
     var color = statusColor(c);
     var isReceivable = c.direction === "Receivable";
-    var title = [isReceivable?"Receivable":"Payable", c.chequeNo, c.paymentPurpose, c.status].filter(Boolean).join(" · ");
+    var title = calendarChequeDetails(c);
     var tag = !calendarState.direction ? '<span class="dir-tag dir-'+(isReceivable?"receivable":"payable")+'">'+(isReceivable?"REC":"PAY")+'</span>' : '';
-    return '<div class="cal-badge cal-badge-'+color+'" data-cheque-id="'+esc(c._id)+'" title="'+esc(title)+'">AED '+esc(A.fmtMoney(c.amount))+tag+'</div>';
+    return '<div class="cal-badge cal-badge-'+color+'" data-cheque-id="'+esc(c._id)+'" title="'+esc(title)+'" aria-label="'+esc(title)+'">AED '+esc(A.fmtMoney(c.amount))+tag+'</div>';
   }).join("");
 }
 

@@ -245,7 +245,7 @@ export default function NewApplication() {
     company_id: '', payment_reason_id: '', payment_reason_text: '',
     payment_method_id: '', payment_method_text: '',
     amount: '', amount_words: '',
-    payee_name: '', bank_id: '', bank_name: '', bank_account: '', class_name: '', remarks: '',
+    payee_name: '', bank_id: '', bank_name: '', bank_account: '', class_names: [], remarks: '',
   }
   const [form, setForm]               = useState(emptyForm)
   const [savedForm, setSavedForm]     = useState(null)   // for back-navigation restore
@@ -344,10 +344,10 @@ export default function NewApplication() {
       // applications_full may be an explicit legacy view without class_name.
       const { data: applicationClass } = await supabase
         .from('applications')
-        .select('class_name')
+        .select('class_name,class_names')
         .eq('id', app.id)
         .single()
-      const className = applicationClass?.class_name || ''
+      const classNames = applicationClass?.class_names?.length ? applicationClass.class_names : (applicationClass?.class_name ? [applicationClass.class_name] : [])
       if (editId) {
         const { data: savedAttachments } = await supabase
           .from('application_attachments')
@@ -376,7 +376,7 @@ export default function NewApplication() {
           bank_id:             bank?.id || '',
           bank_name:           app.bank_name || '',
           bank_account:        app.bank_account || '',
-          class_name:          className,
+          class_names:         classNames,
           remarks:             app.remarks || '',
         })
         // No outcome note, no existing attachment
@@ -394,7 +394,7 @@ export default function NewApplication() {
           bank_id:             bank?.id || '',
           bank_name:           app.bank_name || '',
           bank_account:        app.bank_account || '',
-          class_name:          className,
+          class_names:         classNames,
           remarks:             app.remarks || '',
         })
         setOutcomeNote(app.outcome_note || '')
@@ -597,7 +597,8 @@ export default function NewApplication() {
         amount_words:      form.amount_words,
         bank_name:         bankName,
         bank_account:      form.bank_account,
-        class_name:        form.class_name || null,
+        class_name:        form.class_names?.join(', ') || null,
+        class_names:       form.class_names || [],
         remarks:           form.remarks,
         status:            asDraft ? 'draft' : 'pending',
         outcome_note:      null,
@@ -723,10 +724,10 @@ export default function NewApplication() {
 
           <div className="form-group">
             <label className="form-label">Apartment / Property <span className="cn">Class</span></label>
-            <select className="form-control" value={form.class_name} onChange={e => set('class_name', e.target.value)}>
-              <option value="">Select Class (optional)</option>
+            <select className="form-control" multiple value={form.class_names || []} onChange={e => set('class_names', Array.from(e.target.selectedOptions, option => option.value))} style={{minHeight:'105px'}}>
               {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
             </select>
+            <p className="form-hint">Select one or more properties (Ctrl/Cmd-click for multiple).</p>
           </div>
 
           {/* Payment Method */}

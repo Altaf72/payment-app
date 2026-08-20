@@ -8,7 +8,12 @@ alter table public.users add constraint users_role_check
   check (role in ('staff','supervisor','gro','manager','finance','ceo','cfo','superadmin'));
 
 alter table public.applications add column if not exists class_name text;
+alter table public.applications add column if not exists class_names text[] not null default '{}';
+update public.applications
+set class_names = array[class_name]
+where class_name is not null and class_name <> '' and cardinality(class_names) = 0;
 create index if not exists applications_class_name_idx on public.applications (class_name);
+create index if not exists applications_class_names_idx on public.applications using gin (class_names);
 
 create or replace function public.current_user_is_superadmin()
 returns boolean language sql security definer set search_path = public as $$
@@ -66,6 +71,24 @@ create policy "Finance manages application classes" on public.application_classe
 using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','superadmin')))
 with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','superadmin')));
 grant select, insert, update, delete on public.application_classes to authenticated;
+
+-- Keep historic display/export text and multi-property selections aligned when
+-- Finance renames an Apartment / Property Class.
+create or replace function public.rename_application_class_on_applications()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.name is distinct from old.name then
+    update public.applications
+    set class_names = array_replace(class_names, old.name, new.name),
+        class_name = array_to_string(array_replace(class_names, old.name, new.name), ', ')
+    where old.name = any(class_names);
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists application_class_rename on public.application_classes;
+create trigger application_class_rename after update of name on public.application_classes
+for each row execute function public.rename_application_class_on_applications();
 
 -- Read-only access to applications submitted by staff assigned to the supervisor.
 drop policy if exists "Supervisors view assigned staff applications" on public.applications;
