@@ -180,13 +180,13 @@ export default function Layout() {
 
         {renderLanguageSwitch()}
 
-        {hasModule('payment_applications') && <>
-        <div className="sidebar-section">{text.applications}</div>
-
         {profile?.role === 'supervisor' && <button className={`sidebar-link ${isActive('/supervisor-dashboard') ? 'active' : ''}`}
           onClick={() => go('/supervisor-dashboard')}>
           <span className="icon">📊</span> Supervisor Dashboard
         </button>}
+
+        {hasModule('payment_applications') && <>
+        <div className="sidebar-section">{text.applications}</div>
 
         <button className={`sidebar-link ${isActive('/new-application') ? 'active' : ''}`}
           onClick={() => go('/new-application')}>

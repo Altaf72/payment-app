@@ -65,7 +65,7 @@ export default function App() {
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<HomeRedirect />} />
         <Route path="my-applications" element={<ModuleRoute moduleKey="payment_applications"><MyApplications /></ModuleRoute>} />
-        <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><ModuleRoute moduleKey="payment_applications"><MyApplications supervisorDashboard /></ModuleRoute></PrivateRoute>} />
+        <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><MyApplications supervisorDashboard /></PrivateRoute>} />
         <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><ModuleRoute moduleKey="payment_applications"><MyApplications supervisorDashboard /></ModuleRoute></PrivateRoute>} />
         <Route path="supervisor-dashboard" element={<PrivateRoute allowedRoles={['supervisor']}><ModuleRoute moduleKey="payment_applications"><MyApplications supervisorDashboard /></ModuleRoute></PrivateRoute>} />
         <Route path="new-application" element={<ModuleRoute moduleKey="payment_applications"><NewApplication /></ModuleRoute>} />

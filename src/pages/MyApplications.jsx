@@ -77,6 +77,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
   const [loading, setLoading]           = useState(true)
   const [loadError, setLoadError]       = useState('')
   const [withdrawing, setWithdrawing]   = useState(null)
+  const [subordinates, setSubordinates] = useState([])
   const loadRequestRef                  = React.useRef(0)
 
   const STORAGE_KEY = 'my_applications_filters'
@@ -99,7 +100,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
     setPage(1)
   }, [search])
 
-  useEffect(() => { load() }, [page, pageSize, search, user?.id, profile?.role])
+  useEffect(() => { load() }, [page, pageSize, search, user?.id, profile?.role, supervisorDashboard])
 
   async function load() {
     if (!user?.id) return
@@ -120,7 +121,25 @@ export default function MyApplications({ supervisorDashboard = false }) {
         setLoading(false)
         return
       }
-      visibleSubmitterIds = [...new Set([user.id, ...(assignments || []).map(row => row.staff_id)])]
+      const staffIds = (assignments || []).map(row => row.staff_id)
+      visibleSubmitterIds = supervisorDashboard ? staffIds : [...new Set([user.id, ...staffIds])]
+      if (staffIds.length > 0) {
+        const { data: staffRows, error: staffError } = await supabase
+          .from('users')
+          .select('id,full_name,email')
+          .in('id', staffIds)
+          .order('full_name')
+        if (staffError) {
+          setLoadError(`Could not load your subordinate list: ${staffError.message}`)
+          setLoading(false)
+          return
+        }
+        setSubordinates(staffRows || [])
+      } else {
+        setSubordinates([])
+      }
+    } else {
+      setSubordinates([])
     }
 
     let query = supabase
@@ -232,6 +251,17 @@ export default function MyApplications({ supervisorDashboard = false }) {
         </div>
       </div>
 
+      {supervisorDashboard && (
+        <div className="card" style={{marginBottom:'18px'}}>
+          <div className="card-header"><h2>My Subordinates</h2><span className="text-muted">{subordinates.length} assigned</span></div>
+          <div className="card-body" style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+            {subordinates.length ? subordinates.map(staff => <div key={staff.id} style={{padding:'7px 10px',border:'1px solid var(--border-2)',borderRadius:'var(--radius-sm)',background:'var(--cream)'}}>
+              <strong style={{display:'block',fontSize:'12px'}}>{staff.full_name}</strong><span className="text-muted text-sm">{staff.email}</span>
+            </div>) : <span className="text-muted">No staff are assigned to you yet. A Super Admin can assign staff in Settings.</span>}
+          </div>
+        </div>
+      )}
+
       <div className="filter-bar">
         <input className="form-control search-input"
           placeholder="Search by ref, reason, company…"
@@ -245,6 +275,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
       </div>
 
       <div className="card">
+        {supervisorDashboard && <div className="card-header"><h2>All Subordinate Applications</h2><span className="text-muted">All statuses and application types</span></div>}
         <div className="table-wrap">
           {loading ? (
             <div className="empty-state"><p>Loading…</p></div>
@@ -268,7 +299,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
                   <th>Reference</th>
                   <th>Company</th>
                   {profile?.role === 'supervisor' && <th>Applicant</th>}
-                  <th>Payment Reason</th>
+                  <th>Application Type</th>
                   <th>Amount (AED)</th>
                   <th>Date</th>
                   <th>Attachments</th>
@@ -292,7 +323,8 @@ export default function MyApplications({ supervisorDashboard = false }) {
                       <td>{app.company_name}</td>
                       {profile?.role === 'supervisor' && <td>{app.submitted_by_name || '—'}</td>}
                       <td style={{maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                        {app.payment_reason}
+                        <div>{app.payment_reason}</div>
+                        <div className="text-muted text-sm">{app.payment_method_name || '—'}</div>
                       </td>
                       <td style={{fontWeight:500}}>{formatCurrency(app.amount)}</td>
                       <td className="text-muted">{formatDate(app.created_at)}</td>

@@ -34,6 +34,7 @@ export default function HolidayHomeReceipts() {
   const [companies, setCompanies] = useState([])
   const [createCompanyIds, setCreateCompanyIds] = useState([])
   const [properties, setProperties] = useState([])
+  const [usersById, setUsersById] = useState({})
   const [form, setForm] = useState(empty)
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
@@ -45,6 +46,8 @@ export default function HolidayHomeReceipts() {
   const [dashboardCompany, setDashboardCompany] = useState('')
   const [dashboardFrom, setDashboardFrom] = useState('')
   const [dashboardTo, setDashboardTo] = useState('')
+  const [dashboardPreparedBy, setDashboardPreparedBy] = useState('')
+  const [sortDirection, setSortDirection] = useState('asc')
 
   const set = (key, value) => setForm(current => ({ ...current, [key]:value }))
   const guests = useMemo(() => (history.guests || []).map(item => {
@@ -53,11 +56,12 @@ export default function HolidayHomeReceipts() {
   }).filter(item => item?.name), [history])
 
   const load = async () => {
-    const [r, c, a, p] = await Promise.all([
+    const [r, c, a, p, users] = await Promise.all([
       supabase.from('holiday_home_receipts').select('*').order('receipt_date', { ascending:false }),
       supabase.from('companies').select('id,name,prefix,holiday_receipt_header_url').eq('active', true),
       supabase.from('user_companies').select('company_id').eq('user_id', user.id),
       supabase.from('cheque_flow_properties').select('property_key,property_unit,entity,display_bedrooms').order('property_key'),
+      supabase.from('users').select('id,full_name'),
     ])
     if (r.error) setError(r.error.message)
     const ids = new Set((a.data || []).map(item => item.company_id))
@@ -68,6 +72,7 @@ export default function HolidayHomeReceipts() {
     setCompanies(c.data || [])
     setCreateCompanyIds([...ids])
     setProperties(p.data || [])
+    setUsersById(Object.fromEntries((users.data || []).map(item => [item.id, item.full_name])))
     if (allowed.length === 1) setForm(current => current.company_id ? current : { ...current, company_id:allowed[0].id })
   }
 
@@ -88,9 +93,15 @@ export default function HolidayHomeReceipts() {
       const matchesCompany = !dashboardCompany || receipt.company_id === dashboardCompany
       const matchesFrom = !dashboardFrom || receipt.receipt_date >= dashboardFrom
       const matchesTo = !dashboardTo || receipt.receipt_date <= dashboardTo
-      return matchesTerm && matchesCompany && matchesFrom && matchesTo
+      const matchesPreparedBy = !dashboardPreparedBy || receipt.created_by === dashboardPreparedBy
+      return matchesTerm && matchesCompany && matchesFrom && matchesTo && matchesPreparedBy
     })
-  }, [rows, properties, companies, dashboardSearch, dashboardCompany, dashboardFrom, dashboardTo])
+      .sort((left, right) => {
+        const leftName = usersById[left.created_by] || ''
+        const rightName = usersById[right.created_by] || ''
+        return leftName.localeCompare(rightName) * (sortDirection === 'asc' ? 1 : -1)
+      })
+  }, [rows, properties, companies, usersById, dashboardSearch, dashboardCompany, dashboardFrom, dashboardTo, dashboardPreparedBy, sortDirection])
 
   const remember = (key, value) => {
     value = String(value || '').trim()
@@ -189,6 +200,6 @@ export default function HolidayHomeReceipts() {
       <label className="form-group">Description<textarea className="form-control" value={form.description} onChange={event => set('description', event.target.value)}/></label><div className="form-row-3">{[['Received By','received_by_name'],['Administrator','administrator_name'],['Accounts','accounts_name'],['Customer','customer_name']].map(([label, key]) => <label className="form-group" key={key}>{label}<input className="form-control" list={`${key}-list`} value={form[key]} onChange={event => set(key, event.target.value)}/><datalist id={`${key}-list`}>{(history[key] || []).map(item => <option key={item} value={item}/>)}</datalist></label>)}</div>
       <button className="btn btn-primary">Save Receipt</button><button type="button" className="btn btn-outline" style={{marginLeft:8}} onClick={() => setOpen(false)}>Cancel</button>
     </div></form>}
-    <div className="card"><div className="card-header"><h2>Receipts</h2><span className="text-muted">{filteredRows.length} shown</span></div><div className="card-body" style={{paddingBottom:0}}><div className="form-row-3"><label className="form-group">Search<input className="form-control" value={dashboardSearch} onChange={event => setDashboardSearch(event.target.value)} placeholder="Receipt, guest, property, ID, description or amount"/></label><label className="form-group">Company<select className="form-control" value={dashboardCompany} onChange={event => setDashboardCompany(event.target.value)}><option value="">All assigned companies</option>{companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Receipt date range<div style={{display:'flex',gap:8}}><input className="form-control" type="date" value={dashboardFrom} onChange={event => setDashboardFrom(event.target.value)}/><input className="form-control" type="date" value={dashboardTo} onChange={event => setDashboardTo(event.target.value)}/></div></label></div><button className="btn btn-outline btn-sm" type="button" onClick={() => { setDashboardSearch(''); setDashboardCompany(''); setDashboardFrom(''); setDashboardTo('') }}>Clear search</button></div><div className="table-wrap"><table><thead><tr><th>Receipt</th><th>Date</th><th>Company</th><th>Guest</th><th>Property</th><th>Nights</th><th>Amount</th><th /></tr></thead><tbody>{filteredRows.map(receipt => <tr key={receipt.id}><td>{receipt.receipt_number}</td><td>{receipt.receipt_date}</td><td>{companies.find(item => item.id === receipt.company_id)?.name || '—'}</td><td>{receipt.received_from}</td><td>{properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key}</td><td>{receipt.nights}</td><td>AED {formatCurrency(Number(receipt.rental_payment) + Number(receipt.security_deposit) + Number(receipt.admin_fee) + Number(receipt.additional_service))}</td><td><button className="btn btn-outline btn-sm" onClick={() => printReceipt(receipt)}>Print / PDF</button></td></tr>)}{!filteredRows.length && <tr><td colSpan="8" className="text-muted" style={{textAlign:'center',padding:24}}>No receipts match the selected search.</td></tr>}</tbody></table></div></div>
+    <div className="card"><div className="card-header"><h2>Receipts</h2><span className="text-muted">{filteredRows.length} shown</span></div><div className="card-body" style={{paddingBottom:0}}><div className="form-row-3"><label className="form-group">Search<input className="form-control" value={dashboardSearch} onChange={event => setDashboardSearch(event.target.value)} placeholder="Receipt, guest, property, ID, description or amount"/></label><label className="form-group">Company<select className="form-control" value={dashboardCompany} onChange={event => setDashboardCompany(event.target.value)}><option value="">All assigned companies</option>{companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Prepared By<select className="form-control" value={dashboardPreparedBy} onChange={event => setDashboardPreparedBy(event.target.value)}><option value="">All preparers</option>{Object.entries(usersById).sort(([,a],[,b]) => a.localeCompare(b)).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label className="form-group">Receipt date range<div style={{display:'flex',gap:8}}><input className="form-control" type="date" value={dashboardFrom} onChange={event => setDashboardFrom(event.target.value)}/><input className="form-control" type="date" value={dashboardTo} onChange={event => setDashboardTo(event.target.value)}/></div></label></div><button className="btn btn-outline btn-sm" type="button" onClick={() => { setDashboardSearch(''); setDashboardCompany(''); setDashboardPreparedBy(''); setDashboardFrom(''); setDashboardTo('') }}>Clear search</button></div><div className="table-wrap"><table><thead><tr><th>Receipt</th><th>Date</th><th>Company</th><th>Guest</th><th>Property</th><th>Nights</th><th>Amount</th><th><button type="button" onClick={() => setSortDirection(current => current === 'asc' ? 'desc' : 'asc')} style={{border:0,background:'transparent',font:'inherit',color:'inherit',cursor:'pointer'}}>Prepared By {sortDirection === 'asc' ? '↑' : '↓'}</button></th><th /></tr></thead><tbody>{filteredRows.map(receipt => <tr key={receipt.id}><td>{receipt.receipt_number}</td><td>{receipt.receipt_date}</td><td>{companies.find(item => item.id === receipt.company_id)?.name || '—'}</td><td>{receipt.received_from}</td><td>{properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key}</td><td>{receipt.nights}</td><td>AED {formatCurrency(Number(receipt.rental_payment) + Number(receipt.security_deposit) + Number(receipt.admin_fee) + Number(receipt.additional_service))}</td><td>{usersById[receipt.created_by] || '—'}</td><td><button className="btn btn-outline btn-sm" onClick={() => printReceipt(receipt)}>Print / PDF</button></td></tr>)}{!filteredRows.length && <tr><td colSpan="9" className="text-muted" style={{textAlign:'center',padding:24}}>No receipts match the selected search.</td></tr>}</tbody></table></div></div>
   </div>
 }

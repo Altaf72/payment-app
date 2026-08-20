@@ -10,6 +10,13 @@ alter table public.users add constraint users_role_check
 alter table public.applications add column if not exists class_name text;
 create index if not exists applications_class_name_idx on public.applications (class_name);
 
+create or replace function public.current_user_is_superadmin()
+returns boolean language sql security definer set search_path = public as $$
+  select exists (select 1 from public.users where id = auth.uid() and role = 'superadmin');
+$$;
+
+grant execute on function public.current_user_is_superadmin() to authenticated;
+
 create table if not exists public.staff_supervisors (
   staff_id uuid not null references public.users(id) on delete cascade,
   supervisor_id uuid not null references public.users(id) on delete cascade,
@@ -18,15 +25,30 @@ create table if not exists public.staff_supervisors (
   check (staff_id <> supervisor_id)
 );
 
+create or replace function public.current_user_supervises(p_staff_id uuid)
+returns boolean language sql security definer set search_path = public as $$
+  select exists (
+    select 1 from public.staff_supervisors
+    where staff_id = p_staff_id and supervisor_id = auth.uid()
+  );
+$$;
+grant execute on function public.current_user_supervises(uuid) to authenticated;
+
 alter table public.staff_supervisors enable row level security;
 drop policy if exists "Admins manage supervisor assignments" on public.staff_supervisors;
 create policy "Admins manage supervisor assignments" on public.staff_supervisors for all to authenticated
-using (exists (select 1 from public.users where id = auth.uid() and role = 'superadmin'))
-with check (exists (select 1 from public.users where id = auth.uid() and role = 'superadmin'));
+using (public.current_user_is_superadmin())
+with check (public.current_user_is_superadmin());
 drop policy if exists "Supervisors read their assignments" on public.staff_supervisors;
 create policy "Supervisors read their assignments" on public.staff_supervisors for select to authenticated
 using (supervisor_id = auth.uid() or staff_id = auth.uid());
 grant select, insert, delete on public.staff_supervisors to authenticated;
+
+-- Allows the Supervisor Dashboard to display names and emails for assigned
+-- staff only (for example, Tim can see testsupv after the assignment is made).
+drop policy if exists "Supervisors view assigned staff profiles" on public.users;
+create policy "Supervisors view assigned staff profiles" on public.users for select to authenticated
+using (public.current_user_supervises(users.id));
 
 create table if not exists public.application_classes (
   id uuid primary key default gen_random_uuid(),
