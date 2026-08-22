@@ -40,6 +40,12 @@ create table if not exists public.holiday_home_receipts (
   updated_at timestamptz not null default now()
 );
 alter table public.holiday_home_receipts add column if not exists property_display text;
+alter table public.holiday_home_receipts add column if not exists status text not null default 'pending' check (status in ('pending','acknowledged','void'));
+alter table public.holiday_home_receipts add column if not exists acknowledged_by uuid references public.users(id);
+alter table public.holiday_home_receipts add column if not exists acknowledged_at timestamptz;
+alter table public.holiday_home_receipts add column if not exists voided_by uuid references public.users(id);
+alter table public.holiday_home_receipts add column if not exists voided_at timestamptz;
+alter table public.holiday_home_receipts add column if not exists void_reason text;
 update public.holiday_home_receipts r
 set property_display = coalesce(p.property_unit, r.property_key)
 from public.cheque_flow_properties p
@@ -61,7 +67,7 @@ end; $$;
 alter table public.holiday_home_receipts enable row level security;
 drop policy if exists "Holiday receipt access" on public.holiday_home_receipts;
 create policy "Holiday receipt access" on public.holiday_home_receipts for select to authenticated using (
-  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','finance','cfo','supervisor') or holiday_home_receipts_enabled))
+  (created_by=auth.uid() or exists (select 1 from public.users where id=auth.uid() and role in ('superadmin','finance','cfo','supervisor','manager')))
   and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
 );
 drop policy if exists "Holiday receipt create" on public.holiday_home_receipts;
@@ -71,9 +77,32 @@ create policy "Holiday receipt create" on public.holiday_home_receipts for inser
 );
 drop policy if exists "Holiday receipt update" on public.holiday_home_receipts;
 create policy "Holiday receipt update" on public.holiday_home_receipts for update to authenticated using (
-  exists (select 1 from public.users where id=auth.uid() and (role in ('superadmin','supervisor') or holiday_home_receipts_enabled))
+  (created_by=auth.uid() or exists (select 1 from public.users where id=auth.uid() and role='finance'))
   and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
 ) with check (updated_by=auth.uid());
+
+-- Enforce the live workflow at database level, not only in the browser.
+create or replace function public.enforce_holiday_receipt_workflow()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare current_role text;
+begin
+  select role into current_role from public.users where id=auth.uid();
+  if current_role='finance' then
+    if new.status='acknowledged' and old.status='pending'
+      and new.acknowledged_by=auth.uid() and new.acknowledged_at is not null
+      and new.voided_by is null and new.voided_at is null and coalesce(new.void_reason,'')=''
+      and (to_jsonb(new) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) = (to_jsonb(old) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) then return new; end if;
+    if new.status='void' and old.status in ('pending','acknowledged')
+      and new.voided_by=auth.uid() and new.voided_at is not null and nullif(trim(new.void_reason),'') is not null
+      and (to_jsonb(new) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) = (to_jsonb(old) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) then return new; end if;
+    raise exception 'Finance may only acknowledge or void a receipt';
+  end if;
+  if new.created_by=auth.uid() and old.status='pending' and new.status='pending' then return new; end if;
+  raise exception 'Only the GRO who created a pending receipt may edit it';
+end; $$;
+drop trigger if exists holiday_receipt_workflow on public.holiday_home_receipts;
+create trigger holiday_receipt_workflow before update on public.holiday_home_receipts
+for each row execute function public.enforce_holiday_receipt_workflow();
 grant select,insert,update on public.holiday_home_receipts to authenticated;
 grant execute on function public.next_holiday_home_receipt_number(uuid) to authenticated;
 

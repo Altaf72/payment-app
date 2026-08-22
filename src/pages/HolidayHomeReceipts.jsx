@@ -37,6 +37,7 @@ export default function HolidayHomeReceipts() {
   const [applicationClasses, setApplicationClasses] = useState([])
   const [usersById, setUsersById] = useState({})
   const [form, setForm] = useState(empty)
+  const [editingId, setEditingId] = useState(null)
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
   const [quick, setQuick] = useState('')
@@ -48,6 +49,7 @@ export default function HolidayHomeReceipts() {
   const [dashboardFrom, setDashboardFrom] = useState('')
   const [dashboardTo, setDashboardTo] = useState('')
   const [dashboardPreparedBy, setDashboardPreparedBy] = useState('')
+  const [dashboardStatus, setDashboardStatus] = useState('')
   const [sortDirection, setSortDirection] = useState('asc')
 
   const set = (key, value) => setForm(current => ({ ...current, [key]:value }))
@@ -86,6 +88,7 @@ export default function HolidayHomeReceipts() {
   const nights = useMemo(() => form.check_in_date && form.check_out_date ? Math.max(0, Math.round((new Date(`${form.check_out_date}T00:00:00`) - new Date(`${form.check_in_date}T00:00:00`)) / 86400000)) : 0, [form.check_in_date, form.check_out_date])
   const total = ['rental_payment', 'security_deposit', 'admin_fee', 'additional_service'].reduce((sum, key) => sum + Number(form[key] || 0), 0)
   const canCreate = ['superadmin','supervisor'].includes(profile?.role) || moduleAccess.includes('holiday_home_receipts') || profile?.holiday_home_receipts_enabled === true
+  const isFinance = profile?.role === 'finance'
   const filteredRows = useMemo(() => {
     const term = dashboardSearch.trim().toLowerCase()
     return rows.filter(receipt => {
@@ -97,14 +100,24 @@ export default function HolidayHomeReceipts() {
       const matchesFrom = !dashboardFrom || receipt.receipt_date >= dashboardFrom
       const matchesTo = !dashboardTo || receipt.receipt_date <= dashboardTo
       const matchesPreparedBy = !dashboardPreparedBy || receipt.created_by === dashboardPreparedBy
-      return matchesTerm && matchesCompany && matchesFrom && matchesTo && matchesPreparedBy
+      const matchesStatus = !dashboardStatus || (receipt.status || 'pending') === dashboardStatus
+      return matchesTerm && matchesCompany && matchesFrom && matchesTo && matchesPreparedBy && matchesStatus
     })
       .sort((left, right) => {
         const leftName = usersById[left.created_by] || ''
         const rightName = usersById[right.created_by] || ''
         return leftName.localeCompare(rightName) * (sortDirection === 'asc' ? 1 : -1)
       })
-  }, [rows, properties, companies, usersById, dashboardSearch, dashboardCompany, dashboardFrom, dashboardTo, dashboardPreparedBy, sortDirection])
+  }, [rows, properties, companies, usersById, dashboardSearch, dashboardCompany, dashboardFrom, dashboardTo, dashboardPreparedBy, dashboardStatus, sortDirection])
+  const reportSummary = useMemo(() => {
+    const sum = list => list.filter(item => item.status !== 'void').reduce((totalAmount, item) => totalAmount + Number(item.rental_payment || 0) + Number(item.security_deposit || 0) + Number(item.admin_fee || 0) + Number(item.additional_service || 0), 0)
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
+    const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - 6)
+    const todayKey = localDateValue(startOfToday), weekKey = localDateValue(startOfWeek)
+    const daily = filteredRows.filter(item => item.receipt_date === todayKey)
+    const weekly = filteredRows.filter(item => item.receipt_date >= weekKey && item.receipt_date <= todayKey)
+    return { daily, weekly, dailyTotal:sum(daily), weeklyTotal:sum(weekly), pending:filteredRows.filter(item => item.status === 'pending').length }
+  }, [filteredRows])
 
   const remember = (key, value) => {
     value = String(value || '').trim()
@@ -129,7 +142,14 @@ export default function HolidayHomeReceipts() {
       const { data } = await supabase.rpc('next_holiday_home_receipt_number', { p_company_id:createCompanies[0].id })
       next.receipt_number = data || ''
     }
-    setForm(next); setNightInput(''); setPropertyDisplay(''); setQuick(''); setError(''); setOpen(true)
+    setForm(next); setEditingId(null); setNightInput(''); setPropertyDisplay(''); setQuick(''); setError(''); setOpen(true)
+  }
+  const openEdit = receipt => {
+    setForm({ ...empty(), ...receipt })
+    setEditingId(receipt.id)
+    setPropertyDisplay(receipt.property_display || properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key)
+    setNightInput(String(receipt.nights ?? ''))
+    setQuick(''); setError(''); setOpen(true)
   }
   const chooseCompany = async id => {
     set('company_id', id); set('property_key', ''); setPropertyDisplay('')
@@ -173,11 +193,27 @@ export default function HolidayHomeReceipts() {
     if (!form.company_id || !form.received_from || !form.property_key || !form.check_in_date || !form.check_out_date || nights < 0) return setError('Enter company, guest, property, check-in and check-out.')
     const selectedProperty = properties.find(item => item.property_key === form.property_key)
     const payload = { ...form, property_display:selectedProperty?.property_unit || propertyDisplay || form.property_key, nights, rental_payment:Number(form.rental_payment || 0), security_deposit:Number(form.security_deposit || 0), admin_fee:Number(form.admin_fee || 0), additional_service:Number(form.additional_service || 0), updated_by:user.id }
-    const { error:saveError } = await supabase.from('holiday_home_receipts').insert({ ...payload, created_by:user.id })
+    const query = editingId
+      ? supabase.from('holiday_home_receipts').update(payload).eq('id', editingId)
+      : supabase.from('holiday_home_receipts').insert({ ...payload, created_by:user.id })
+    const { error:saveError } = await query
     if (saveError) return setError(saveError.message)
     rememberGuest()
     ;['received_by_name', 'administrator_name', 'accounts_name', 'customer_name'].forEach(key => remember(key, form[key]))
-    setOpen(false); load()
+    setOpen(false); setEditingId(null); load()
+  }
+  const acknowledge = async receipt => {
+    if (!confirm(`Acknowledge ${receipt.receipt_number} after physical fund verification? It will be locked for the GRO.`)) return
+    const { error:actionError } = await supabase.from('holiday_home_receipts').update({ status:'acknowledged', acknowledged_by:user.id, acknowledged_at:new Date().toISOString(), updated_by:user.id }).eq('id', receipt.id)
+    if (actionError) return setError(actionError.message)
+    load()
+  }
+  const voidReceipt = async receipt => {
+    const reason = prompt(`Void ${receipt.receipt_number}. A void reason is required:`)
+    if (!reason?.trim()) return
+    const { error:actionError } = await supabase.from('holiday_home_receipts').update({ status:'void', voided_by:user.id, voided_at:new Date().toISOString(), void_reason:reason.trim(), updated_by:user.id }).eq('id', receipt.id)
+    if (actionError) return setError(actionError.message)
+    load()
   }
   const printReceipt = async receipt => {
     const property = properties.find(item => item.property_key === receipt.property_key) || { property_unit:receipt.property_display }
@@ -205,8 +241,11 @@ export default function HolidayHomeReceipts() {
       <div className="form-row-3"><label className="form-group">Apartment / Property (Class)<select className="form-control" required value={propertyDisplay} onChange={event => chooseProperty(event.target.value)}><option value="">Select apartment / property</option>{applicationClasses.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select><span className="form-hint">Uses the Application Classes list.</span></label><label className="form-group">Check-in<input className="form-control" type="date" value={form.check_in_date} onChange={event => set('check_in_date', event.target.value)}/></label><label className="form-group">Check-out / Nights<input className="form-control" type="date" value={form.check_out_date} onChange={event => set('check_out_date', event.target.value)}/><input className="form-control" type="number" min="0" placeholder="Number of nights" value={nightInput} onChange={event => setNights(event.target.value)}/><span className="form-hint">{nights} night(s)</span></label></div>
       <div className="form-row-3">{[['Rental Payment','rental_payment'],['Security Deposit','security_deposit'],['Admin Fee','admin_fee'],['Additional Service','additional_service']].map(([label, key]) => <label className="form-group" key={key}>{label}<input className="form-control" type="number" min="0" value={form[key]} onChange={event => set(key, event.target.value)}/></label>)}<div className="form-group"><span className="form-label">Total</span><div className="form-control">AED {formatCurrency(total)}</div></div></div>
       <label className="form-group">Description<textarea className="form-control" value={form.description} onChange={event => set('description', event.target.value)}/></label><div className="form-row-3">{[['Received By','received_by_name'],['Administrator','administrator_name'],['Accounts','accounts_name'],['Customer','customer_name']].map(([label, key]) => <label className="form-group" key={key}>{label}<input className="form-control" list={`${key}-list`} value={form[key]} onChange={event => set(key, event.target.value)}/><datalist id={`${key}-list`}>{(history[key] || []).map(item => <option key={item} value={item}/>)}</datalist></label>)}</div>
-      <button className="btn btn-primary">Save Receipt</button><button type="button" className="btn btn-outline" style={{marginLeft:8}} onClick={() => setOpen(false)}>Cancel</button>
+      <button className="btn btn-primary">{editingId ? 'Save Changes' : 'Save Receipt'}</button><button type="button" className="btn btn-outline" style={{marginLeft:8}} onClick={() => { setOpen(false); setEditingId(null) }}>Cancel</button>
     </div></form>}
+    <div className="form-row-3" style={{marginBottom:16}}><div className="card"><div className="card-body"><b>Today</b><div>{reportSummary.daily.length} receipts</div><strong>AED {formatCurrency(reportSummary.dailyTotal)}</strong></div></div><div className="card"><div className="card-body"><b>Last 7 days</b><div>{reportSummary.weekly.length} receipts</div><strong>AED {formatCurrency(reportSummary.weeklyTotal)}</strong></div></div><div className="card"><div className="card-body"><b>Awaiting Finance acknowledgement</b><div>{reportSummary.pending} receipt(s)</div></div></div></div>
+    {isFinance && rows.some(receipt => (receipt.status || 'pending') === 'pending') && <div className="card" style={{marginBottom:16}}><div className="card-header"><h2>Finance acknowledgement queue</h2></div><div className="card-body">{rows.filter(receipt => (receipt.status || 'pending') === 'pending').map(receipt => <div key={receipt.id} style={{display:'flex',gap:8,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}><b>{receipt.receipt_number}</b><span>{receipt.received_from}</span><span className="text-muted">AED {formatCurrency(Number(receipt.rental_payment)+Number(receipt.security_deposit)+Number(receipt.admin_fee)+Number(receipt.additional_service))}</span><button className="btn btn-primary btn-sm" onClick={() => acknowledge(receipt)}>Acknowledge</button><button className="btn btn-outline btn-sm" onClick={() => voidReceipt(receipt)}>Void</button></div>)}</div></div>}
+    {rows.some(receipt => receipt.created_by === user.id && (receipt.status || 'pending') === 'pending') && <div className="card" style={{marginBottom:16}}><div className="card-header"><h2>My editable receipts</h2></div><div className="card-body">{rows.filter(receipt => receipt.created_by === user.id && (receipt.status || 'pending') === 'pending').map(receipt => <div key={receipt.id} style={{display:'flex',gap:8,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}><b>{receipt.receipt_number}</b><span>{receipt.received_from}</span><button className="btn btn-outline btn-sm" onClick={() => openEdit(receipt)}>Edit</button><button className="btn btn-outline btn-sm" onClick={() => printReceipt(receipt)}>Print / PDF</button></div>)}</div></div>}
     <div className="card"><div className="card-header"><h2>Receipts</h2><span className="text-muted">{filteredRows.length} shown</span></div><div className="card-body" style={{paddingBottom:0}}><div className="form-row-3"><label className="form-group">Search<input className="form-control" value={dashboardSearch} onChange={event => setDashboardSearch(event.target.value)} placeholder="Receipt, guest, property, ID, description or amount"/></label><label className="form-group">Company<select className="form-control" value={dashboardCompany} onChange={event => setDashboardCompany(event.target.value)}><option value="">All assigned companies</option>{companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Prepared By<select className="form-control" value={dashboardPreparedBy} onChange={event => setDashboardPreparedBy(event.target.value)}><option value="">All preparers</option>{Object.entries(usersById).sort(([,a],[,b]) => a.localeCompare(b)).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label className="form-group">Receipt date range<div style={{display:'flex',gap:8}}><input className="form-control" type="date" value={dashboardFrom} onChange={event => setDashboardFrom(event.target.value)}/><input className="form-control" type="date" value={dashboardTo} onChange={event => setDashboardTo(event.target.value)}/></div></label></div><button className="btn btn-outline btn-sm" type="button" onClick={() => { setDashboardSearch(''); setDashboardCompany(''); setDashboardPreparedBy(''); setDashboardFrom(''); setDashboardTo('') }}>Clear search</button></div><div className="table-wrap"><table><thead><tr><th>Receipt</th><th>Date</th><th>Company</th><th>Guest</th><th>Property</th><th>Nights</th><th>Amount</th><th><button type="button" onClick={() => setSortDirection(current => current === 'asc' ? 'desc' : 'asc')} style={{border:0,background:'transparent',font:'inherit',color:'inherit',cursor:'pointer'}}>Prepared By {sortDirection === 'asc' ? '↑' : '↓'}</button></th><th /></tr></thead><tbody>{filteredRows.map(receipt => <tr key={receipt.id}><td>{receipt.receipt_number}</td><td>{receipt.receipt_date}</td><td>{companies.find(item => item.id === receipt.company_id)?.name || '—'}</td><td>{receipt.received_from}</td><td>{properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key}</td><td>{receipt.nights}</td><td>AED {formatCurrency(Number(receipt.rental_payment) + Number(receipt.security_deposit) + Number(receipt.admin_fee) + Number(receipt.additional_service))}</td><td>{usersById[receipt.created_by] || '—'}</td><td><button className="btn btn-outline btn-sm" onClick={() => printReceipt(receipt)}>Print / PDF</button></td></tr>)}{!filteredRows.length && <tr><td colSpan="9" className="text-muted" style={{textAlign:'center',padding:24}}>No receipts match the selected search.</td></tr>}</tbody></table></div></div>
   </div>
 }

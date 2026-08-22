@@ -118,7 +118,7 @@ export function AuthProvider({ children }) {
     moduleAccess.includes(moduleKey) ||
     (moduleKey === 'payment_applications' && profile?.role === 'supervisor') ||
     (moduleKey === 'payment_applications' && profile?.role === 'supervisor') ||
-    (moduleKey === 'holiday_home_receipts' && ['finance','cfo','supervisor'].includes(profile?.role)) ||
+    (moduleKey === 'holiday_home_receipts' && ['finance','cfo','supervisor','manager'].includes(profile?.role)) ||
     (moduleKey === 'holiday_home_receipts' && profile?.holiday_home_receipts_enabled === true)
 
   return (

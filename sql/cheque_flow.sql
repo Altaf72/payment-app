@@ -10,6 +10,7 @@ create table if not exists public.cheque_flow_entries (
   entity text,
   due_date date not null,
   cleared_date date,
+  is_undated boolean not null default false,
   property_name text,
   unit_name text,
   counterparty text not null,
@@ -33,6 +34,7 @@ alter table public.cheque_flow_entries add column if not exists entity text;
 alter table public.cheque_flow_entries add column if not exists recurrence_frequency text;
 alter table public.cheque_flow_entries add column if not exists payment_mode text;
 alter table public.cheque_flow_entries add column if not exists source_status text;
+alter table public.cheque_flow_entries add column if not exists is_undated boolean not null default false;
 create unique index if not exists cheque_flow_source_import_key_idx on public.cheque_flow_entries(source_import_key);
 create index if not exists cheque_flow_due_date_idx on public.cheque_flow_entries(due_date);
 create index if not exists cheque_flow_status_idx on public.cheque_flow_entries(status);
@@ -230,18 +232,18 @@ begin
 
   insert into public.cheque_flow_entries (
     direction, cheque_no, source_import_key, property_key, entity, due_date,
-    cleared_date, property_name, unit_name, counterparty, bank_name, category,
+    cleared_date, is_undated, property_name, unit_name, counterparty, bank_name, category,
     payment_mode, recurrence_frequency, source_status, amount, currency, status, notes,
     created_by, updated_by
   )
   select coalesce(x.direction, 'payable'), x.cheque_no, x.source_import_key,
-    x.property_key, x.entity, x.due_date, x.cleared_date, x.property_name,
-    x.unit_name, x.counterparty, x.bank_name, x.category,
+    x.property_key, x.entity, x.due_date, x.cleared_date, coalesce(x.is_undated, false),
+    x.property_name, x.unit_name, x.counterparty, x.bank_name, x.category,
     x.payment_mode, x.recurrence_frequency, x.source_status, x.amount, coalesce(x.currency, 'AED'),
     coalesce(x.status, 'pending'), x.notes, v_user_id, v_user_id
   from jsonb_to_recordset(coalesce(p_entries, '[]'::jsonb)) as x(
     direction text, cheque_no text, source_import_key text, property_key text,
-    entity text, due_date date, cleared_date date, property_name text,
+    entity text, due_date date, cleared_date date, is_undated boolean, property_name text,
     unit_name text, counterparty text, bank_name text, category text,
     payment_mode text, recurrence_frequency text, source_status text, amount numeric,
     currency text, status text, notes text

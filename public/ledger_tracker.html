@@ -155,10 +155,19 @@ main{flex:1;padding:18px 22px 40px;max-width:1400px;width:100%;margin:0 auto}
 
 /* ---------- cards / dashboard ---------- */
 .cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.dashboard-search{display:flex;gap:8px;align-items:center;margin:0 0 14px;padding:11px 14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-m)}
+.dashboard-search input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:8px 10px;background:var(--surface-2);font:inherit}
+.search-result-row{display:block;width:100%;text-align:left;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin:0 0 8px;color:var(--ink);font:inherit;cursor:pointer}
+.search-result-row:hover{background:var(--surface-2);border-color:var(--brand)}
+.search-result-row .result-title{font-weight:700}.search-result-row .result-meta{display:block;color:var(--ink-soft);font-size:12px;margin-top:3px}
 .stat-card{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-l);
   padding:16px 16px 14px;box-shadow:var(--shadow-1);
 }
+.stat-card.stat-card-control{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit}
+.stat-card.stat-card-control:hover{background:var(--surface-2);border-color:var(--brand)}
+.stat-card.stat-card-control.active{background:var(--brand-soft);border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
+.stat-card.stat-card-control.active .sub::after{content:" · click again to clear";font-weight:700;color:var(--brand-dark)}
 .stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-faint);font-weight:700}
 .stat-card .value{font-family:var(--font-mono);font-size:26px;font-weight:600;margin-top:6px;color:var(--ink)}
 .stat-card .sub{font-size:12px;color:var(--ink-soft);margin-top:3px}
@@ -248,6 +257,7 @@ td.amt .cur{color:var(--ink-faint);font-size:11px;margin-right:2px}
 }
 .cell-link:hover{text-decoration:underline}
 .cell-sub{display:block;font-size:11.5px;color:var(--ink-faint);margin-top:1px;font-weight:400}
+.cell-description{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chq-box{
   font-family:var(--font-mono);font-size:12px;border:1px solid var(--line);border-radius:4px;
   padding:2px 6px;background:var(--surface-2);letter-spacing:.5px;display:inline-block;
@@ -477,7 +487,7 @@ tr.row-alert-hold:hover,tr.row-alert-returned:hover,tr.row-alert-upcoming:hover{
 
 /* ---------------- Report view (property list + chronological ledger) ---------------- */
 .report-layout{display:flex;align-items:stretch;height:calc(100vh - 230px);min-height:420px;max-height:780px;overflow:hidden}
-.report-left{flex:0 0 35%;max-width:35%;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;min-height:0}
+.report-left{flex:0 0 25%;max-width:25%;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;min-height:0}
 .report-right{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
 .report-left-head{padding:14px 16px 10px;border-bottom:1px solid var(--line-soft);flex:none}
 .report-left-head h2{font-size:15px;margin-bottom:8px}
@@ -539,6 +549,9 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
 .cal-badge-hold{background:var(--st-hold-soft);color:var(--st-hold)}
 .cal-badge-upcoming{background:var(--st-upcoming-soft);color:var(--st-upcoming)}
 .cal-badge-returned{background:var(--st-returned-soft);color:var(--st-returned);text-decoration:line-through}
+.btn-cal-today{background:var(--clay);border-color:var(--clay);color:#fff;font-weight:800}
+.btn-cal-today:hover{background:#9F2C20;border-color:#9F2C20;color:#fff}
+.cal-month-label-top.is-current-month{background:var(--clay);color:#fff;border-radius:7px;padding:5px 7px;margin:-5px -7px 4px}
 
 @media (max-width:820px){
   .report-layout{flex-direction:column}
@@ -591,6 +604,7 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
   <main>
     <!-- ============ DASHBOARD ============ -->
     <section class="view active" id="view-dashboard">
+      <div class="dashboard-search"><input type="search" id="dashboardGlobalSearch" placeholder="Find a cheque or document: number, payee/drawee, property, description, amount…"><button class="btn btn-primary" type="button" id="dashboardGlobalSearchBtn">Search</button></div>
       <div class="cards-grid" id="dashCards"></div>
       <div class="panel">
         <div class="panel-head"><h2>Status breakdown</h2><span class="hint">by cheque count</span></div>
@@ -664,7 +678,7 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
           <h2>Calendar</h2>
           <div class="row-flex" style="gap:10px;align-items:center">
             <span class="hint" id="calSummaryHint"></span>
-            <button class="btn btn-sm" id="btnCalToday" title="Bring the current month into view">Today</button>
+            <button class="btn btn-sm btn-cal-today" id="btnCalToday" title="Bring the current month into view">Today</button>
             <button class="btn btn-sm" id="btnCalToggleControls">Hide controls</button>
           </div>
         </div>
@@ -789,11 +803,12 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
             <input type="number" id="issueAmount" min="0" step="0.01" required>
           </div>
           <div class="field">
-            <label class="req">Start date</label>
+            <label>Start date</label>
             <div class="date-pick-wrap">
               <button type="button" class="date-pick-btn" data-for="issueStartDate"><span class="txt">Pick date</span><span class="ic">📅</span></button>
-              <input type="date" id="issueStartDate" required>
+              <input type="date" id="issueStartDate">
             </div>
+            <span class="small-muted">Not required for an undated security cheque.</span>
           </div>
           <div class="field">
             <label class="req">Recurrence</label>
@@ -810,6 +825,10 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
           <div class="field">
             <label>Status</label>
             <select id="issueStatus"></select>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="issueUndatedSecurity"> Undated security cheque</label>
+            <span class="small-muted">Records the amount against the property without placing it in the dated payment schedule.</span>
           </div>
         </form>
         <div class="form-actions">
@@ -960,7 +979,7 @@ var STATE = {
   setupLists: { status:[], entity:[], paymentPurpose:[], paymentMode:[], recurrenceFrequency:[] }
 };
 
-var CHEQUE_FIELDS = ["chequeDate","amount","entity","direction","propertyKey","counterparty","description","paymentPurpose","paymentMode","recurrenceFrequency","chequeNo","status"];
+var CHEQUE_FIELDS = ["chequeDate","clearedDate","isUndated","amount","entity","direction","propertyKey","counterparty","description","paymentPurpose","paymentMode","recurrenceFrequency","chequeNo","status"];
 var PROPERTY_FIELDS = ["propertyKey","recordType","propertyUnit","entity","payeeOwner","contractStart","contractEnd","annualRent","totalInstallments","propertyStatus","ownerNationality","managementType"];
 var DEPOSIT_FIELDS = ["propertyKey","rentalDeposit","dewaDeposit","chillerDeposit","gasDeposit","otherDeposit","remark"];
 
@@ -1056,6 +1075,9 @@ function loadSeed(){
   STATE.setupLists.recurrenceFrequency = REQUIRED_RECURRENCE.concat(
     STATE.setupLists.recurrenceFrequency.filter(function(v){ return REQUIRED_RECURRENCE.indexOf(v)===-1; })
   );
+  if(STATE.setupLists.paymentPurpose.indexOf("Security Cheque") === -1){
+    STATE.setupLists.paymentPurpose.push("Security Cheque");
+  }
 }
 
 function normalizeRecord(r, fields){
@@ -1166,13 +1188,32 @@ function addDays(date, n){
 // rather than discarded, so we never silently destroy data.
 function normalizeDateValue(v){
   if(v === "" || v === undefined || v === null) return "";
-  if(v instanceof Date) return isNaN(v) ? "" : toISO(v);
-  if(typeof v === "number" && isFinite(v)){
-    var fromSerial = new Date(Math.round((v - 25569) * 86400 * 1000));
-    return isNaN(fromSerial) ? String(v) : toISO(fromSerial);
+  // SheetJS Date objects represent an Excel calendar day at UTC midnight.
+  // Using local getters here can shift the day for users west of UTC.
+  if(v instanceof Date){
+    if(isNaN(v)) return "";
+    return v.getUTCFullYear()+"-"+("0"+(v.getUTCMonth()+1)).slice(-2)+"-"+("0"+v.getUTCDate()).slice(-2);
   }
+  if(typeof v === "number" && isFinite(v)){
+    // Never run Excel serial dates through a browser timezone. SheetJS's
+    // parser returns the original calendar components exactly as Excel shows.
+    if(window.XLSX && XLSX.SSF && XLSX.SSF.parse_date_code){
+      var parts = XLSX.SSF.parse_date_code(v);
+      if(parts && parts.y && parts.m && parts.d) return parts.y+"-"+("0"+parts.m).slice(-2)+"-"+("0"+parts.d).slice(-2);
+    }
+    var fromSerial = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return isNaN(fromSerial) ? String(v) : fromSerial.getUTCFullYear()+"-"+("0"+(fromSerial.getUTCMonth()+1)).slice(-2)+"-"+("0"+fromSerial.getUTCDate()).slice(-2);
+  }
+  var text = String(v).trim();
+  var textualDate = text.match(/^(\d{1,2})[\/-]([A-Za-z]{3,})[\/-](\d{4})$/);
+  if(textualDate){
+    var monthIndex = MONTH_ABBR.indexOf(textualDate[2].slice(0,3).toLowerCase());
+    if(monthIndex !== -1) return textualDate[3]+"-"+("0"+(monthIndex+1)).slice(-2)+"-"+("0"+textualDate[1]).slice(-2);
+  }
+  var numericDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if(numericDate) return numericDate[3]+"-"+("0"+numericDate[2]).slice(-2)+"-"+("0"+numericDate[1]).slice(-2);
   var parsed = parseDate(v);
-  return parsed ? toISO(parsed) : String(v).trim();
+  return parsed ? toISO(parsed) : text;
 }
 function fmtMoney(v){
   var n = parseFloat(v);
@@ -1405,7 +1446,7 @@ function renderLedgerTable(container, records, options){
     }
 
     var catMain = rec.paymentPurpose || "—";
-    var catSub = "";
+    var catSub = options.showDescription && rec.description ? '<span class="cell-sub cell-description" title="'+esc(rec.description)+'">'+esc(rec.description)+'</span>' : "";
 
     var days = A.daysFromToday(rec.chequeDate);
     var overdue = days !== null && days < 0 && A.isUnpaidStatus(rec.status);
@@ -1418,6 +1459,7 @@ function renderLedgerTable(container, records, options){
 
     var badgeCls = A.statusBadgeClass(rec.status);
     var bucket = A.statusBucketLabel(rec.status);
+    var clearedDateLabel = rec.clearedDate ? '<span class="cell-sub">'+esc(A.fmtDateDisplay(rec.clearedDate))+'</span>' : '';
 
     var alertClass = "";
     if(options.rowAlertColors){
@@ -1449,11 +1491,11 @@ function renderLedgerTable(container, records, options){
           : '<span class="cell-primary">'+esc(propName)+'</span>') +
         dirTag +
         (propSub?'<span class="cell-sub">'+esc(propSub)+'</span>':'')+'</td>' +
-      '<td><span class="cell-primary">'+esc(catMain)+'</span>'+(catSub?'<span class="cell-sub">'+esc(catSub)+'</span>':'')+'</td>' +
+      '<td><span class="cell-primary">'+esc(catMain)+'</span>'+catSub+'</td>' +
       '<td><span class="chq-box">'+esc(rec.chequeNo||"—")+'</span></td>' +
       '<td>'+esc(A.fmtDateDisplay(rec.chequeDate))+dateFlag+'</td>' +
       '<td class="amt"><span class="cur">AED</span>'+esc(A.fmtMoney(rec.amount))+'</td>' +
-      '<td><span class="badge '+badgeCls+'">'+esc(bucket)+'</span><span class="cell-sub">'+esc(rec.status||"—")+'</span></td>' +
+      '<td><span class="badge '+badgeCls+'">'+esc(bucket)+'</span><span class="cell-sub">'+esc(rec.status||"—")+'</span>'+clearedDateLabel+'</td>' +
       '<td>'+actionsHtml+'</td>' +
       '</tr>';
   }).join("");
@@ -1511,14 +1553,26 @@ var esc = A.esc;
 
 /* ---------------- shared cheque row actions (used by every table) ---------------- */
 function chequePrimaryAction(rec, onChange){
-  if(!A.isUnpaidStatus(rec.status)) return null;
   var isReceivable = rec.direction === "Receivable";
+  var alreadyCleared = ["paid/cleared","cash"].indexOf(A.norm(rec.status)) !== -1;
+  if(!A.isUnpaidStatus(rec.status) && !alreadyCleared) return null;
   return {
-    label: isReceivable ? "Mark deposited" : "Mark paid",
+    label: alreadyCleared ? (rec.clearedDate ? "Edit paid date" : "Set paid date") : (isReceivable ? "Mark deposited" : "Mark paid"),
     onClick: function(){
-      rec.status = "Paid/Cleared";
-      A.toast("Marked \""+(rec.chequeNo||rec.propertyKey||"cheque")+"\" as "+(isReceivable?"deposited/cleared":"Paid/Cleared")+".", "ok");
-      onChange && onChange();
+      var actionLabel = isReceivable ? "Deposited / cleared date" : "Paid / cleared date";
+      A.openModal(alreadyCleared ? "Set paid / cleared date" : (isReceivable ? "Mark cheque deposited" : "Mark cheque paid"),
+        '<div class="field"><label class="req">'+actionLabel+'</label><input type="date" id="clearChequeDate" value="'+esc(rec.clearedDate || rec.chequeDate || A.toISO(new Date()))+'" required><span class="small-muted">Defaults to the transaction date and can be changed before confirming.</span></div>' +
+        '<div class="form-actions"><button class="btn" id="clearChequeCancel" type="button">Cancel</button><button class="btn btn-primary" id="clearChequeSave" type="button">Confirm</button></div>');
+      document.getElementById("clearChequeCancel").addEventListener("click", A.closeModal);
+      document.getElementById("clearChequeSave").addEventListener("click", function(){
+        var clearedDate = document.getElementById("clearChequeDate").value;
+        if(!clearedDate){ A.toast("Enter the paid / cleared date.", "err"); return; }
+        if(!alreadyCleared) rec.status = "Paid/Cleared";
+        rec.clearedDate = clearedDate;
+        A.closeModal();
+        A.toast(alreadyCleared ? "Paid / cleared date saved." : ("Marked \""+(rec.chequeNo||rec.propertyKey||"cheque")+"\" as "+(isReceivable?"deposited/cleared":"Paid/Cleared")+"."), "ok");
+        onChange && onChange();
+      });
     }
   };
 }
@@ -1559,7 +1613,7 @@ function chequeFormFieldsHtml(rec){
       '</select></div>' +
       '<div class="field"><label class="req">Cheque date</label>' +
         '<div class="date-pick-wrap"><button type="button" class="date-pick-btn" data-for="cf_date"><span class="txt">'+(rec.chequeDate?esc(A.fmtDateDisplay(rec.chequeDate)):"Pick date")+'</span><span class="ic">📅</span></button>' +
-        '<input type="date" id="cf_date" value="'+esc(rec.chequeDate||"")+'" required></div></div>' +
+        '<input type="date" id="cf_date" value="'+esc(rec.chequeDate||"")+'"></div><label class="small-muted"><input type="checkbox" id="cf_isUndated" '+(rec.isUndated?'checked':'')+'> Undated security cheque</label></div>' +
       '<div class="field"><label class="req">Amount</label><input type="number" id="cf_amount" min="0" step="0.01" value="'+esc(rec.amount||"")+'" required></div>' +
       '<div class="field"><label>Entity</label><select id="cf_entity"><option value="">—</option>'+opts(sl.entity, rec.entity)+'</select></div>' +
       '<div class="field" style="position:relative"><label>Property key</label><input type="search" id="cf_propertyKey" autocomplete="off" placeholder="Search key, property, owner or description" value="'+esc(rec.propertyKey||"")+'"><div id="cf_propertyMatches" class="cf-property-matches"></div><span class="small-muted">Start typing to find an existing property, or add a new key.</span></div>' +
@@ -1570,6 +1624,7 @@ function chequeFormFieldsHtml(rec){
       '<div class="field"><label>Recurrence</label><select id="cf_recurrence"><option value="">—</option>'+opts(sl.recurrenceFrequency, rec.recurrenceFrequency)+'</select></div>' +
       '<div class="field"><label>Cheque no.</label><input type="text" id="cf_chequeNo" value="'+esc(rec.chequeNo||"")+'"></div>' +
       '<div class="field"><label class="req">Status</label><select id="cf_status" required><option value="">—</option>'+opts(sl.status, rec.status)+'</select></div>' +
+      '<div class="field"><label>Paid / cleared date</label><input type="date" id="cf_clearedDate" value="'+esc(rec.clearedDate||"")+'"><span class="small-muted">Use when payment has been cleared or deposited.</span></div>' +
     '</div>';
 }
 
@@ -1619,7 +1674,7 @@ function openChequeForm(existingRec, onSave, initial){
     var add = document.getElementById("cf_addNewProperty");
     if(add) add.addEventListener("click", function(){
       var seed={propertyKey:keyInput.value.trim(),propertyUnit:keyInput.value.trim(),recordType:"Property"};
-      var draft={chequeDate:document.getElementById("cf_date").value,amount:document.getElementById("cf_amount").value,direction:document.getElementById("cf_direction").value,entity:document.getElementById("cf_entity").value,propertyKey:seed.propertyKey,counterparty:document.getElementById("cf_counterparty").value,description:document.getElementById("cf_description").value,paymentPurpose:document.getElementById("cf_purpose").value,paymentMode:document.getElementById("cf_paymentMode").value,recurrenceFrequency:document.getElementById("cf_recurrence").value,chequeNo:document.getElementById("cf_chequeNo").value,status:document.getElementById("cf_status").value};
+      var draft={chequeDate:document.getElementById("cf_date").value,isUndated:document.getElementById("cf_isUndated").checked,amount:document.getElementById("cf_amount").value,direction:document.getElementById("cf_direction").value,entity:document.getElementById("cf_entity").value,propertyKey:seed.propertyKey,counterparty:document.getElementById("cf_counterparty").value,description:document.getElementById("cf_description").value,paymentPurpose:document.getElementById("cf_purpose").value,paymentMode:document.getElementById("cf_paymentMode").value,recurrenceFrequency:document.getElementById("cf_recurrence").value,chequeNo:document.getElementById("cf_chequeNo").value,status:document.getElementById("cf_status").value};
       A.openPropertyForm(null,function(){ var created=A.STATE.properties.find(function(prop){return A.norm(prop.propertyKey)===A.norm(seed.propertyKey);}); if(created){ draft.propertyKey=created.propertyKey; if(!draft.entity) draft.entity=created.entity||""; if(!draft.counterparty) draft.counterparty=created.payeeOwner||""; if(!draft.description) draft.description=created.propertyUnit||""; } openChequeForm(null,onSave,draft); },seed);
     });
   }
@@ -1628,14 +1683,16 @@ function openChequeForm(existingRec, onSave, initial){
   document.getElementById("cf_cancel").addEventListener("click", A.closeModal);
   document.getElementById("cf_save").addEventListener("click", function(){
     var date = document.getElementById("cf_date").value;
+    var isUndated = document.getElementById("cf_isUndated").checked;
     var amount = document.getElementById("cf_amount").value;
     var status = document.getElementById("cf_status").value;
-    if(!date || amount==="" || !status){
-      A.toast("Cheque date, amount and status are required.", "err");
+    if((!date && !isUndated) || amount==="" || !status){
+      A.toast("Cheque date (unless undated security), amount and status are required.", "err");
       return;
     }
     var rec = existingRec || A.withId({});
-    rec.chequeDate = date;
+    rec.chequeDate = isUndated ? "" : date;
+    rec.isUndated = isUndated;
     rec.amount = amount;
     rec.direction = document.getElementById("cf_direction").value || "Payable";
     rec.entity = document.getElementById("cf_entity").value;
@@ -1647,6 +1704,7 @@ function openChequeForm(existingRec, onSave, initial){
     rec.recurrenceFrequency = document.getElementById("cf_recurrence").value;
     rec.chequeNo = document.getElementById("cf_chequeNo").value.trim();
     rec.status = status;
+    rec.clearedDate = document.getElementById("cf_clearedDate").value;
     if(!existingRec) A.STATE.cheques.push(rec);
     A.toast(isEdit ? "Cheque updated." : "Cheque added.", "ok");
     A.closeModal();
@@ -1746,9 +1804,65 @@ var BUCKET_COLORS = {
   "Returned": "var(--clay)",
   "Unset": "var(--ink-faint)"
 };
+var dashboardFilter = null;
+var dashboardSelections = { attention: new Set(), deposits: new Set() };
+
+function dashboardSelectionSummary(records, selection){
+  var selected = records.filter(function(rec){ return selection.has(rec._id); });
+  var amount = selected.reduce(function(sum, rec){ var value = parseFloat(rec.amount); return sum + (isNaN(value) ? 0 : value); }, 0);
+  return { count:selected.length, amount:amount };
+}
+function renderDashboardSelectionHint(element, baseText, records, selection, clearId){
+  var summary = dashboardSelectionSummary(records, selection);
+  if(!summary.count){ element.textContent = baseText; return; }
+  element.innerHTML = esc(baseText) + ' · <strong>'+summary.count+' selected · AED '+esc(A.fmtMoney(summary.amount))+'</strong> <button type="button" class="btn btn-sm" id="'+clearId+'">Clear selection</button>';
+  document.getElementById(clearId).addEventListener("click", function(){ selection.clear(); renderDashboard(); });
+}
+
+function openDashboardSearch(){
+  var input = document.getElementById("dashboardGlobalSearch");
+  var query = (input && input.value || "").trim().toLowerCase();
+  if(!query){ A.toast("Enter a cheque number, name, property, description or amount to search.", "err"); return; }
+  var results = A.STATE.cheques.filter(function(rec){
+    var property = A.findPropertyForCheque(rec);
+    var searchable = [
+      rec.chequeNo, rec.propertyKey, rec.counterparty, rec.description,
+      rec.paymentPurpose, rec.paymentMode, rec.entity, rec.amount,
+      A.fmtMoney(rec.amount), rec.status,
+      property && property.propertyUnit, property && property.payeeOwner
+    ].filter(function(value){ return value !== undefined && value !== null; }).join(" ").toLowerCase();
+    return searchable.indexOf(query) !== -1;
+  }).sort(function(a,b){ return (A.parseDate(b.chequeDate)||0) - (A.parseDate(a.chequeDate)||0); });
+  var body;
+  if(!results.length){
+    body = '<div class="empty-state"><div class="big">No matching transactions</div><div>Try a cheque/reference number, drawer or payee name, property, description, or amount.</div></div>';
+  } else {
+    body = '<p class="small-muted" style="margin-top:0">'+results.length+' matching transaction(s). Select a result to review or edit it.</p>' + results.slice(0,100).map(function(rec){
+      var property = A.findPropertyForCheque(rec);
+      var name = property ? (property.propertyUnit || property.propertyKey) : (rec.propertyKey || rec.description || "Unassigned");
+      var secondLine = [rec.chequeNo ? "Ref: "+rec.chequeNo : "", rec.counterparty, rec.description].filter(Boolean).join(" · ");
+      return '<button type="button" class="search-result-row" data-search-cheque="'+esc(rec._id)+'"><span class="result-title">'+esc(name)+' · AED '+esc(A.fmtMoney(rec.amount))+'</span><span class="result-meta">'+esc([A.fmtDateDisplay(rec.chequeDate), rec.paymentPurpose, rec.paymentMode, rec.status].filter(Boolean).join(" · "))+'</span>'+(secondLine?'<span class="result-meta" title="'+esc(secondLine)+'">'+esc(secondLine)+'</span>':'')+'</button>';
+    }).join("") + (results.length>100 ? '<p class="small-muted">Showing the first 100 matches. Add more detail to narrow the search.</p>' : '');
+  }
+  A.openModal("Search results", body);
+  document.querySelectorAll("[data-search-cheque]").forEach(function(button){
+    button.addEventListener("click", function(){
+      var rec = A.STATE.cheques.find(function(row){ return row._id === button.getAttribute("data-search-cheque"); });
+      A.closeModal();
+      if(rec) A.openChequeForm(rec, renderDashboard);
+    });
+  });
+}
 
 function renderDashboard(){
   A.persistState();
+  var searchInput = document.getElementById("dashboardGlobalSearch");
+  var searchButton = document.getElementById("dashboardGlobalSearchBtn");
+  if(searchInput && !searchInput.dataset.wired){
+    searchInput.dataset.wired = "true";
+    searchButton.addEventListener("click", openDashboardSearch);
+    searchInput.addEventListener("keydown", function(event){ if(event.key === "Enter"){ event.preventDefault(); openDashboardSearch(); } });
+  }
   var cheques = A.STATE.cheques;
   var total = cheques.length;
   var openCheques = cheques.filter(function(c){ return A.isUnpaidStatus(c.status); });
@@ -1761,15 +1875,22 @@ function renderDashboard(){
   var propCount = A.STATE.properties.length;
 
   var cards = [
-    {label:"Total cheques", value: total, sub: propCount+" properties tracked", accent:""},
-    {label:"Payables open", value: "AED "+A.fmtMoney(openPayablesAmt), sub: openPayables.length+" cheque(s) to fund", accent:"accent-brand"},
-    {label:"Receivables to deposit", value: "AED "+A.fmtMoney(openReceivablesAmt), sub: openReceivables.length+" cheque(s) awaiting deposit", accent: openReceivables.length ? "accent-brand":""},
-    {label:"Overdue", value: overdue.length, sub: overdue.length ? "needs follow-up" : "nothing overdue", accent: overdue.length ? "accent-clay":""},
-    {label:"Due within 7 days", value: dueSoon.length, sub: "across all entities", accent: dueSoon.length ? "accent-gold":""}
+    {id:"total", label:"Total cheques", value: total, sub: propCount+" properties tracked", accent:"", records:cheques},
+    {id:"payables", label:"Payables open", value: "AED "+A.fmtMoney(openPayablesAmt), sub: openPayables.length+" cheque(s) to fund", accent:"accent-brand", records:openPayables},
+    {id:"receivables", label:"Receivables to deposit", value: "AED "+A.fmtMoney(openReceivablesAmt), sub: openReceivables.length+" cheque(s) awaiting deposit", accent: openReceivables.length ? "accent-brand":"", records:openReceivables},
+    {id:"overdue", label:"Overdue", value: overdue.length, sub: overdue.length ? "needs follow-up" : "nothing overdue", accent: overdue.length ? "accent-clay":"", records:overdue},
+    {id:"dueSoon", label:"Due within 7 days", value: dueSoon.length, sub: "across all entities", accent: dueSoon.length ? "accent-gold":"", records:dueSoon}
   ];
   document.getElementById("dashCards").innerHTML = cards.map(function(c){
-    return '<div class="stat-card '+c.accent+'"><div class="label">'+esc(c.label)+'</div><div class="value">'+esc(c.value)+'</div><div class="sub">'+esc(c.sub)+'</div></div>';
+    return '<button type="button" class="stat-card stat-card-control '+c.accent+(dashboardFilter===c.id?' active':'')+'" data-dashboard-filter="'+c.id+'" aria-pressed="'+(dashboardFilter===c.id?'true':'false')+'"><div class="label">'+esc(c.label)+'</div><div class="value">'+esc(c.value)+'</div><div class="sub">'+esc(c.sub)+'</div></button>';
   }).join("");
+  document.querySelectorAll("[data-dashboard-filter]").forEach(function(card){
+    card.addEventListener("click", function(){
+      var filter = card.getAttribute("data-dashboard-filter");
+      dashboardFilter = dashboardFilter === filter ? null : filter;
+      renderDashboard();
+    });
+  });
 
   // status breakdown
   var buckets = {};
@@ -1789,20 +1910,42 @@ function renderDashboard(){
       '<span class="n">'+n+'</span></div>';
   }).join("") || '<div class="small-muted">No cheques recorded yet.</div>';
 
-  // attention table: overdue, due soon, or on hold
-  var attention = cheques.filter(function(c){
+  // A selected summary card takes over this table. Clicking it again restores
+  // the normal attention queue (overdue, due soon, and on hold).
+  var normalAttention = cheques.filter(function(c){
     var d = A.daysFromToday(c.chequeDate);
     var overdueOrSoon = A.isUnpaidStatus(c.status) && d!==null && d<=7;
     var onHold = A.norm(c.status) === "hold";
     return overdueOrSoon || onHold;
   });
+  var selectedCard = cards.find(function(card){ return card.id === dashboardFilter; });
+  var attention = selectedCard ? selectedCard.records.slice() : normalAttention;
   attention = A.sortByDate(attention);
+  var attentionPanelHead = document.querySelector("#attentionTableWrap").closest(".panel").querySelector(".panel-head h2");
+  var attentionPanelHint = document.querySelector("#attentionTableWrap").closest(".panel").querySelector(".panel-head .hint");
+  if(selectedCard){
+    attentionPanelHead.textContent = selectedCard.label;
+    renderDashboardSelectionHint(attentionPanelHint, attention.length+" transaction(s) shown — click the highlighted card again to clear", attention, dashboardSelections.attention, "clearAttentionSelection");
+  } else {
+    attentionPanelHead.textContent = "Needs immediate attention";
+    renderDashboardSelectionHint(attentionPanelHint, "Overdue or due within 7 days, and anything on Hold", attention, dashboardSelections.attention, "clearAttentionSelection");
+  }
   A.renderLedgerTable(document.getElementById("attentionTableWrap"), attention, {
-    selectable:false,
+    selectable:true,
+    selectedIds:dashboardSelections.attention,
+    onToggleRow:function(id){
+      if(dashboardSelections.attention.has(id)) dashboardSelections.attention.delete(id);
+      else dashboardSelections.attention.add(id);
+      renderDashboard();
+    },
+    onToggleAll:function(checked, rows){
+      rows.forEach(function(row){ if(checked) dashboardSelections.attention.add(row._id); else dashboardSelections.attention.delete(row._id); });
+      renderDashboard();
+    },
     primaryAction: function(rec){ return A.chequePrimaryAction(rec, renderDashboard); },
     menuActions: function(rec){ return A.chequeMenuActions(rec, renderDashboard); },
-    emptyTitle: "All clear",
-    emptySub: "Nothing overdue, due soon, or on hold right now."
+    emptyTitle: selectedCard ? "No matching transactions" : "All clear",
+    emptySub: selectedCard ? "There are no transactions for this dashboard control." : "Nothing overdue, due soon, or on hold right now."
   });
 
   renderDepositQueue();
@@ -1819,8 +1962,20 @@ function renderDepositQueue(){
     return c.direction === "Receivable" && A.isUnpaidStatus(c.status);
   });
   queue = A.sortByDate(queue);
+  var depositPanel = document.getElementById("depositQueueWrap").closest(".panel");
+  renderDashboardSelectionHint(depositPanel.querySelector(".panel-head .hint"), "Received cheques not yet deposited — oldest first", queue, dashboardSelections.deposits, "clearDepositSelection");
   A.renderLedgerTable(document.getElementById("depositQueueWrap"), queue, {
-    selectable:false,
+    selectable:true,
+    selectedIds:dashboardSelections.deposits,
+    onToggleRow:function(id){
+      if(dashboardSelections.deposits.has(id)) dashboardSelections.deposits.delete(id);
+      else dashboardSelections.deposits.add(id);
+      renderDashboard();
+    },
+    onToggleAll:function(checked, rows){
+      rows.forEach(function(row){ if(checked) dashboardSelections.deposits.add(row._id); else dashboardSelections.deposits.delete(row._id); });
+      renderDashboard();
+    },
     primaryAction: function(rec){ return A.chequePrimaryAction(rec, renderDashboard); },
     menuActions: function(rec){ return A.chequeMenuActions(rec, renderDashboard); },
     emptyTitle: "Nothing waiting",
@@ -2205,8 +2360,8 @@ var esc = A.esc;
 var issuePreviewBatch = [];
 // Order matters here: this drives both the select's option order and the
 // date-step math for batch generation.
-var RECURRENCE_STEP_ORDER = ["Monthly","Every 2 Months","Quarterly","Every 4 Months","Half-yearly","Yearly"];
-var RECURRENCE_STEP = { "Monthly":1, "Every 2 Months":2, "Quarterly":3, "Every 4 Months":4, "Half-yearly":6, "Yearly":12 };
+var RECURRENCE_STEP_ORDER = ["One time","Monthly","Every 2 Months","Quarterly","Every 4 Months","Half-yearly","Yearly"];
+var RECURRENCE_STEP = { "One time":0, "Monthly":1, "Every 2 Months":2, "Quarterly":3, "Every 4 Months":4, "Half-yearly":6, "Yearly":12 };
 
 var issuePropertyCombo = null;
 
@@ -2239,10 +2394,37 @@ function initIssueControls(){
   refreshIssueSelects();
   A.wireDatePickButtons(document.getElementById("view-issue"));
 
+  function syncIssueMode(){
+    var undated = document.getElementById("issueUndatedSecurity").checked;
+    var dateInput = document.getElementById("issueStartDate");
+    var dateButton = document.querySelector('[data-for="issueStartDate"]');
+    dateInput.disabled = undated;
+    dateButton.disabled = undated;
+    if(undated){
+      dateInput.value = "";
+      dateButton.querySelector(".txt").textContent = "Undated security cheque";
+      document.getElementById("issueRecurrence").value = "One time";
+      document.getElementById("issueRecurrence").disabled = true;
+      document.getElementById("issueCount").value = "1";
+      document.getElementById("issueCount").disabled = true;
+      document.getElementById("issuePurpose").value = "Security Cheque";
+      document.getElementById("issueStatus").value = "PDC";
+    } else {
+      dateButton.querySelector(".txt").textContent = dateInput.value ? A.fmtDateDisplay(dateInput.value) : "Pick date";
+      document.getElementById("issueRecurrence").disabled = false;
+      document.getElementById("issueCount").disabled = false;
+    }
+  }
+  document.getElementById("issueUndatedSecurity").addEventListener("change", syncIssueMode);
+  document.getElementById("issueRecurrence").addEventListener("change", function(){
+    if(this.value === "One time"){ document.getElementById("issueCount").value = "1"; }
+  });
+
   document.getElementById("btnClearIssue").addEventListener("click", function(){
     document.getElementById("issueForm").reset();
     if(issuePropertyCombo) issuePropertyCombo.setValue("");
     document.getElementById("issuePreviewPanel").style.display = "none";
+    syncIssueMode();
   });
   document.getElementById("btnPreviewIssue").addEventListener("click", previewIssue);
   document.getElementById("btnCancelIssue").addEventListener("click", function(){
@@ -2263,13 +2445,16 @@ function previewIssue(){
   var count = parseInt(document.getElementById("issueCount").value, 10);
   var chequeNoStart = document.getElementById("issueChequeNoStart").value.trim();
   var status = document.getElementById("issueStatus").value;
+  var isUndated = document.getElementById("issueUndatedSecurity").checked;
 
   if(!property){ A.toast("Choose a property.", "err"); return; }
   if(!entity){ A.toast("Choose an entity.", "err"); return; }
   if(!purpose){ A.toast("Choose a payment purpose.", "err"); return; }
   if(amount==="" || isNaN(parseFloat(amount))){ A.toast("Enter a valid amount.", "err"); return; }
-  if(!startDate){ A.toast("Choose a start date.", "err"); return; }
+  if(!isUndated && !startDate){ A.toast("Choose a start date, or select Undated security cheque.", "err"); return; }
   if(!count || count<1){ A.toast("Enter how many cheques to generate.", "err"); return; }
+  if(recurrence === "One time") count = 1;
+  if(isUndated) count = 1;
 
   var step = RECURRENCE_STEP[recurrence] || 1;
   var startD = A.parseDate(startDate);
@@ -2277,12 +2462,13 @@ function previewIssue(){
 
   issuePreviewBatch = [];
   for(var i=0;i<count;i++){
-    var d = A.addMonths(startD, i*step);
+    var d = startD ? A.addMonths(startD, i*step) : null;
     var chequeNo = "";
     if(numericStart !== null) chequeNo = String(numericStart + i);
     else if(chequeNoStart) chequeNo = chequeNoStart + "-" + (i+1);
     issuePreviewBatch.push(A.withId({
-      chequeDate: A.toISO(d),
+      chequeDate: d ? A.toISO(d) : "",
+      isUndated: isUndated,
       amount: amount,
       entity: entity,
       propertyKey: property.propertyKey,
@@ -2797,7 +2983,7 @@ Object.assign(A, { initManageControls: initManageControls, renderManage: renderM
 var A = window.APP;
 var esc = A.esc;
 
-var CHEQUE_DATE_FIELDS = ["chequeDate"];
+var CHEQUE_DATE_FIELDS = ["chequeDate","clearedDate"];
 var PROPERTY_DATE_FIELDS = ["contractStart","contractEnd"];
 
 function stripId(rec){
@@ -2888,11 +3074,10 @@ function readWorkbookFile(file, cb){
   var reader = new FileReader();
   reader.onload = function(e){
     try{
-      // cellDates:true is essential — without it, a genuine Excel date cell
-      // (which is what you get the moment Excel auto-formats a typed date)
-      // comes back as a raw numeric serial instead of a real date, and would
-      // silently corrupt every date on import.
-      var wb = XLSX.read(new Uint8Array(e.target.result), {type:"array", cellDates:true});
+      // Keep native Excel dates as serial values, then convert their calendar
+      // components ourselves. This avoids JavaScript timezone offsets changing
+      // 15-Nov into 14-Nov during an import.
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:"array", cellDates:false});
       cb(null, wb);
     } catch(err){ cb(err); }
   };
@@ -3360,6 +3545,24 @@ function renderReportTable(){
     if(p.managementType) badges.push('<span class="badge badge-default">'+esc(p.managementType)+'</span>');
 
     var rentVal = p.annualRent ? ("AED "+A.fmtMoney(p.annualRent)+(p.totalInstallments?(" ("+esc(p.totalInstallments)+")"):"")) : "";
+    var deposits = A.relatedDeposits(p);
+    var deposit = deposits[0];
+    var depositHtml = '<div class="section-label">Related deposits</div>';
+    if(!deposit){
+      depositHtml += '<div class="hint" style="margin:0 0 4px">No deposits recorded for this property.</div>';
+    } else {
+      var depositValues = ["rentalDeposit","dewaDeposit","chillerDeposit","gasDeposit","otherDeposit"].map(function(key){ return parseFloat(deposit[key]) || 0; });
+      var depositTotal = depositValues.reduce(function(sum, value){ return sum + value; }, 0);
+      depositHtml += '<div class="drill-grid report-detail-grid">' +
+        field("Rental deposit", "AED "+A.fmtMoney(depositValues[0])) +
+        field("DEWA deposit", "AED "+A.fmtMoney(depositValues[1])) +
+        field("Chiller deposit", "AED "+A.fmtMoney(depositValues[2])) +
+        field("Gas deposit", "AED "+A.fmtMoney(depositValues[3])) +
+        field("Other deposit", "AED "+A.fmtMoney(depositValues[4])) +
+        field("Total deposits", "AED "+A.fmtMoney(depositTotal)) +
+        (deposit.remark ? field("Deposit remark", deposit.remark) : "") +
+      '</div>';
+    }
 
     metaEl.innerHTML =
       (badges.length ? '<div class="report-badges">'+badges.join("")+'</div>' : "") +
@@ -3367,12 +3570,13 @@ function renderReportTable(){
         field("Annual rent", rentVal) +
         field("Contract start", p.contractStart) +
         field("Contract end", p.contractEnd) +
-      '</div>';
+      '</div>' + depositHtml;
   }
 
   records = A.sortByDate(records);
   A.renderLedgerTable(document.getElementById("reportTableWrap"), records, {
     selectable: false,
+    showDescription: reportState.selectedPropertyId !== null,
     rowAlertColors: true,
     primaryAction: function(rec){ return A.chequePrimaryAction(rec, renderReportTable); },
     menuActions: function(rec){ return A.chequeMenuActions(rec, renderReportTable); },
@@ -3614,7 +3818,7 @@ function monthLabelHtml(m, expanded, totals){
   var otherLine = totals.Other.count
     ? '<div class="cal-month-total cal-month-total-other">+AED '+esc(A.fmtMoney(totals.Other.sum))+' · '+totals.Other.count+' R/O</div>'
     : '';
-  return '<div class="cal-month-label-top"><span class="chev">'+(expanded?"▾":"▸")+'</span>'+esc(monthLabelShort(m))+'</div>' + propLine + otherLine;
+  return '<div class="cal-month-label-top'+(m===currentMonthKey()?" is-current-month":"")+'"><span class="chev">'+(expanded?"▾":"▸")+'</span>'+esc(monthLabelShort(m))+'</div>' + propLine + otherLine;
 }
 
 // Standard: properties across the top, periods down the side.
@@ -3748,10 +3952,10 @@ function renderCalendar(){
   }
 }
 
-// Scrolls the current month into view — horizontally when properties run
-// down the side (months are columns), vertically when months are rows.
-// Accounts for the sticky header row / sticky first column so the target
-// month doesn't end up hidden behind them.
+// Scrolls the current month to the centre of the visible calendar —
+// horizontally when properties run down the side (months are columns),
+// vertically when months are rows. The sticky header / first column is
+// excluded from the available viewport so the month stays visibly centred.
 function scrollCalendarToMonth(scrollEl, monthKey){
   var label = scrollEl.querySelector('[data-toggle-month="'+monthKey+'"]');
   if(!label) return;
@@ -3760,11 +3964,15 @@ function scrollCalendarToMonth(scrollEl, monthKey){
   if(calendarState.transpose){
     var periodCol = scrollEl.querySelector("td.cal-period-col, th.cal-period-col");
     var stickyW = periodCol ? periodCol.offsetWidth : 0;
-    scrollEl.scrollLeft = Math.max(0, cell.offsetLeft - stickyW - 16);
+    var visibleWidth = Math.max(1, scrollEl.clientWidth - stickyW);
+    var centeredLeft = cell.offsetLeft - stickyW - ((visibleWidth - cell.offsetWidth) / 2);
+    scrollEl.scrollLeft = Math.max(0, Math.min(scrollEl.scrollWidth - scrollEl.clientWidth, centeredLeft));
   } else {
     var thead = scrollEl.querySelector("thead");
     var headH = thead ? thead.offsetHeight : 0;
-    scrollEl.scrollTop = Math.max(0, cell.offsetTop - headH - 8);
+    var visibleHeight = Math.max(1, scrollEl.clientHeight - headH);
+    var centeredTop = cell.offsetTop - headH - ((visibleHeight - cell.offsetHeight) / 2);
+    scrollEl.scrollTop = Math.max(0, Math.min(scrollEl.scrollHeight - scrollEl.clientHeight, centeredTop));
   }
 }
 
