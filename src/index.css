@@ -233,6 +233,17 @@ tbody tr:last-child { border-bottom: none; }
   display: flex; align-items: center; justify-content: center;
   z-index: 1000; padding: 20px;
 }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .52);
+}
 .modal {
   background: var(--white); border-radius: var(--radius);
   box-shadow: var(--shadow-lg); width: 100%; max-width: 560px;

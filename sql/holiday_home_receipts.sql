@@ -46,6 +46,7 @@ alter table public.holiday_home_receipts add column if not exists acknowledged_a
 alter table public.holiday_home_receipts add column if not exists voided_by uuid references public.users(id);
 alter table public.holiday_home_receipts add column if not exists voided_at timestamptz;
 alter table public.holiday_home_receipts add column if not exists void_reason text;
+update public.holiday_home_receipts set status='pending' where status is null;
 update public.holiday_home_receipts r
 set property_display = coalesce(p.property_unit, r.property_key)
 from public.cheque_flow_properties p
@@ -88,16 +89,16 @@ declare current_role text;
 begin
   select role into current_role from public.users where id=auth.uid();
   if current_role='finance' then
-    if new.status='acknowledged' and old.status='pending'
+    if new.status='acknowledged' and coalesce(old.status,'pending')='pending'
       and new.acknowledged_by=auth.uid() and new.acknowledged_at is not null
       and new.voided_by is null and new.voided_at is null and coalesce(new.void_reason,'')=''
       and (to_jsonb(new) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) = (to_jsonb(old) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) then return new; end if;
-    if new.status='void' and old.status in ('pending','acknowledged')
+    if new.status='void' and coalesce(old.status,'pending') in ('pending','acknowledged')
       and new.voided_by=auth.uid() and new.voided_at is not null and nullif(trim(new.void_reason),'') is not null
       and (to_jsonb(new) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) = (to_jsonb(old) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) then return new; end if;
     raise exception 'Finance may only acknowledge or void a receipt';
   end if;
-  if new.created_by=auth.uid() and old.status='pending' and new.status='pending' then return new; end if;
+  if new.created_by=auth.uid() and coalesce(old.status,'pending')='pending' and new.status='pending' then return new; end if;
   raise exception 'Only the GRO who created a pending receipt may edit it';
 end; $$;
 drop trigger if exists holiday_receipt_workflow on public.holiday_home_receipts;
