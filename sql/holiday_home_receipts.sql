@@ -78,7 +78,7 @@ create policy "Holiday receipt create" on public.holiday_home_receipts for inser
 );
 drop policy if exists "Holiday receipt update" on public.holiday_home_receipts;
 create policy "Holiday receipt update" on public.holiday_home_receipts for update to authenticated using (
-  (created_by=auth.uid() or exists (select 1 from public.users where id=auth.uid() and lower(coalesce(role,''))='finance'))
+  (created_by=auth.uid() or exists (select 1 from public.users where id=auth.uid() and lower(coalesce(role,'')) like '%finance%'))
   and exists (select 1 from public.user_companies where user_id=auth.uid() and company_id=holiday_home_receipts.company_id)
 ) with check (updated_by=auth.uid());
 
@@ -88,7 +88,7 @@ returns trigger language plpgsql security definer set search_path=public as $$
 declare current_role text;
 begin
   select lower(coalesce(role,'')) into current_role from public.users where id=auth.uid();
-  if current_role='finance' then
+  if current_role like '%finance%' then
     if new.status='acknowledged' and coalesce(old.status,'pending')='pending'
       and new.acknowledged_by=auth.uid() and new.acknowledged_at is not null
       and new.voided_by is null and new.voided_at is null and coalesce(new.void_reason,'')=''
