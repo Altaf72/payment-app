@@ -23,13 +23,18 @@ create policy "Holiday receipt update" on public.holiday_home_receipts for updat
 create or replace function public.enforce_holiday_receipt_workflow()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare current_role text;
+declare current_user_id uuid;
 begin
+  current_user_id := coalesce(
+    auth.uid(),
+    nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+  );
   select lower(coalesce(role, '')) into current_role
-  from public.users where id = auth.uid();
+  from public.users where id = current_user_id;
 
   if current_role like '%finance%' then
     if new.status = 'acknowledged' and coalesce(old.status, 'pending') = 'pending'
-      and new.acknowledged_by = auth.uid() and new.acknowledged_at is not null
+      and new.acknowledged_by = current_user_id and new.acknowledged_at is not null
       and new.voided_by is null and new.voided_at is null and coalesce(new.void_reason, '') = ''
       and (to_jsonb(new) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) =
           (to_jsonb(old) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) then
@@ -37,7 +42,7 @@ begin
     end if;
 
     if new.status = 'void' and coalesce(old.status, 'pending') in ('pending','acknowledged')
-      and new.voided_by = auth.uid() and new.voided_at is not null
+      and new.voided_by = current_user_id and new.voided_at is not null
       and nullif(trim(new.void_reason), '') is not null
       and (to_jsonb(new) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) =
           (to_jsonb(old) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) then
@@ -47,7 +52,7 @@ begin
     raise exception 'Finance may only acknowledge or void a receipt';
   end if;
 
-  if new.created_by = auth.uid()
+  if new.created_by = current_user_id
     and coalesce(old.status, 'pending') = 'pending'
     and new.status = 'pending' then
     return new;
