@@ -245,7 +245,7 @@ export default function Layout() {
                 <span className="icon">I</span> {text.imprestFunds}
               </button>
             )}
-            {['finance','cfo','superadmin'].includes(profile?.role) && (
+            {['finance','manager','cfo','superadmin'].includes(profile?.role) && (
               <button className={`sidebar-link ${isActive('/cheque-flow') ? 'active' : ''}`} onClick={() => go('/cheque-flow')}>
                 <span className="icon">C</span> {text.chequeFlow}
               </button>
