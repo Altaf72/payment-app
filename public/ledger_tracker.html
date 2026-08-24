@@ -160,6 +160,26 @@ main{flex:1;padding:18px 22px 40px;max-width:1400px;width:100%;margin:0 auto}
 .search-result-row{display:block;width:100%;text-align:left;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin:0 0 8px;color:var(--ink);font:inherit;cursor:pointer}
 .search-result-row:hover{background:var(--surface-2);border-color:var(--brand)}
 .search-result-row .result-title{font-weight:700}.search-result-row .result-meta{display:block;color:var(--ink-soft);font-size:12px;margin-top:3px}
+.property-master-scroll{overflow:auto;max-height:560px;border:1px solid var(--line);border-radius:8px}
+.property-master{width:100%;min-width:1420px;border-collapse:collapse;font-size:12px}
+.property-master th,.property-master td{padding:9px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top;text-align:left;white-space:nowrap}
+.property-master th{position:sticky;top:0;background:var(--surface-2);z-index:1;font-size:10.5px;text-transform:uppercase;letter-spacing:.35px;color:var(--ink-faint)}
+.property-master th.sortable{cursor:pointer;user-select:none}.property-master th.sortable:hover{color:var(--brand-dark);background:var(--brand-soft)}
+.property-master .filter-row th{top:34px;padding:6px 7px;background:var(--surface)}
+.property-master .filter-row input{width:100%;min-width:74px;border:1px solid var(--line);border-radius:5px;padding:5px 6px;background:var(--surface-2);font:inherit;text-transform:none;letter-spacing:normal;color:var(--ink)}
+.property-master tr.selected{background:var(--brand-soft)}
+.property-master tr.contract-expired{background:#FDE8E6}.property-master tr.contract-expired td{color:#8D2118}
+.property-master tr.contract-expired.selected{background:#F8D4CF}
+.property-master tr.contract-expiring-30{background:#FFF0DE}.property-master tr.contract-expiring-30 td{color:#9A4A00}
+.property-master tr.contract-expiring-30.selected{background:#FDE0C1}
+.property-master tr.contract-expiring-90{background:#FFF8D7}.property-master tr.contract-expiring-90 td{color:#775D00}
+.property-master tr.contract-expiring-90.selected{background:#F8EDB8}
+.property-master tr.contract-expiring-120{background:#E7F0FF}.property-master tr.contract-expiring-120 td{color:#1D4F91}
+.property-master tr.contract-expiring-120.selected{background:#D3E4FC}
+.property-deposit-button{border:0;background:transparent;color:var(--brand-dark);font:inherit;font-weight:700;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
+.deposit-popover{position:fixed;z-index:1200;width:min(320px,calc(100vw - 24px));background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-2);padding:13px 14px}
+.deposit-popover h3{font-size:14px;margin:0 0 9px}.deposit-popover .deposit-line{display:flex;justify-content:space-between;gap:16px;padding:5px 0;border-bottom:1px solid var(--line-soft);font-size:12px}.deposit-popover .deposit-total{font-weight:800;color:var(--brand-dark);border-bottom:0}.deposit-popover .deposit-note{font-size:11.5px;color:var(--ink-soft);margin:8px 0 0;white-space:pre-wrap}
+.property-master-summary{font-size:12px;color:var(--ink-soft)}
 .stat-card{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-l);
   padding:16px 16px 14px;box-shadow:var(--shadow-1);
@@ -606,6 +626,10 @@ table.cal-grid{border-collapse:separate;border-spacing:0;font-size:12.5px;width:
     <section class="view active" id="view-dashboard">
       <div class="dashboard-search"><input type="search" id="dashboardGlobalSearch" placeholder="Find a cheque or document: number, payee/drawee, property, description, amount…"><button class="btn btn-primary" type="button" id="dashboardGlobalSearchBtn">Search</button></div>
       <div class="cards-grid" id="dashCards"></div>
+      <div class="panel">
+        <div class="panel-head"><h2>Property master</h2><span class="property-master-summary" id="dashboardPropertySummary">No units selected</span></div>
+        <div id="dashboardPropertyTableWrap"></div>
+      </div>
       <div class="panel">
         <div class="panel-head"><h2>Status breakdown</h2><span class="hint">by cheque count</span></div>
         <div class="status-breakdown" id="statusBreakdown"></div>
@@ -1806,6 +1830,123 @@ var BUCKET_COLORS = {
 };
 var dashboardFilter = null;
 var dashboardSelections = { attention: new Set(), deposits: new Set() };
+var dashboardPropertyState = { selected:new Set(), filters:{}, sortKey:"propertyUnit", sortDirection:"asc", scrollTop:0, scrollLeft:0 };
+var DASHBOARD_PROPERTY_COLUMNS = [
+  {key:"propertyKey", label:"Key"}, {key:"recordType", label:"Type"},
+  {key:"propertyUnit", label:"Name / Unit"}, {key:"entity", label:"Entity"},
+  {key:"payeeOwner", label:"Payee / Owner"}, {key:"contractStart", label:"Contract Start", date:true},
+  {key:"contractEnd", label:"Contract End", date:true}, {key:"annualRent", label:"Annual Rent", number:true},
+  {key:"deposits", label:"Deposits", number:true},
+  {key:"totalInstallments", label:"Installments", number:true}, {key:"propertyStatus", label:"Property Status"},
+  {key:"ownerNationality", label:"Owner Nationality"}, {key:"managementType", label:"Management Type"}
+];
+
+function dashboardPropertyValue(property, column){
+  if(column.key === "recordType") return property.recordType || A.recordTypeFromKey(property.propertyKey);
+  if(column.key === "deposits") return A.relatedDeposits(property).reduce(function(sum, deposit){ return sum + ["rentalDeposit","dewaDeposit","chillerDeposit","gasDeposit","otherDeposit"].reduce(function(lineSum, key){ var value=parseFloat(deposit[key]); return lineSum + (isNaN(value)?0:value); }, 0); }, 0);
+  return property[column.key] === undefined || property[column.key] === null ? "" : property[column.key];
+}
+function closeDepositPopover(){ var popover=document.getElementById("dashboardDepositPopover"); if(popover) popover.remove(); }
+function showDepositPopover(event, property){
+  event.stopPropagation(); closeDepositPopover();
+  var deposits = A.relatedDeposits(property);
+  var deposit = deposits[0] || {};
+  var details = [["Rental deposit","rentalDeposit"],["DEWA deposit","dewaDeposit"],["Chiller deposit","chillerDeposit"],["Gas deposit","gasDeposit"],["Other deposit","otherDeposit"]];
+  var total = 0;
+  var lines = details.map(function(item){ var value=parseFloat(deposit[item[1]]) || 0; total += value; return '<div class="deposit-line"><span>'+esc(item[0])+'</span><strong>AED '+esc(A.fmtMoney(value))+'</strong></div>'; }).join("");
+  var popover = document.createElement("div");
+  popover.id = "dashboardDepositPopover"; popover.className = "deposit-popover";
+  popover.innerHTML = '<h3>'+esc(property.propertyUnit || property.propertyKey || "Property")+' — Deposits</h3>'+lines+'<div class="deposit-line deposit-total"><span>Total</span><strong>AED '+esc(A.fmtMoney(total))+'</strong></div>'+(deposit.remark?'<p class="deposit-note">'+esc(deposit.remark)+'</p>':'');
+  document.body.appendChild(popover);
+  var left = Math.min(event.clientX, window.innerWidth - popover.offsetWidth - 12);
+  var top = Math.min(event.clientY + 10, window.innerHeight - popover.offsetHeight - 12);
+  popover.style.left = Math.max(12, left)+"px"; popover.style.top = Math.max(12, top)+"px";
+}
+document.addEventListener("click", function(event){
+  if(!event.target.closest(".deposit-popover") && !event.target.closest(".property-deposit-button")) closeDepositPopover();
+});
+function renderDashboardPropertyTable(){
+  var wrap = document.getElementById("dashboardPropertyTableWrap");
+  if(!wrap) return;
+  var state = dashboardPropertyState;
+  var existingScroll = wrap.querySelector(".property-master-scroll");
+  if(existingScroll){ state.scrollTop = existingScroll.scrollTop; state.scrollLeft = existingScroll.scrollLeft; }
+  var rows = A.STATE.properties.filter(function(property){
+    return DASHBOARD_PROPERTY_COLUMNS.every(function(column){
+      var filter = String(state.filters[column.key] || "").trim().toLowerCase();
+      if(!filter) return true;
+      var value = dashboardPropertyValue(property, column);
+      var display = column.date ? A.fmtDateDisplay(value) : value;
+      return String(value).toLowerCase().indexOf(filter) !== -1 || String(display).toLowerCase().indexOf(filter) !== -1;
+    });
+  }).sort(function(a,b){
+    var column = DASHBOARD_PROPERTY_COLUMNS.find(function(item){ return item.key === state.sortKey; });
+    var av = dashboardPropertyValue(a, column), bv = dashboardPropertyValue(b, column);
+    if(column.date){ av = A.parseDate(av); bv = A.parseDate(bv); av = av ? av.getTime() : -Infinity; bv = bv ? bv.getTime() : -Infinity; }
+    else if(column.number){ av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
+    else { av = String(av).toLowerCase(); bv = String(bv).toLowerCase(); }
+    if(av < bv) return state.sortDirection === "asc" ? -1 : 1;
+    if(av > bv) return state.sortDirection === "asc" ? 1 : -1;
+    return 0;
+  });
+  var selectedProperties = A.STATE.properties.filter(function(property){ return state.selected.has(property._id); });
+  var selectedRent = selectedProperties.reduce(function(sum, property){ var value=parseFloat(property.annualRent); return sum+(isNaN(value)?0:value); }, 0);
+  document.getElementById("dashboardPropertySummary").textContent = selectedProperties.length ? (selectedProperties.length+" unit(s) selected · Total annual rent: AED "+A.fmtMoney(selectedRent)) : "No units selected";
+
+  var headers = DASHBOARD_PROPERTY_COLUMNS.map(function(column){
+    var active = state.sortKey === column.key;
+    return '<th class="sortable" data-property-sort="'+column.key+'">'+esc(column.label)+(active ? (state.sortDirection === "asc" ? " ▲" : " ▼") : "")+'</th>';
+  }).join("");
+  var filters = DASHBOARD_PROPERTY_COLUMNS.map(function(column){
+    return '<th><input type="search" data-property-filter="'+column.key+'" value="'+esc(state.filters[column.key] || "")+'" placeholder="Filter"></th>';
+  }).join("");
+  var body = rows.map(function(property){
+    var cells = DASHBOARD_PROPERTY_COLUMNS.map(function(column){
+      var value = dashboardPropertyValue(property, column);
+      if(column.date) value = A.fmtDateDisplay(value);
+      else if(column.key === "annualRent" && value !== "") value = "AED "+A.fmtMoney(value);
+      if(column.key === "propertyKey" || column.key === "propertyUnit") return '<td><button type="button" class="cell-link" data-dashboard-property-edit="'+esc(property._id)+'" title="Edit property record">'+esc(value || "—")+'</button></td>';
+      if(column.key === "deposits") return '<td><button type="button" class="property-deposit-button" data-property-deposit="'+esc(property._id)+'">AED '+esc(A.fmtMoney(value))+'</button></td>';
+      var hoverText = value;
+      if(column.key === "contractEnd" && property.contractEnd){
+        var days = A.daysFromToday(property.contractEnd);
+        hoverText = days === null ? value : (days < 0 ? "Expired "+Math.abs(days)+" day(s) ago" : days === 0 ? "Expires today" : days+" day(s) remaining");
+      }
+      return '<td title="'+esc(hoverText)+'">'+esc(value || "—")+'</td>';
+    }).join("");
+    var endDate = A.parseDate(property.contractEnd), daysToExpiry = endDate ? A.daysFromToday(property.contractEnd) : null;
+    var expiryClass = daysToExpiry === null ? "" : (daysToExpiry < 0 ? "contract-expired" : daysToExpiry <= 30 ? "contract-expiring-30" : daysToExpiry <= 90 ? "contract-expiring-90" : daysToExpiry <= 120 ? "contract-expiring-120" : "");
+    return '<tr class="'+(state.selected.has(property._id)?"selected ":"")+expiryClass+'"><td><input type="checkbox" data-property-select="'+esc(property._id)+'" '+(state.selected.has(property._id)?"checked":"")+'></td>'+cells+'</tr>';
+  }).join("");
+  wrap.innerHTML = '<div class="property-master-scroll"><table class="property-master"><thead><tr><th><input type="checkbox" id="dashboardPropertySelectAll" title="Select all filtered rows"></th>'+headers+'</tr><tr class="filter-row"><th></th>'+filters+'</tr></thead><tbody>'+body+'</tbody></table></div>' + (rows.length ? "" : '<div class="empty-state"><div class="big">No matching properties</div><div>Adjust or clear the column filters.</div></div>');
+  var masterScroll = wrap.querySelector(".property-master-scroll");
+  if(masterScroll){
+    masterScroll.scrollTop = state.scrollTop || 0;
+    masterScroll.scrollLeft = state.scrollLeft || 0;
+    masterScroll.addEventListener("scroll", function(){ state.scrollTop = masterScroll.scrollTop; state.scrollLeft = masterScroll.scrollLeft; });
+  }
+
+  var selectAll = document.getElementById("dashboardPropertySelectAll");
+  if(selectAll){
+    selectAll.checked = rows.length > 0 && rows.every(function(property){ return state.selected.has(property._id); });
+    selectAll.addEventListener("change", function(){ rows.forEach(function(property){ if(selectAll.checked) state.selected.add(property._id); else state.selected.delete(property._id); }); renderDashboardPropertyTable(); });
+  }
+  wrap.querySelectorAll("[data-property-sort]").forEach(function(header){ header.addEventListener("click", function(){ var key=header.getAttribute("data-property-sort"); state.sortDirection = state.sortKey===key && state.sortDirection==="asc" ? "desc" : "asc"; state.sortKey=key; renderDashboardPropertyTable(); }); });
+  wrap.querySelectorAll("[data-property-select]").forEach(function(box){ box.addEventListener("change", function(){ var id=box.getAttribute("data-property-select"); if(box.checked) state.selected.add(id); else state.selected.delete(id); renderDashboardPropertyTable(); }); });
+  wrap.querySelectorAll("[data-dashboard-property-edit]").forEach(function(button){ button.addEventListener("click", function(){
+    var property = A.STATE.properties.find(function(row){ return row._id===button.getAttribute("data-dashboard-property-edit"); });
+    if(masterScroll){ state.scrollTop = masterScroll.scrollTop; state.scrollLeft = masterScroll.scrollLeft; }
+    if(property) A.openPropertyForm(property, function(){ renderDashboard(); });
+  }); });
+  wrap.querySelectorAll("[data-property-deposit]").forEach(function(button){ button.addEventListener("click", function(event){ var property=A.STATE.properties.find(function(row){ return row._id===button.getAttribute("data-property-deposit"); }); if(property) showDepositPopover(event, property); }); });
+  wrap.querySelectorAll("[data-property-filter]").forEach(function(input){ input.addEventListener("input", function(){
+    var key = input.getAttribute("data-property-filter"), cursor = input.selectionStart;
+    state.filters[key] = input.value;
+    renderDashboardPropertyTable();
+    var replacement = wrap.querySelector('[data-property-filter="'+key+'"]');
+    if(replacement){ replacement.focus(); replacement.setSelectionRange(cursor, cursor); }
+  }); });
+}
 
 function dashboardSelectionSummary(records, selection){
   var selected = records.filter(function(rec){ return selection.has(rec._id); });
@@ -1951,6 +2092,7 @@ function renderDashboard(){
   renderDepositQueue();
   renderContractRenewals();
   renderDataQualityChecks();
+  renderDashboardPropertyTable();
 }
 
 function renderDepositQueue(){

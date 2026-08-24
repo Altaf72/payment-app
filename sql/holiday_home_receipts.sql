@@ -93,11 +93,9 @@ begin
   if current_role like '%finance%' then
     if new.status='acknowledged' and coalesce(old.status,'pending')='pending'
       and new.acknowledged_by=current_user_id and new.acknowledged_at is not null
-      and new.voided_by is null and new.voided_at is null and coalesce(new.void_reason,'')=''
-      and (to_jsonb(new) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) = (to_jsonb(old) - array['status','acknowledged_by','acknowledged_at','updated_by','updated_at']) then return new; end if;
+      and new.voided_by is null and new.voided_at is null and coalesce(new.void_reason,'')='' then return new; end if;
     if new.status='void' and coalesce(old.status,'pending') in ('pending','acknowledged')
-      and new.voided_by=current_user_id and new.voided_at is not null and nullif(trim(new.void_reason),'') is not null
-      and (to_jsonb(new) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) = (to_jsonb(old) - array['status','voided_by','voided_at','void_reason','updated_by','updated_at']) then return new; end if;
+      and new.voided_by=current_user_id and new.voided_at is not null and nullif(trim(new.void_reason),'') is not null then return new; end if;
     raise exception 'Finance may only acknowledge or void a receipt';
   end if;
   if new.created_by=current_user_id and coalesce(old.status,'pending')='pending' and new.status='pending' then return new; end if;

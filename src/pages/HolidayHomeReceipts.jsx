@@ -212,14 +212,14 @@ export default function HolidayHomeReceipts() {
   }
   const acknowledge = async receipt => {
     if (!confirm(`Acknowledge ${receipt.receipt_number} after physical fund verification? It will be locked for the GRO.`)) return
-    const { error:actionError } = await supabase.from('holiday_home_receipts').update({ status:'acknowledged', acknowledged_by:user.id, acknowledged_at:new Date().toISOString(), updated_by:user.id }).eq('id', receipt.id)
+    const { error:actionError } = await supabase.rpc('finance_acknowledge_holiday_receipt', { p_receipt_id:receipt.id, p_finance_user_id:user.id })
     if (actionError) return setError(actionError.message)
     load()
   }
   const voidReceipt = async receipt => {
     const reason = prompt(`Void ${receipt.receipt_number}. A void reason is required:`)
     if (!reason?.trim()) return
-    const { error:actionError } = await supabase.from('holiday_home_receipts').update({ status:'void', voided_by:user.id, voided_at:new Date().toISOString(), void_reason:reason.trim(), updated_by:user.id }).eq('id', receipt.id)
+    const { error:actionError } = await supabase.rpc('finance_void_holiday_receipt', { p_receipt_id:receipt.id, p_finance_user_id:user.id, p_void_reason:reason.trim() })
     if (actionError) return setError(actionError.message)
     load()
   }
