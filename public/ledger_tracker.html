@@ -3904,6 +3904,18 @@ function monthTotalsByType(cols, monthKey){
 function chequesForDay(col, dayISO){
   return col.cheques.filter(function(c){ var d = A.parseDate(c.chequeDate); return d && A.toISO(d) === dayISO; });
 }
+// Expanded periods are a focused view: keep only property columns/rows with
+// at least one entry in the expanded month(s). Date rows/columns are already
+// built from daysInMonth(), which contains only dates that actually have data.
+function columnsWithExpandedMonthData(cols){
+  var expandedMonths = Object.keys(calendarState.expanded).filter(function(month){ return calendarState.expanded[month]; });
+  if(!expandedMonths.length) return cols;
+  expandedMonths = expandedMonths.filter(function(month){ return cols.some(function(col){ return chequesForMonth(col, month).length > 0; }); });
+  if(!expandedMonths.length) return cols;
+  return cols.filter(function(col){
+    return expandedMonths.some(function(month){ return chequesForMonth(col, month).length > 0; });
+  });
+}
 
 // The calendar is deliberately compact. Hovering an amount exposes the
 // complete underlying record (and every record behind a monthly total), so a
@@ -4048,7 +4060,7 @@ function renderCalendar(){
   saveCalendarPrefs();
   var wrap = document.getElementById("calendarWrap");
   var hint = document.getElementById("calSummaryHint");
-  var cols = calendarColumns();
+  var cols = columnsWithExpandedMonthData(calendarColumns());
 
   // A full innerHTML rebuild would otherwise reset scroll to the top-left
   // on every click (e.g. opening a cheque). Capture the current position
