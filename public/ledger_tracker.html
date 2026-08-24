@@ -4196,7 +4196,18 @@ function initCalendarControls(){
     renderCalendar();
   });
   document.getElementById("btnCalToday").addEventListener("click", function(){
+    // Today is also the dependable way back to the complete calendar
+    // overview: all properties across, monthly totals compressed, and no
+    // active search/entity/direction restriction hiding blank columns.
+    calendarState.transpose = false;
+    calendarState.expanded = {};
+    calendarState.search = "";
+    calendarState.entity = "";
+    calendarState.direction = "";
     calendarState.scrollTop = null; calendarState.scrollLeft = null;
+    document.getElementById("calSearch").value = "";
+    syncLayoutChips();
+    remountCalendarFilters();
     _calScrollToToday = true;
     renderCalendar();
   });

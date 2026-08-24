@@ -123,18 +123,24 @@ alter table public.cheque_flow_dataset_archives enable row level security;
 drop policy if exists "ChequeFlow finance can view" on public.cheque_flow_entries;
 create policy "ChequeFlow finance can view" on public.cheque_flow_entries for select to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
 drop policy if exists "ChequeFlow finance can insert" on public.cheque_flow_entries;
-create policy "ChequeFlow finance can insert" on public.cheque_flow_entries for insert to authenticated with check (auth.uid() = created_by and exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+create policy "ChequeFlow finance can insert" on public.cheque_flow_entries for insert to authenticated with check (auth.uid() = created_by and exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer')));
 drop policy if exists "ChequeFlow finance can update" on public.cheque_flow_entries;
-create policy "ChequeFlow finance can update" on public.cheque_flow_entries for update to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+create policy "ChequeFlow finance can update" on public.cheque_flow_entries for update to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer')));
 drop policy if exists "ChequeFlow finance can delete" on public.cheque_flow_entries;
-create policy "ChequeFlow finance can delete" on public.cheque_flow_entries for delete to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+create policy "ChequeFlow finance can delete" on public.cheque_flow_entries for delete to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer')));
 
 drop policy if exists "ChequeFlow finance manages properties" on public.cheque_flow_properties;
-create policy "ChequeFlow finance manages properties" on public.cheque_flow_properties for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+create policy "ChequeFlow finance manages properties" on public.cheque_flow_properties for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer')));
+drop policy if exists "ChequeFlow finance views properties" on public.cheque_flow_properties;
+create policy "ChequeFlow finance views properties" on public.cheque_flow_properties for select to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer','cfo','superadmin')));
 drop policy if exists "ChequeFlow finance manages deposits" on public.cheque_flow_deposits;
-create policy "ChequeFlow finance manages deposits" on public.cheque_flow_deposits for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+create policy "ChequeFlow finance manages deposits" on public.cheque_flow_deposits for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer')));
+drop policy if exists "ChequeFlow finance views deposits" on public.cheque_flow_deposits;
+create policy "ChequeFlow finance views deposits" on public.cheque_flow_deposits for select to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer','cfo','superadmin')));
 drop policy if exists "ChequeFlow finance manages setup lists" on public.cheque_flow_setup_lists;
-create policy "ChequeFlow finance manages setup lists" on public.cheque_flow_setup_lists for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','cfo','superadmin')));
+create policy "ChequeFlow finance manages setup lists" on public.cheque_flow_setup_lists for all to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer'))) with check (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer')));
+drop policy if exists "ChequeFlow finance views setup lists" on public.cheque_flow_setup_lists;
+create policy "ChequeFlow finance views setup lists" on public.cheque_flow_setup_lists for select to authenticated using (exists (select 1 from public.users where id = auth.uid() and role in ('finance','finance_officer','cfo','superadmin')));
 
 drop policy if exists "ChequeFlow finance views replacement archives" on public.cheque_flow_dataset_archives;
 create policy "ChequeFlow finance views replacement archives" on public.cheque_flow_dataset_archives
@@ -164,7 +170,7 @@ declare
   v_setup integer;
 begin
   if v_user_id is null or not exists (
-    select 1 from public.users where id = v_user_id and role in ('finance','superadmin')
+    select 1 from public.users where id = v_user_id and role in ('finance','finance_officer')
   ) then
     raise exception 'Only Finance users can replace the ChequeFlow dataset';
   end if;

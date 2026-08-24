@@ -17,6 +17,7 @@ export default function LedgerTrackerWorkspace() {
   useEffect(() => {
     async function syncWorkbook(event) {
       if (event.origin !== window.location.origin || !['chequeflow:workbook-import', 'chequeflow:state-save', 'chequeflow:property-save'].includes(event.data?.type) || !user?.id) return
+      if (!canEdit) return
       if (event.data.type === 'chequeflow:state-save' &&
           (replaceInProgressRef.current || Date.now() < ignoreStateSaveUntilRef.current)) return
       if (event.data.type === 'chequeflow:property-save') {
@@ -86,7 +87,7 @@ export default function LedgerTrackerWorkspace() {
     }
     window.addEventListener('message', syncWorkbook)
     return () => window.removeEventListener('message', syncWorkbook)
-  }, [user?.id])
+  }, [user?.id, canEdit])
 
   function configureTracker() {
     const doc = iframeRef.current?.contentDocument
