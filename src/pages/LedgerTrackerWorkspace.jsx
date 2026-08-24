@@ -146,7 +146,7 @@ export default function LedgerTrackerWorkspace() {
     }
     if (!canEdit) {
       const style = doc.createElement('style')
-      style.textContent = `.view input,.view select,.view textarea,.view button:not(.tab-btn):not(#btnCalToday){pointer-events:none!important;opacity:.62!important}.view #setupExcelExport,.view #setupExcelImport{display:none!important}`
+        style.textContent = `.view input,.view select,.view textarea,.view button:not(.tab-btn):not(#btnCalToday):not(#btnCalToggleControls){pointer-events:none!important;opacity:.62!important}.view #setupExcelExport,.view #setupExcelImport{display:none!important}`
       doc.head.appendChild(style)
     }
     if (!canEdit) headerActions?.insertAdjacentHTML('beforeend', '<span style="font-size:12px;color:#5B665F">View only</span>')
