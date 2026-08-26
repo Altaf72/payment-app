@@ -724,10 +724,19 @@ export default function NewApplication() {
 
           <div className="form-group">
             <label className="form-label">Apartment / Property <span className="cn">Class</span></label>
-            <select className="form-control" multiple value={form.class_names || []} onChange={e => set('class_names', Array.from(e.target.selectedOptions, option => option.value))} style={{minHeight:'105px'}}>
-              {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
-            </select>
-            <p className="form-hint">Select one or more properties (Ctrl/Cmd-click for multiple).</p>
+            <div className="form-row" style={{alignItems:'flex-start',gap:'12px'}}>
+              <select className="form-control" value="" onChange={e => {
+                const value = e.target.value
+                if (value && !(form.class_names || []).includes(value)) set('class_names', [...(form.class_names || []), value])
+              }} style={{flex:'1 1 320px'}}>
+                <option value="">Select apartment / property…</option>
+                {applicationClasses.filter(item => !(form.class_names || []).includes(item.name)).map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+              </select>
+              <div aria-label="Selected apartments and properties" style={{flex:'1 1 320px',minHeight:'42px',display:'flex',gap:'7px',flexWrap:'wrap',alignItems:'center',padding:'6px 8px',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',background:'var(--cream)'}}>
+                {(form.class_names || []).length ? form.class_names.map(name => <span key={name} style={{display:'inline-flex',alignItems:'center',gap:'6px',padding:'4px 8px',borderRadius:'999px',background:'var(--gold-light)',color:'var(--ink)',fontSize:'13px',fontWeight:600}}>{name}<button type="button" aria-label={`Remove ${name}`} title={`Remove ${name}`} onClick={() => set('class_names', (form.class_names || []).filter(item => item !== name))} style={{border:0,background:'transparent',color:'inherit',font:'inherit',fontSize:'17px',lineHeight:1,cursor:'pointer',padding:0}}>×</button></span>) : <span className="text-muted" style={{fontSize:'13px'}}>Selected properties appear here.</span>}
+              </div>
+            </div>
+            <p className="form-hint">Choose a property from the dropdown. You can add more than one and remove any selection using ×.</p>
           </div>
 
           {/* Payment Method */}
