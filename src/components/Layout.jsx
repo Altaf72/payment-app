@@ -22,6 +22,7 @@ const TEXT = {
     dtcmReport: 'DTCM Report',
     imprestFunds: 'Imprest Fund Management',
     chequeFlow: 'ChequeFlow',
+    commissionSheets: 'Commission Input Sheet',
     localSettings: 'Local Settings',
     admin: 'Admin',
     settings: 'Settings',
@@ -58,6 +59,7 @@ const TEXT = {
     dtcmReport: 'DTCM Report',
     imprestFunds: 'Imprest Fund Management',
     chequeFlow: 'ChequeFlow',
+    commissionSheets: '佣金输入表',
     localSettings: '本地设置',
     admin: '管理',
     settings: '设置',
@@ -256,6 +258,13 @@ export default function Layout() {
             </button>
           </>
         )}
+
+        {hasModule('commission_sheets') && <>
+          <div className="sidebar-section">Commissions</div>
+          <button className={`sidebar-link ${isActive('/commission-sheets') ? 'active' : ''}`} onClick={() => go('/commission-sheets')}>
+            <span className="icon">C</span> {text.commissionSheets}
+          </button>
+        </>}
 
         {['finance','superadmin'].includes(profile?.role) && (
           <button className={`sidebar-link ${isActive('/application-classes') ? 'active' : ''}`}

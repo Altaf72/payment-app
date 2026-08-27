@@ -19,6 +19,7 @@ import DtcmReport from './pages/DtcmReport'
 import ImprestFundManagement from './pages/ImprestFundManagement'
 import LedgerTrackerWorkspace from './pages/LedgerTrackerWorkspace'
 import ApplicationClasses from './pages/ApplicationClasses'
+import CommissionSheets from './pages/CommissionSheets'
 
 function PrivateRoute({ children, allowedRoles }) {
   const { user, profile, loading } = useAuth()
@@ -94,6 +95,7 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="holiday-home-receipts" element={<ModuleRoute moduleKey="holiday_home_receipts"><HolidayHomeReceipts /></ModuleRoute>} />
+        <Route path="commission-sheets" element={<ModuleRoute moduleKey="commission_sheets"><CommissionSheets /></ModuleRoute>} />
         <Route path="payroll-integration" element={
           <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>
             <PayrollWorkbookDashboard />

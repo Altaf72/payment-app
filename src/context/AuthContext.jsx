@@ -8,16 +8,19 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [moduleAccess, setModuleAccess] = useState([])
+  const [moduleRoles, setModuleRoles] = useState([])
 
   async function fetchProfile(userId) {
-    const [{ data: profileData }, { data: modules }] = await Promise.all([
+    const [{ data: profileData }, { data: modules }, { data: roles }] = await Promise.all([
       supabase.from('users').select('*').eq('id', userId).single(),
       supabase.from('user_module_access').select('module_key').eq('user_id', userId).eq('granted', true),
+      supabase.from('user_module_roles').select('module_key,role_key').eq('user_id', userId),
     ])
 
     return {
       profile: profileData ?? null,
       moduleAccess: (modules || []).map(row => row.module_key),
+      moduleRoles: roles || [],
     }
   }
 
@@ -43,6 +46,7 @@ export function AuthProvider({ children }) {
         if (active && currentRequest === requestId) {
           setProfile(null)
           setModuleAccess([])
+          setModuleRoles([])
           loadedUserId = null
           setLoading(false)
         }
@@ -57,6 +61,7 @@ export function AuthProvider({ children }) {
         if (active && currentRequest === requestId) {
           setProfile(nextAccess.profile)
           setModuleAccess(nextAccess.moduleAccess)
+          setModuleRoles(nextAccess.moduleRoles)
           loadedUserId = nextUserId
           setLoading(false)
         }
@@ -68,6 +73,7 @@ export function AuthProvider({ children }) {
           console.error('Could not load user profile', error)
           setProfile(null)
           setModuleAccess([])
+          setModuleRoles([])
           loadedUserId = nextUserId
           setLoading(false)
         }
@@ -120,12 +126,16 @@ export function AuthProvider({ children }) {
     (moduleKey === 'payment_applications' && profile?.role === 'supervisor') ||
     (moduleKey === 'holiday_home_receipts' && ['finance','cfo','supervisor','manager'].includes(profile?.role)) ||
     (moduleKey === 'holiday_home_receipts' && profile?.holiday_home_receipts_enabled === true)
+  const hasModuleRole = (moduleKey, roleKey) => profile?.role === 'superadmin' || moduleRoles.some(row =>
+    row.module_key === moduleKey && (row.role_key === roleKey ||
+      (roleKey === 'view' && ['make','finance'].includes(row.role_key)) ||
+      (roleKey === 'make' && row.role_key === 'finance')))
 
   return (
     <AuthContext.Provider value={{
       user, profile, loading,
       signIn, signOut,
-      isFinanceOrAbove, isSuperAdmin, isUpperManagement, moduleAccess, hasModule
+      isFinanceOrAbove, isSuperAdmin, isUpperManagement, moduleAccess, moduleRoles, hasModule, hasModuleRole
     }}>
       {children}
     </AuthContext.Provider>

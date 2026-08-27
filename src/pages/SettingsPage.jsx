@@ -123,6 +123,7 @@ export default function SettingsPage() {
   const [userCompanies, setUserCompanies] = useState([])
   const [supervisorAssignments, setSupervisorAssignments] = useState([])
   const [moduleAssignments, setModuleAssignments] = useState([])
+  const [moduleRoles, setModuleRoles] = useState([])
   const [deletedLog, setDeletedLog]     = useState([])
   const [loading, setLoading]           = useState(true)
   const [msg, setMsg]                   = useState({ type: '', text: '' })
@@ -158,7 +159,7 @@ export default function SettingsPage() {
 
   async function load(initial = false) {
     if (initial) setLoading(true)
-    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }, { data: ma }, { data: sa }] = await Promise.all([
+    const [{ data: co }, { data: us }, { data: me }, { data: uc }, { data: dl }, { data: ma }, { data: sa }, { data: mr }] = await Promise.all([
       supabase.from('companies').select('*').order('name'),
       supabase.from('users').select('*').order('full_name'),
       supabase.from('payment_methods').select('*').order('name'),
@@ -166,12 +167,14 @@ export default function SettingsPage() {
       supabase.from('deleted_applications_log').select('*').order('deleted_at', { ascending: false }),
       supabase.from('user_module_access').select('*'),
       supabase.from('staff_supervisors').select('*'),
+      supabase.from('user_module_roles').select('*'),
     ])
     setCompanies(co || [])
     setUsers(us || [])
     setMethods(me || [])
     setUserCompanies(uc || [])
     setModuleAssignments(ma || [])
+    setModuleRoles(mr || [])
     setSupervisorAssignments(sa || [])
     setDeletedLog(dl || [])
 
@@ -327,6 +330,16 @@ export default function SettingsPage() {
     const { error } = await supabase.from('user_module_access').upsert({ user_id:userId, module_key:moduleKey, granted }, { onConflict:'user_id,module_key' })
     if (error) return flash('error', error.message)
     setModuleAssignments(current => [...current.filter(row => !(row.user_id === userId && row.module_key === moduleKey)), { user_id:userId, module_key:moduleKey, granted }])
+  }
+
+  async function toggleModuleRole(userId, roleKey, granted) {
+    const filter = query => query.eq('user_id', userId).eq('module_key', 'commission_sheets').eq('role_key', roleKey)
+    const { error } = granted
+      ? await supabase.from('user_module_roles').upsert({ user_id:userId, module_key:'commission_sheets', role_key:roleKey }, { onConflict:'user_id,module_key,role_key' })
+      : await filter(supabase.from('user_module_roles').delete())
+    if (error) return flash('error', error.message)
+    if (granted) await supabase.from('user_module_access').upsert({ user_id:userId, module_key:'commission_sheets', granted:true }, { onConflict:'user_id,module_key' })
+    await load()
   }
 
   async function mergeUsers(sourceId, targetId) {
@@ -818,9 +831,11 @@ export default function SettingsPage() {
 
         {tab === 'modules' && (
           <div className="card"><div className="card-header"><h2>User · Role · Module Access</h2><span className="text-sm text-muted">Roles do not grant modules automatically.</span></div>
-            <div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Payment Applications</th><th>Vouchers</th><th>Holiday Home Receipts</th></tr></thead><tbody>
+            <div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Payment Applications</th><th>Vouchers</th><th>Holiday Home Receipts</th><th>Commission Input Sheet</th><th>CS: View</th><th>CS: Make</th><th>CS: Finance</th></tr></thead><tbody>
               {users.filter(u => !u.merged_into).map(u => <tr key={u.id}><td>{u.full_name}<div className="text-sm text-muted">{u.email}</div></td><td>{u.role}</td>
                 {['payment_applications','vouchers','holiday_home_receipts'].map(key => { const granted = u.role === 'superadmin' || moduleAssignments.some(row => row.user_id===u.id && row.module_key===key && row.granted); return <td key={key}><input type="checkbox" checked={granted} disabled={u.role==='superadmin'} onChange={e => toggleModuleAccess(u.id,key,e.target.checked)} /></td> })}
+                {(() => { const moduleGranted = u.role === 'superadmin' || moduleAssignments.some(row => row.user_id===u.id && row.module_key==='commission_sheets' && row.granted); return <td><input type="checkbox" checked={moduleGranted} disabled={u.role==='superadmin'} onChange={e => toggleModuleAccess(u.id,'commission_sheets',e.target.checked)} /></td> })()}
+                {['view','make','finance'].map(roleKey => { const assigned = u.role === 'superadmin' || moduleRoles.some(row => row.user_id===u.id && row.module_key==='commission_sheets' && row.role_key===roleKey); return <td key={roleKey}><input type="checkbox" checked={assigned} disabled={u.role==='superadmin'} onChange={e => toggleModuleRole(u.id,roleKey,e.target.checked)} /></td> })}
               </tr>)}
             </tbody></table></div>
           </div>
