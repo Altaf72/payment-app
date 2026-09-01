@@ -1614,7 +1614,7 @@ function chequeMenuActions(rec, onChange){
           '<p>This removes the '+esc(rec.chequeNo||"(no ref)")+' cheque for <strong>'+esc(rec.propertyKey||rec.description||"—")+'</strong> dated '+esc(A.fmtDateDisplay(rec.chequeDate))+'. This can\'t be undone.</p>',
           "Delete", function(){
             A.STATE.cheques = A.STATE.cheques.filter(function(c){ return c._id !== rec._id; });
-            A.toast("Cheque deleted.", "ok");
+            A.toast("Deleting cheque from Supabase…");
             onChange && onChange();
           }, {danger:true});
       } }
@@ -2761,7 +2761,7 @@ function renderPropertyUnits(){
           '<p>This removes the property record only.'+(related.length?(' Its '+related.length+' related cheque(s) will remain in the ledger but become orphaned until re-linked.'):'')+'</p>',
           "Delete", function(){
             A.STATE.properties = A.STATE.properties.filter(function(x){ return x._id!==p._id; });
-            A.toast("Property deleted.", "ok");
+            A.toast("Deleting property from Supabase…");
             renderPropertyUnits();
           }, {danger:true});
       });

@@ -32,6 +32,11 @@ export default function LedgerTrackerWorkspace() {
       }
       const state = event.data.state || {}
       try {
+        const previousState = event.data.previousState || {}
+        const removedValues = (previousRows, currentRows, key) => {
+          const current = new Set((currentRows || []).map(row => String(row?.[key] || '').trim()).filter(Boolean))
+          return [...new Set((previousRows || []).map(row => String(row?.[key] || '').trim()).filter(value => value && !current.has(value)))]
+        }
         const properties = uniqueBy((state.properties || []).filter(p => p.propertyKey).map(p => ({ property_key: String(p.propertyKey).trim(), record_type: p.recordType || 'Property', property_unit: p.propertyUnit ? String(p.propertyUnit) : null, entity: p.entity || null, payee_owner: p.payeeOwner || null, contract_start: isoDate(p.contractStart), contract_end: isoDate(p.contractEnd), annual_rent: Number(p.annualRent || 0), total_installments: Number(p.totalInstallments || 0) || null, property_status: p.propertyStatus || null, owner_nationality: p.ownerNationality || null, management_type: p.managementType || null, created_by: user.id, updated_by: user.id })), row => row.property_key)
         const propertyKeys = new Set(properties.map(p => p.property_key))
         const entries = makeUniqueEntryKeys((state.cheques || []).map((c, index) => ({ source_import_key: c.sourceImportKey || `entry-${c._id || index}-${String(c.propertyKey || '').trim()}-${c.chequeDate || ''}`, direction: String(c.direction || 'Payable').toLowerCase() === 'receivable' ? 'receivable' : 'payable', cheque_no: c.chequeNo || null, property_key: c.propertyKey || null, entity: c.entity || null, due_date: isoDate(c.chequeDate) || new Date().toISOString().slice(0, 10), cleared_date: isoDate(c.clearedDate), is_undated: Boolean(c.isUndated), property_name: c.description || null, counterparty: c.counterparty || c.description || c.propertyKey || 'Unassigned', category: c.paymentPurpose || null, payment_mode: c.paymentMode || null, recurrence_frequency: c.recurrenceFrequency || null, amount: Number(c.amount || 0.01) || 0.01, currency: 'AED', status: mapStatus(c.status), source_status: c.status || null, notes: c.description || null, created_by: user.id, updated_by: user.id })))
@@ -71,11 +76,21 @@ export default function LedgerTrackerWorkspace() {
           return
         }
 
+        // Upserts alone cannot reflect a deleted local record. Reconcile the
+        // keys removed since the last successfully hydrated/saved snapshot.
+        const deletedEntryKeys = removedValues(previousState.cheques, state.cheques, 'sourceImportKey')
+        const deletedDepositKeys = removedValues(previousState.deposits, state.deposits, 'propertyKey')
+        const deletedPropertyKeys = removedValues(previousState.properties, state.properties, 'propertyKey')
+        const deletedSetupLists = removedValues(Object.keys(previousState.setupLists || {}).map(list_name => ({ list_name })), Object.keys(state.setupLists || {}).map(list_name => ({ list_name })), 'list_name')
+        if (deletedEntryKeys.length) { const { error } = await supabase.from('cheque_flow_entries').delete().in('source_import_key', deletedEntryKeys); if (error) throw error }
+        if (deletedDepositKeys.length) { const { error } = await supabase.from('cheque_flow_deposits').delete().in('property_key', deletedDepositKeys); if (error) throw error }
+        if (deletedPropertyKeys.length) { const { error } = await supabase.from('cheque_flow_properties').delete().in('property_key', deletedPropertyKeys); if (error) throw error }
+        if (deletedSetupLists.length) { const { error } = await supabase.from('cheque_flow_setup_lists').delete().in('list_name', deletedSetupLists); if (error) throw error }
         if (properties.length) { const { error } = await supabase.from('cheque_flow_properties').upsert(properties, { onConflict: 'property_key' }); if (error) throw error }
         if (deposits.length) { const { error } = await supabase.from('cheque_flow_deposits').upsert(deposits, { onConflict: 'property_key' }); if (error) throw error }
         if (entries.length) { const { error } = await supabase.from('cheque_flow_entries').upsert(entries, { onConflict: 'source_import_key' }); if (error) throw error }
         if (setup.length) { const { error } = await supabase.from('cheque_flow_setup_lists').upsert(setup, { onConflict: 'list_name' }); if (error) throw error }
-        iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: true }, window.location.origin)
+        iframeRef.current?.contentWindow?.postMessage({ type: 'chequeflow:sync-result', ok: true, message: event.data.syncMessage || 'Saved to Supabase.' }, window.location.origin)
       } catch (error) {
         replaceInProgressRef.current = false
         ignoreStateSaveUntilRef.current = Date.now() + 3000
@@ -136,11 +151,19 @@ export default function LedgerTrackerWorkspace() {
           ;(state.cheques || []).forEach(cheque => {
             if (!cheque.sourceImportKey) cheque.sourceImportKey = `entry-${crypto.randomUUID()}`
           })
+          const previousState = JSON.parse(doc.defaultView.__chequeFlowDataBaseline)
           const nextSnapshot = dataSnapshot(state)
           if (nextSnapshot === doc.defaultView.__chequeFlowDataBaseline) return
+          const removedCheques = (previousState.cheques || []).filter(row => row.sourceImportKey && !(state.cheques || []).some(current => current.sourceImportKey === row.sourceImportKey)).length
+          const removedProperties = (previousState.properties || []).filter(row => row.propertyKey && !(state.properties || []).some(current => current.propertyKey === row.propertyKey)).length
+          const syncMessage = removedCheques
+            ? `${removedCheques === 1 ? 'Cheque' : `${removedCheques} cheques`} deleted.`
+            : removedProperties
+              ? `${removedProperties === 1 ? 'Property' : `${removedProperties} properties`} deleted.`
+              : 'Saved to Supabase.'
           doc.defaultView.__chequeFlowPreviousBaseline = doc.defaultView.__chequeFlowDataBaseline
           doc.defaultView.__chequeFlowDataBaseline = nextSnapshot
-          doc.defaultView.parent.postMessage({ type: 'chequeflow:state-save', state: { cheques: state.cheques, properties: state.properties, deposits: state.deposits, setupLists: state.setupLists } }, window.location.origin)
+          doc.defaultView.parent.postMessage({ type: 'chequeflow:state-save', state: { cheques: state.cheques, properties: state.properties, deposits: state.deposits, setupLists: state.setupLists }, previousState, syncMessage }, window.location.origin)
         }, 350)
       }
     }
@@ -158,7 +181,7 @@ export default function LedgerTrackerWorkspace() {
         doc.defaultView.__chequeFlowDataBaseline = doc.defaultView.__chequeFlowPreviousBaseline
         doc.defaultView.__chequeFlowPreviousBaseline = null
       }
-      doc.defaultView?.APP?.toast?.(event.data.ok ? 'Saved to Supabase.' : `Supabase sync failed: ${event.data.message}`, event.data.ok ? 'ok' : 'err')
+      doc.defaultView?.APP?.toast?.(event.data.ok ? (event.data.message || 'Saved to Supabase.') : `Supabase sync failed: ${event.data.message}`, event.data.ok ? 'ok' : 'err')
       const notice = doc.getElementById('setupSyncMessage')
       if (notice && notice.style.display !== 'none') {
         notice.style.color = event.data.ok ? '#17624F' : '#B42318'

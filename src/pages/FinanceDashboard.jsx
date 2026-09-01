@@ -479,12 +479,12 @@ export default function FinanceDashboard() {
     if (rows.length > 0) {
       const { data: classRows, error: classError } = await supabase
         .from('applications')
-        .select('id,class_name')
+        .select('id,class_name,class_names')
         .in('id', rows.map(app => app.id))
       if (classError) console.error('Could not load application classes', classError)
       else {
-        const classById = new Map((classRows || []).map(row => [row.id, row.class_name]))
-        rows = rows.map(app => ({ ...app, class_name: classById.get(app.id) || '' }))
+        const classById = new Map((classRows || []).map(row => [row.id, { class_name:row.class_name, class_names:row.class_names }]))
+        rows = rows.map(app => ({ ...app, ...(classById.get(app.id) || { class_name:'', class_names:[] }) }))
       }
     }
     if (amountSearch.trim()) {
@@ -613,15 +613,15 @@ export default function FinanceDashboard() {
       const classRows = []
       const ids = rows.map(row => row.id)
       for (let index = 0; index < ids.length; index += 200) {
-        const { data, error } = await supabase.from('applications').select('id,class_name').in('id', ids.slice(index, index + 200))
+        const { data, error } = await supabase.from('applications').select('id,class_name,class_names').in('id', ids.slice(index, index + 200))
         if (error) {
           alert('Could not load application classes: ' + error.message)
           return
         }
         classRows.push(...(data || []))
       }
-      const classById = new Map(classRows.map(row => [row.id, row.class_name]))
-      rows = rows.map(row => ({ ...row, class_name: classById.get(row.id) || '' }))
+      const classById = new Map(classRows.map(row => [row.id, { class_name:row.class_name, class_names:row.class_names }]))
+      rows = rows.map(row => ({ ...row, ...(classById.get(row.id) || { class_name:'', class_names:[] }) }))
     }
 
     const csv = [
@@ -1338,10 +1338,11 @@ export default function FinanceDashboard() {
                           </CopyableField>
                         </td>
 
-                        <td style={{verticalAlign:'middle',maxWidth:'100px',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          <CopyableField copyText={app.class_name || ''} label="Class" style={{fontSize:'12px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                            {app.class_name || '—'}
-                          </CopyableField>
+                        <td style={{verticalAlign:'middle',minWidth:'145px',paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
+                          {(() => {
+                            const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
+                            return properties.length ? <div style={{display:'flex',flexDirection:'column',gap:'3px'}}>{properties.map(property => <CopyableField key={property} copyText={property} label="Apartment / Property" style={{fontSize:'12px',lineHeight:'1.25'}}>{property}</CopyableField>)}</div> : '—'
+                          })()}
                         </td>
 
                         {/* Payee — 1 line */}
