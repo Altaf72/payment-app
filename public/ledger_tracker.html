@@ -2410,6 +2410,52 @@ function propertyDisplayName(rec){
   return prop ? (prop.propertyUnit || prop.propertyKey || "—") : (rec.propertyKey || rec.description || "—");
 }
 
+function emailDate(rec){
+  var date = A.parseDate(rec.chequeDate);
+  if(!date) return "Undated";
+  return String(date.getDate()).padStart(2,"0") + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][date.getMonth()] + " " + date.getFullYear();
+}
+
+function buildUpcomingEmailDraft(records){
+  var ordered = records.slice().sort(function(a,b){
+    var aDate=A.parseDate(a.chequeDate), bDate=A.parseDate(b.chequeDate);
+    if(!aDate && !bDate) return 0;
+    if(!aDate) return 1;
+    if(!bDate) return -1;
+    return aDate-bDate;
+  });
+  var dated = ordered.filter(function(rec){ return !!A.parseDate(rec.chequeDate); });
+  var range = dated.length ? emailDate({chequeDate:dated[0].chequeDate}) + " to " + emailDate({chequeDate:dated[dated.length-1].chequeDate}) : "Undated cheques";
+  var title = "Upcoming payments — " + ordered.length + " Payment(s): " + range;
+  var groups = [];
+  ordered.forEach(function(rec){
+    var purpose = String(rec.paymentPurpose || "Unspecified").trim() || "Unspecified";
+    var key = purpose.toLowerCase();
+    var group = groups.find(function(item){ return item.key===key; });
+    if(!group){ group={key:key, purpose:purpose, records:[]}; groups.push(group); }
+    group.records.push(rec);
+  });
+  var total = 0;
+  var textBlocks = groups.map(function(group){
+    var subtotal = group.records.reduce(function(sum, rec){ return sum + (parseFloat(rec.amount)||0); }, 0);
+    total += subtotal;
+    var lines = group.records.map(function(rec){
+      return propertyDisplayName(rec) + " | " + emailDate(rec) + " | AED " + A.fmtMoney(rec.amount) + " | " + (rec.paymentMode || rec.status || "—");
+    });
+    return "Purpose: " + group.purpose + " (AED " + A.fmtMoney(subtotal) + ")\n" + lines.join("\n");
+  });
+  var text = title + "\n\n" + textBlocks.join("\n\n") + "\n\nTotal: AED " + A.fmtMoney(total);
+  var htmlBlocks = groups.map(function(group){
+    var subtotal = group.records.reduce(function(sum, rec){ return sum + (parseFloat(rec.amount)||0); }, 0);
+    var rows = group.records.map(function(rec){
+      return '<tr><td style="padding:4px 10px 4px 0">'+esc(propertyDisplayName(rec))+'</td><td style="padding:4px 10px">'+esc(emailDate(rec))+'</td><td style="padding:4px 10px;text-align:right">AED '+esc(A.fmtMoney(rec.amount))+'</td><td style="padding:4px 0 4px 10px">'+esc(rec.paymentMode || rec.status || "—")+'</td></tr>';
+    }).join("");
+    return '<div style="margin:0 0 18px"><div style="font-weight:700;margin:0 0 5px">Purpose: '+esc(group.purpose)+' (AED '+esc(A.fmtMoney(subtotal))+')</div><table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;font-size:13px">'+rows+'</table></div>';
+  }).join("");
+  var html = '<div style="font-family:Arial,Helvetica,sans-serif;color:#1B2B27"><h3 style="margin:0 0 16px;font-size:15px">'+esc(title)+'</h3>'+htmlBlocks+'<div style="font-weight:800;border-top:1px solid #D7DBCE;padding-top:10px">Total: AED '+esc(A.fmtMoney(total))+'</div></div>';
+  return { title:title, text:text, html:html };
+}
+
 function toastForClipboardResult(kind){
   if(kind === "html") A.toast("Formatted table copied — paste it into the email body to replace the plain list.", "ok");
   else if(kind === "text") A.toast("Copied as plain text — this browser can't copy a rich table.", "ok");
@@ -2432,13 +2478,9 @@ function describeCurrentRange(){
 function emailForCurrentView(){
   var recs = currentFilteredUpcoming();
   if(!recs.length){ A.toast("No cheques match the current filters.", "err"); return; }
-  var rangeLabel = describeCurrentRange();
-  var title = "Upcoming payments — " + rangeLabel;
-  var subject = title + " (" + recs.length + " cheque" + (recs.length===1?"":"s") + ")";
-  var text = A.buildPlainEmailBody(recs, title);
-  var html = A.buildHtmlEmailTable(recs, title);
-  A.writeRichClipboard(html, text).then(toastForClipboardResult);
-  window.location.href = "mailto:?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(text);
+  var draft = buildUpcomingEmailDraft(recs);
+  A.writeRichClipboard(draft.html, draft.text).then(toastForClipboardResult);
+  window.location.href = "mailto:?subject=" + encodeURIComponent(draft.title) + "&body=" + encodeURIComponent(draft.text);
 }
 
 function copyCurrentViewAsTable(){
@@ -2452,11 +2494,9 @@ function copyCurrentViewAsTable(){
 function bulkEmail(){
   var recs = selectedRecords();
   if(!recs.length) return;
-  var title = "Upcoming payments — " + recs.length + " cheque(s)";
-  var text = A.buildPlainEmailBody(recs, title);
-  var html = A.buildHtmlEmailTable(recs, title);
-  A.writeRichClipboard(html, text).then(toastForClipboardResult);
-  window.location.href = "mailto:?subject=" + encodeURIComponent(title) + "&body=" + encodeURIComponent(text);
+  var draft = buildUpcomingEmailDraft(recs);
+  A.writeRichClipboard(draft.html, draft.text).then(toastForClipboardResult);
+  window.location.href = "mailto:?subject=" + encodeURIComponent(draft.title) + "&body=" + encodeURIComponent(draft.text);
 }
 function bulkCopy(){
   var recs = selectedRecords();
