@@ -354,11 +354,11 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
           {/* Row 3: Class */}
           <tr>
             <td style={s.lc}>
-              类别
-              <span style={s.sub}>Class</span>
+              房产
+              <span style={s.sub}>Apartment /<br/>Property</span>
             </td>
             <td style={{ ...s.vc, textAlign:'left' }} colSpan={3}>
-              {app.class_name || '—'}
+              {app.class_names?.length ? app.class_names.join(' · ') : (app.class_name || '—')}
             </td>
           </tr>
 
@@ -2396,7 +2396,7 @@ export default function ApplicationDetail() {
               )}
               {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
               <div className="form-group">
-                <div className="form-label">Class</div>
+                <div className="form-label">Apartment / Property <span className="cn">Class</span></div>
                 {canEditClass ? <>
                   <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
                     <select className="form-control" multiple value={classNames} onChange={event => setClassNames(Array.from(event.target.selectedOptions, option => option.value))} style={{maxWidth:'300px',minHeight:'105px'}}>
@@ -2406,8 +2406,12 @@ export default function ApplicationDetail() {
                       {classSaving ? 'Saving...' : 'Save Class'}
                     </button>
                   </div>
+                  {classNames.length > 0 && <div className="form-hint" style={{marginTop:'7px'}}>Selected: {classNames.join(' · ')}</div>}
                   {classError && <p className="form-error">{classError}</p>}
-                </> : <div>{app.class_name || '—'}</div>}
+                </> : (() => {
+                  const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
+                  return properties.length ? <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>{properties.map(property => <div key={property}>{property}</div>)}</div> : <div>—</div>
+                })()}
               </div>
               {(savedApplicationAttachments.length > 0 || canAddSupportingAttachment) && (
                 <div className="form-group">
