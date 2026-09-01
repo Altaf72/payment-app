@@ -127,23 +127,48 @@ function loadUsedRefs() {
   }
 }
 
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    textarea.remove()
+  }
+}
+
+function CopyApplicationSummaryButton({ app }) {
+  const [copied, setCopied] = useState(false)
+  const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
+  const text = [
+    app.ref_number,
+    app.submitted_by_name,
+    app.payment_reason,
+    properties.join(', '),
+    app.payee_name,
+    app.amount ?? '',
+    formatDate(app.created_at),
+    app.remarks,
+  ].map(value => String(value || '').trim()).join(' | ')
+
+  return <button type="button" title="Copy all transaction fields" aria-label="Copy all transaction fields"
+    onClick={async event => { event.stopPropagation(); await copyToClipboard(text); setCopied(true); setTimeout(() => setCopied(false), 1200) }}
+    style={{background:'none',border:'1px solid var(--border)',borderRadius:'3px',padding:'1px 4px',cursor:'pointer',fontSize:'10px',color:copied ? 'var(--status-approved)' : 'var(--ink-3)',lineHeight:1,flexShrink:0}}>
+    {copied ? '✓' : 'ALL'}
+  </button>
+}
+
 // Lets finance staff move through values with Tab and copy the focused value
 // straight into another application with Ctrl/Cmd+C.
 function CopyableField({ children, copyText, label, title, style, onCopy }) {
   const copy = async () => {
     const text = String(copyText ?? '')
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.style.position = 'fixed'
-      textarea.style.opacity = '0'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      textarea.remove()
-    }
+    await copyToClipboard(text)
     onCopy?.()
   }
 
@@ -1270,6 +1295,7 @@ export default function FinanceDashboard() {
                               }}>
                               ⧉
                             </button>
+                            <CopyApplicationSummaryButton app={app} />
                             <span id={`copied-${app.id}`} style={{
                               fontSize:'9px', color:'var(--status-approved)',
                               opacity:0, transition:'opacity 0.2s', whiteSpace:'nowrap',

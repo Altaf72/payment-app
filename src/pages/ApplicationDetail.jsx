@@ -2398,15 +2398,22 @@ export default function ApplicationDetail() {
               <div className="form-group">
                 <div className="form-label">Apartment / Property <span className="cn">Class</span></div>
                 {canEditClass ? <>
-                  <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
-                    <select className="form-control" multiple value={classNames} onChange={event => setClassNames(Array.from(event.target.selectedOptions, option => option.value))} style={{maxWidth:'300px',minHeight:'105px'}}>
-                      {applicationClasses.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+                  <div style={{display:'flex',gap:'12px',alignItems:'flex-start',flexWrap:'wrap'}}>
+                    <select className="form-control" value="" onChange={event => {
+                      const value = event.target.value
+                      if (value && !classNames.includes(value)) setClassNames([...classNames, value])
+                    }} style={{flex:'1 1 260px',maxWidth:'420px'}}>
+                      <option value="">Select apartment / property…</option>
+                      {applicationClasses.filter(item => !classNames.includes(item.name)).map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
                     </select>
+                    <div aria-label="Selected apartments and properties" style={{flex:'1 1 300px',minHeight:'42px',display:'flex',gap:'7px',flexWrap:'wrap',alignItems:'center',padding:'6px 8px',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',background:'var(--cream)'}}>
+                      {classNames.length ? classNames.map(name => <span key={name} style={{display:'inline-flex',alignItems:'center',gap:'6px',padding:'4px 8px',borderRadius:'999px',background:'var(--gold-light)',color:'var(--ink)',fontSize:'13px',fontWeight:600}}>{name}<button type="button" aria-label={`Remove ${name}`} title={`Remove ${name}`} onClick={() => setClassNames(classNames.filter(item => item !== name))} style={{border:0,background:'transparent',color:'inherit',font:'inherit',fontSize:'17px',lineHeight:1,cursor:'pointer',padding:0}}>×</button></span>) : <span className="text-muted" style={{fontSize:'13px'}}>Selected properties appear here.</span>}
+                    </div>
                     <button type="button" className="btn btn-success btn-sm" disabled={classSaving || classNames.join(', ') === (app.class_name || '')} onClick={saveClass}>
                       {classSaving ? 'Saving...' : 'Save Class'}
                     </button>
                   </div>
-                  {classNames.length > 0 && <div className="form-hint" style={{marginTop:'7px'}}>Selected: {classNames.join(' · ')}</div>}
+                  <p className="form-hint">Choose a property from the dropdown. You can add more than one and remove any selection using ×.</p>
                   {classError && <p className="form-error">{classError}</p>}
                 </> : (() => {
                   const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
