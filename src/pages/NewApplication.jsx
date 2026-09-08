@@ -415,11 +415,6 @@ export default function NewApplication() {
   function acceptAttachment(file, source = 'file', clearInput) {
     setAttError('')
     if (!file) return
-    if (!['application/pdf','image/jpeg','image/png'].includes(file.type)) {
-      setAttError('Only PDF, JPG and PNG')
-      if (clearInput) clearInput()
-      return
-    }
     if (file.size > 5*1024*1024) {
       setAttError('File must be under 5MB')
       if (clearInput) clearInput()
@@ -851,7 +846,7 @@ export default function NewApplication() {
                   ))}
               </div>
             )}
-            <input type="file" className="form-control" accept=".pdf,.jpg,.jpeg,.png"
+            <input type="file" className="form-control" accept="*/*"
               multiple onChange={handleFile} style={{padding:'7px'}} />
             <div style={{marginTop:'8px'}}>
               <button type="button" className="btn btn-outline"
@@ -875,7 +870,7 @@ export default function NewApplication() {
                     }}>
                       {item.file.type.startsWith('image/')
                         ? <img src={item.previewUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} />
-                        : <span style={{fontSize:'11px',fontWeight:700,color:'var(--ink-3)'}}>PDF</span>
+                        : <span style={{fontSize:'11px',fontWeight:700,color:'var(--ink-3)'}}>{item.file.name.split('.').pop()?.slice(0,5).toUpperCase() || 'FILE'}</span>
                       }
                     </div>
                     <div style={{minWidth:0}}>
@@ -895,7 +890,7 @@ export default function NewApplication() {
               </div>
             )}
             {attError && <p className="form-error">{attError}</p>}
-            <p className="form-hint">Choose one or more PDF/JPG/PNG files, or paste screenshots one at a time · Max 5MB each · Optional</p>
+            <p className="form-hint">Choose documents, spreadsheets, images, text files, PDFs, or other file types; you can also paste screenshots · Max 5MB each · Optional</p>
           </div>
 
           <hr className="divider" />

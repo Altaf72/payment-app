@@ -79,6 +79,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
   const [withdrawing, setWithdrawing]   = useState(null)
   const [subordinates, setSubordinates] = useState([])
   const [selectedSubordinateId, setSelectedSubordinateId] = useState('')
+  const [allocatedCompanyCount, setAllocatedCompanyCount] = useState(null)
   const loadRequestRef                  = React.useRef(0)
 
   const STORAGE_KEY = 'my_applications_filters'
@@ -90,27 +91,27 @@ export default function MyApplications({ supervisorDashboard = false }) {
   const [search,   setSearch]   = useState(saved.search   || '')
   const [page,     setPage]     = useState(saved.page     || 1)
   const [pageSize, setPageSize] = useState(saved.pageSize || 20)
+  const [statusFilter, setStatusFilter] = useState(saved.statusFilter || '')
+  const [fromDate, setFromDate] = useState(saved.fromDate || '')
+  const [toDate, setToDate] = useState(saved.toDate || '')
 
   useEffect(() => {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ search, page, pageSize }))
-  }, [search, page, pageSize])
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ search, page, pageSize, statusFilter, fromDate, toDate }))
+  }, [search, page, pageSize, statusFilter, fromDate, toDate])
 
   const isFirstRender = React.useRef(true)
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [search])
+  }, [search, statusFilter, fromDate, toDate])
 
-  useEffect(() => { load() }, [page, pageSize, search, user?.id, profile?.role, supervisorDashboard, selectedSubordinateId])
+  useEffect(() => { load() }, [page, pageSize, search, statusFilter, fromDate, toDate, user?.id, profile?.role, supervisorDashboard, selectedSubordinateId])
 
   async function load() {
     if (!user?.id) return
     const requestId = ++loadRequestRef.current
     setLoading(true)
     setLoadError('')
-    const from = (page - 1) * pageSize
-    const to   = from + pageSize - 1
-
     let visibleSubmitterIds = [user.id]
     if (profile?.role === 'supervisor') {
       const { data: assignments, error: assignmentError } = await supabase
@@ -145,22 +146,18 @@ export default function MyApplications({ supervisorDashboard = false }) {
       setSubordinates([])
     }
 
-    let query = supabase
+    const { data: companyAssignments } = await supabase
+      .from('user_companies').select('company_id').eq('user_id', user.id)
+    setAllocatedCompanyCount((companyAssignments || []).length)
+
+    const query = supabase
       .from('applications_full')
-      .select('*', { count: 'exact' })
+      .select('*')
       .in('submitted_by', visibleSubmitterIds)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
-      .range(from, to)
 
-    const searchTerm = search.trim().replace(/[,%()]/g, ' ').trim()
-    if (searchTerm) {
-      query = query.or(
-        `ref_number.ilike.%${searchTerm}%,payment_reason.ilike.%${searchTerm}%,company_name.ilike.%${searchTerm}%`
-      )
-    }
-
-    const { data, count, error } = await query
+    const { data, error } = await query
     if (requestId !== loadRequestRef.current) return
     if (error) {
       console.error(error)
@@ -171,12 +168,30 @@ export default function MyApplications({ supervisorDashboard = false }) {
       return
     }
 
-    const lastPage = Math.max(1, Math.ceil((count || 0) / pageSize))
+    const allRows = data || []
+    const { data: classRows, error: classError } = allRows.length
+      ? await supabase.from('applications').select('id,class_name,class_names,remarks').in('id', allRows.map(app => app.id))
+      : { data:[], error:null }
+    if (classError) console.error('Could not load application properties', classError)
+    const classById = new Map((classRows || []).map(row => [row.id, row]))
+    const searchTerm = search.trim().toLowerCase()
+    const filteredRows = allRows
+      .map(app => ({ ...app, ...(classById.get(app.id) || {}) }))
+      .filter(app => {
+        const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',') : [])
+        const matchesSearch = !searchTerm || [app.ref_number, app.payment_reason, app.company_name, app.payee_name, app.remarks, ...properties]
+          .some(value => String(value || '').toLowerCase().includes(searchTerm))
+        const matchesStatus = !statusFilter || app.status === statusFilter
+        const createdDate = String(app.created_at || '').slice(0, 10)
+        return matchesSearch && matchesStatus && (!fromDate || createdDate >= fromDate) && (!toDate || createdDate <= toDate)
+      })
+    const totalMatches = filteredRows.length
+    const lastPage = Math.max(1, Math.ceil(totalMatches / pageSize))
     if (page > lastPage) {
       setPage(lastPage)
       return
     }
-    const rows = data || []
+    const rows = filteredRows.slice((page - 1) * pageSize, page * pageSize)
     if (rows.length > 0) {
       const { data: attachments, error: attachmentError } = await supabase
         .from('application_attachments')
@@ -191,7 +206,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
       rows.forEach(app => { app.applicant_attachments = attachmentsByApplication[app.id] || [] })
     }
     setApplications(rows)
-    setTotal(count || 0)
+    setTotal(totalMatches)
     setLoading(false)
   }
 
@@ -215,6 +230,7 @@ export default function MyApplications({ supervisorDashboard = false }) {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const showCompany = supervisorDashboard || profile?.role !== 'staff' || allocatedCompanyCount !== 1
 
   const counts = {
     total:    total,
@@ -268,13 +284,23 @@ export default function MyApplications({ supervisorDashboard = false }) {
         </div>
       )}
 
-      <div className="filter-bar">
+      <div className="filter-bar" style={{alignItems:'end'}}>
         <input className="form-control search-input"
-          placeholder="Search by ref, reason, company…"
+          placeholder="Search ref, payment reason, property, remarks or payee…"
           value={search} onChange={e => setSearch(e.target.value)} />
-        {search && (
+        <select className="form-control" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{minWidth:'150px'}}>
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option><option value="pending">Pending</option>
+          <option value="mgr_approved">Manager approved</option><option value="fin_approved">Finance approved</option>
+          <option value="approved">Approved</option><option value="returned">Returned</option>
+          <option value="rejected">Rejected</option><option value="mgr_rejected">Manager rejected</option>
+          <option value="escalated">Escalated</option><option value="withdrawn">Withdrawn</option>
+        </select>
+        <label className="form-group" style={{margin:0,minWidth:'145px'}}>From<input className="form-control" type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} /></label>
+        <label className="form-group" style={{margin:0,minWidth:'145px'}}>To<input className="form-control" type="date" value={toDate} onChange={e => setToDate(e.target.value)} /></label>
+        {(search || statusFilter || fromDate || toDate) && (
           <button className="btn btn-outline btn-sm" onClick={() => {
-            setSearch(''); setPage(1)
+            setSearch(''); setStatusFilter(''); setFromDate(''); setToDate(''); setPage(1)
             sessionStorage.removeItem('my_applications_filters')
           }}>✕ Clear</button>
         )}
@@ -303,9 +329,11 @@ export default function MyApplications({ supervisorDashboard = false }) {
               <thead>
                 <tr>
                   <th>Reference</th>
-                  <th>Company</th>
+                  {showCompany && <th>Company</th>}
                   {profile?.role === 'supervisor' && <th>Applicant</th>}
                   <th>Application Type</th>
+                  <th>Apartment / Property</th>
+                  <th>Remarks</th>
                   <th>Amount (AED)</th>
                   <th>Date</th>
                   <th>Attachments</th>
@@ -326,12 +354,19 @@ export default function MyApplications({ supervisorDashboard = false }) {
                           {app.ref_number || '—'}
                         </span>
                       </td>
-                      <td>{app.company_name}</td>
+                      {showCompany && <td>{app.company_name}</td>}
                       {profile?.role === 'supervisor' && <td>{app.submitted_by_name || '—'}</td>}
                       <td style={{maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                         <div>{app.payment_reason}</div>
                         <div className="text-muted text-sm">{app.payment_method_name || '—'}</div>
                       </td>
+                      <td style={{maxWidth:'180px',fontSize:'12px'}}>
+                        {(() => {
+                          const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
+                          return properties.length ? properties.map(property => <div key={property}>{property}</div>) : <span className="text-muted">—</span>
+                        })()}
+                      </td>
+                      <td style={{maxWidth:'220px',fontSize:'12px',whiteSpace:'pre-line'}}>{app.remarks || <span className="text-muted">—</span>}</td>
                       <td style={{fontWeight:500}}>{formatCurrency(app.amount)}</td>
                       <td className="text-muted">{formatDate(app.created_at)}</td>
                       <td>

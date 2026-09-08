@@ -1225,11 +1225,6 @@ export default function ApplicationDetail() {
     setFinanceAttError('')
     setFinanceAttLabel('')
     if (!file) { setFinanceAttachment(null); return }
-    if (!['application/pdf','image/jpeg','image/png'].includes(file.type)) {
-      setFinanceAttError('Only PDF, JPG and PNG')
-      e.target.value = ''
-      return
-    }
     if (file.size > 5*1024*1024) {
       setFinanceAttError('File must be under 5MB')
       e.target.value = ''
@@ -1401,10 +1396,6 @@ export default function ApplicationDetail() {
     setApplicantAttError('')
     setApplicantAttLabel('')
     if (!file) return
-    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
-      setApplicantAttError('Only PDF, JPG and PNG files can be added.')
-      return
-    }
     if (file.size > 5 * 1024 * 1024) {
       setApplicantAttError('File must be under 5MB.')
       return
@@ -1456,6 +1447,35 @@ export default function ApplicationDetail() {
           path: att.path,
           name: att.name,
         }),
+      })
+      if (logError) throw logError
+      await load()
+    } catch (err) {
+      alert(err.message || 'Could not delete attachment')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function deleteApplicantAttachment(att) {
+    const name = att.file_name || att.name || 'this attachment'
+    if (!window.confirm(`Remove ${name}?\n\nThis permanently removes the file and records the action in the application log.`)) return
+    setActionLoading(true)
+    try {
+      const { error: storageError } = await supabase.storage.from('attachments').remove([att.storage_path])
+      if (storageError) throw storageError
+      if (att.id === 'legacy') {
+        const { error } = await supabase.from('applications').update({ attachment_path:null, attachment_name:null }).eq('id', id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('application_attachments').delete().eq('id', att.id)
+        if (error) throw error
+      }
+      const { error: logError } = await supabase.from('audit_log').insert({
+        application_id: id,
+        action_by: user.id,
+        action: 'edited',
+        note: JSON.stringify({ type:'applicant_attachment_deleted', path:att.storage_path, name, removed_by:'finance' }),
       })
       if (logError) throw logError
       await load()
@@ -1740,6 +1760,7 @@ export default function ApplicationDetail() {
   // Supporting evidence must remain available to the submitting user after
   // approval; it does not alter the application or its workflow status.
   const canAddSupportingAttachment = isOwner
+  const canRemoveAnyAttachment = ['finance','superadmin'].includes(profile?.role)
   const isMgr   = ['ceo','cfo'].includes(profile?.role)
   const canCreatePaymentVoucher = ['finance','cfo','ceo','superadmin'].includes(profile?.role) || (['staff','supervisor'].includes(profile?.role) && isOwner)
   const canExportQbo = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
@@ -2439,13 +2460,16 @@ export default function ApplicationDetail() {
                             {attachment.source === 'screenshot' ? ' · Screenshot' : ''}
                           </div>
                         </div>
-                        <DetailAttachmentLink path={attachment.storage_path} name={attachment.file_name || 'Attachment'} />
+                        <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+                          <DetailAttachmentLink path={attachment.storage_path} name={attachment.file_name || 'Attachment'} />
+                          {canRemoveAnyAttachment && <button className="btn btn-danger btn-sm" disabled={actionLoading} onClick={() => deleteApplicantAttachment(attachment)}>Delete</button>}
+                        </div>
                       </div>
                     ))}
                   </div>}
                   {canAddSupportingAttachment && (
                     <div style={{ marginTop: savedApplicationAttachments.length > 0 ? '10px' : 0 }}>
-                      <input ref={applicantFileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                      <input ref={applicantFileRef} type="file" accept="*/*"
                         onChange={addApplicantAttachment} style={{ display:'none' }} />
                       <button className="btn btn-outline btn-sm" type="button"
                         disabled={uploadingApplicantAtt}
@@ -2493,7 +2517,7 @@ export default function ApplicationDetail() {
                   )}
                   {canAddFinanceAttachment && (
                     <div style={{ display:'flex', gap:'8px', alignItems:'flex-start', flexWrap:'wrap' }}>
-                      <input ref={financeFileRef} type="file" accept=".pdf,.jpg,.jpeg,.png"
+                      <input ref={financeFileRef} type="file" accept="*/*"
                         onChange={handleFinanceAttachmentFile} style={{ display:'none' }} />
                       <button className="btn btn-outline btn-sm" type="button" title="Choose document"
                         disabled={uploadingFinanceAtt}
