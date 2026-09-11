@@ -231,6 +231,7 @@ export default function NewApplication() {
   const editId             = searchParams.get('edit')
   const duplicateId        = searchParams.get('duplicate')
   const isEditing          = !!editId
+  const isFinanceReturnedEdit = searchParams.get('financeEdit') === '1' && ['finance','superadmin'].includes(profile?.role)
   const submittingRef      = useRef(false)
   const attachmentsRef     = useRef([])
 
@@ -306,7 +307,7 @@ export default function NewApplication() {
       .select('company_id')
       .eq('user_id', user.id)
     const allowed = new Set((myCompanyIds || []).map(r => r.company_id))
-    const filteredCo = (co || []).filter(c => allowed.has(c.id))
+    const filteredCo = isFinanceReturnedEdit ? (co || []) : (co || []).filter(c => allowed.has(c.id))
 
     setCompanies(filteredCo)
     setPaymentMethods(pm || [])
@@ -341,6 +342,11 @@ export default function NewApplication() {
 
     const app = appResult?.data
     if (app) {
+      if (isFinanceReturnedEdit && app.status !== 'returned') {
+        setError('Finance can only edit applications that are currently Returned.')
+        setPageLoading(false)
+        return
+      }
       // applications_full may be an explicit legacy view without class_name.
       const { data: applicationClass } = await supabase
         .from('applications')
@@ -547,7 +553,12 @@ export default function NewApplication() {
       const { error: uploadError } = await supabase.storage
         .from('attachments')
         .upload(path, item.file)
-      if (uploadError) throw uploadError
+      if (uploadError) {
+        if (uploadError.message?.toLowerCase().includes('mime type')) {
+          throw new Error('This file type is blocked by the Storage bucket. Run sql/application_attachments.sql in Supabase SQL Editor once, then try again.')
+        }
+        throw uploadError
+      }
       uploaded.push({
         application_id: appId,
         storage_path: path,
@@ -631,11 +642,11 @@ export default function NewApplication() {
       await supabase.from('audit_log').insert({
         application_id: appId, action_by: user.id,
         action:  isEditing ? 'submitted' : (asDraft ? 'created' : 'submitted'),
-        note:    isEditing && !asDraft ? 'Resubmitted after corrections' : asDraft ? 'Saved as draft' : 'Application submitted',
+        note:    isEditing && !asDraft ? (isFinanceReturnedEdit ? 'Resubmitted by Finance after returned corrections' : 'Resubmitted after corrections') : asDraft ? 'Saved as draft' : 'Application submitted',
       })
       // Clear session storage on success
       sessionStorage.removeItem(`pa_form_${editId||'new'}`)
-      navigate('/my-applications')
+      navigate(isFinanceReturnedEdit ? '/dashboard' : '/my-applications')
     } catch (err) {
       setError(err.message || 'Something went wrong')
     } finally {

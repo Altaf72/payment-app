@@ -3,6 +3,13 @@
 
 create extension if not exists pgcrypto;
 
+-- The attachments bucket must not restrict MIME types. Application evidence can
+-- include Excel, Word, OpenDocument, images, text, PDFs and other file types.
+-- (The application still enforces its own 5 MB per-file safety limit.)
+update storage.buckets
+set allowed_mime_types = null
+where id = 'attachments';
+
 create table if not exists public.application_attachments (
   id uuid primary key default gen_random_uuid(),
   application_id uuid not null references public.applications(id) on delete cascade,

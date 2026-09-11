@@ -502,10 +502,17 @@ export default function FinanceDashboard() {
     // not yet expose class_name. Read it from the base table so dashboard
     // loading never depends on a view migration.
     if (rows.length > 0) {
-      const { data: classRows, error: classError } = await supabase
+      let { data: classRows, error: classError } = await supabase
         .from('applications')
         .select('id,class_name,class_names')
         .in('id', rows.map(app => app.id))
+      // Preserve the original Class display in deployments that have not yet
+      // applied the multi-property column migration.
+      if (classError) {
+        const fallback = await supabase.from('applications').select('id,class_name').in('id', rows.map(app => app.id))
+        classRows = fallback.data
+        classError = fallback.error
+      }
       if (classError) console.error('Could not load application classes', classError)
       else {
         const classById = new Map((classRows || []).map(row => [row.id, { class_name:row.class_name, class_names:row.class_names }]))
@@ -811,6 +818,20 @@ export default function FinanceDashboard() {
     win.focus()
   }
 
+  function printTransaction(app) {
+    const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
+    const fields = [
+      ['Reference', app.ref_number], ['Date', formatDate(app.created_at)], ['Applicant', app.submitted_by_name],
+      ['Company', app.company_name], ['Payment Reason', app.payment_reason], ['Apartment / Property', properties.join(', ') || '—'],
+      ['Payee', app.payee_name], ['Amount', `AED ${formatCurrency(app.amount)}`], ['Remarks', app.remarks || '—'], ['Status', app.status],
+    ]
+    const win = window.open('', '_blank', 'width=800,height=650')
+    if (!win) return alert('Could not open print window. Please allow popups for this site.')
+    const rows = fields.map(([label, value]) => `<tr><th>${safeHtml(label)}</th><td>${safeHtml(value)}</td></tr>`).join('')
+    win.document.write(`<!doctype html><html><head><title>${safeHtml(app.ref_number)}</title><style>@page{margin:14mm}body{font-family:Arial,sans-serif;color:#14213d}h1{font-size:22px;margin:0 0 4px}p{color:#667085;margin:0 0 20px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:9px 11px;border:1px solid #d0d5dd;text-align:left;vertical-align:top}th{width:31%;background:#f8f4ea;color:#5e4820}@media print{button{display:none}}</style></head><body><button onclick="window.print()" style="float:right">Print</button><h1>Payment Application</h1><p>${safeHtml(app.ref_number || '')}</p><table>${rows}</table><script>window.onload=()=>window.print()<\/script></body></html>`)
+    win.document.close()
+  }
+
   function getQuickActions(app) {
     if (!profile?.role) return null
     if (profile.role === 'manager' && app.status === 'pending') {
@@ -1013,6 +1034,9 @@ export default function FinanceDashboard() {
           </p>
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+          <button className="btn btn-outline" onClick={load} disabled={loading} title="Fetch the latest dashboard records">
+            {loading ? 'Refreshing…' : '↻ Refresh'}
+          </button>
           <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
         </div>
       </div>
@@ -1296,6 +1320,15 @@ export default function FinanceDashboard() {
                               ⧉
                             </button>
                             <CopyApplicationSummaryButton app={app} />
+                            <button type="button" title="Open transaction" aria-label="Open transaction" tabIndex={-1}
+                              onClick={() => navigate(`/application/${app.id}`)}
+                              style={{background:'none',border:'1px solid var(--border)',borderRadius:'3px',padding:'1px 4px',cursor:'pointer',fontSize:'11px',color:'var(--ink-3)',lineHeight:1,flexShrink:0}}>↗</button>
+                            <button type="button" title="Print transaction" aria-label="Print transaction" tabIndex={-1}
+                              onClick={() => window.open(`/application/${app.id}?print=1&directPrint=1`, 'payment-application-print', 'width=900,height=700')}
+                              style={{background:'none',border:'1px solid var(--border)',borderRadius:'3px',padding:'1px 4px',cursor:'pointer',fontSize:'11px',color:'var(--ink-3)',lineHeight:1,flexShrink:0}}>🖨</button>
+                            {app.status === 'returned' && ['finance','superadmin'].includes(profile?.role) && <button type="button" title="Edit returned application" aria-label="Edit returned application" tabIndex={-1}
+                              onClick={() => navigate(`/new-application?edit=${app.id}&financeEdit=1`)}
+                              style={{background:'none',border:'1px solid var(--border)',borderRadius:'3px',padding:'1px 4px',cursor:'pointer',fontSize:'11px',color:'var(--ink-3)',lineHeight:1,flexShrink:0}}>✎</button>}
                             <span id={`copied-${app.id}`} style={{
                               fontSize:'9px', color:'var(--status-approved)',
                               opacity:0, transition:'opacity 0.2s', whiteSpace:'nowrap',

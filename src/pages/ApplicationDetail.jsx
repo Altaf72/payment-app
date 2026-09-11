@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
@@ -583,6 +583,8 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
 export default function ApplicationDetail() {
   const { id }      = useParams()
   const navigate    = useNavigate()
+  const location    = useLocation()
+  const directPrintMode = new URLSearchParams(location.search).get('directPrint') === '1'
   const { user, profile, isFinanceOrAbove, isSuperAdmin } = useAuth()
   const isManager = profile?.role === 'manager'
   const isCFO     = profile?.role === 'cfo'
@@ -594,6 +596,7 @@ export default function ApplicationDetail() {
   const cameraReviewCanvasRef = useRef()
   const lastSavedFinanceCommentRef = useRef('')
   const savedFinanceCommentIdRef = useRef(null)
+  const autoPrintStartedRef = useRef(false)
 
   const [app, setApp]               = useState(null)
   const [auditLog, setAuditLog]     = useState([])
@@ -667,6 +670,13 @@ export default function ApplicationDetail() {
   })
 
   useEffect(() => { load() }, [id])
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('print') !== '1' || !app || autoPrintStartedRef.current) return
+    autoPrintStartedRef.current = true
+    const timer = setTimeout(() => handlePrint(), 350)
+    return () => clearTimeout(timer)
+  }, [location.search, app?.id])
 
   useEffect(() => {
     const key = `finance_comment_draft_${id}`
@@ -879,7 +889,13 @@ export default function ApplicationDetail() {
 
     if (action === 'print') {
       const html = printRef.current?.innerHTML || ''
-      const printWindow = window.open('', '_blank', 'width=900,height=700')
+      // The dashboard opens this page in a dedicated popup during the user
+      // click. Reuse it so the app screen is never shown before printing.
+      const printWindow = directPrintMode ? window : window.open('', '_blank', 'width=900,height=700')
+      if (!printWindow) {
+        alert('Could not open print window. Please allow popups for this site.')
+        return
+      }
       printWindow.document.write(`<!DOCTYPE html><html><head>
         <meta charset="UTF-8"/>
         <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"/>
@@ -1756,7 +1772,8 @@ export default function ApplicationDetail() {
   const canAct        = canActManager || canActFinance || canActCFO ||
     (isSuperAdmin && ['pending','mgr_approved','fin_approved','escalated'].includes(app.status))
   const isOwner = app.submitted_by === user?.id
-  const canEdit = isOwner && ['draft','returned'].includes(app.status)
+  const canEdit = (isOwner && ['draft','returned'].includes(app.status)) ||
+    (['finance','superadmin'].includes(profile?.role) && app.status === 'returned')
   // Supporting evidence must remain available to the submitting user after
   // approval; it does not alter the application or its workflow status.
   const canAddSupportingAttachment = isOwner
@@ -1858,7 +1875,7 @@ export default function ApplicationDetail() {
                 {['staff','supervisor'].includes(profile?.role) ? 'Make Payment Voucher' : 'Create Payment Voucher'}
               </button>
             )}
-            {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}`)}>✎ Edit</button>}
+            {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}${isOwner ? '' : '&financeEdit=1'}`)}>✎ Edit</button>}
             <button className="btn btn-outline btn-sm" onClick={() => setShowDuplicate(true)}>⧉ Duplicate</button>
             {isSuperAdmin && !app.deleted_at && (
               <button className="btn btn-danger btn-sm" onClick={() => setShowDelete(true)}>🗑</button>
