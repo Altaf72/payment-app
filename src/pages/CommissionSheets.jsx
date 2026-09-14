@@ -61,10 +61,86 @@ const TOP = [
   ["kickback_agent", "Kickback to Agent"],
   ["kickback_client", "Kickback to Client"],
 ];
+const KICKBACK_KINDS = ["kickback_agent", "kickback_client"];
+const isKickback = (kind) => KICKBACK_KINDS.includes(kind);
+const DIST_TYPE_OPTIONS = [
+  ["kickback_agent", "Kickback"],
+  ["residual", "Commission"],
+];
+const distTypeLabel = (kind) => (isKickback(kind) ? "Kickback" : "Commission");
+const GOOGLE_CLIENT_ID =
+  "70086088232-f0c97ls3nljbber210frbugmdam03bo0.apps.googleusercontent.com";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_ROOT_FOLDER_NAME = "Commission Sheets Attachments";
+const loadGoogleIdentity = () =>
+  new Promise((resolve, reject) => {
+    if (window.google?.accounts?.oauth2) return resolve();
+    const existing = document.querySelector("script[data-gis]");
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () =>
+        reject(new Error("Failed to load Google Identity Services")),
+      );
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.dataset.gis = "true";
+    script.onload = () => resolve();
+    script.onerror = () =>
+      reject(new Error("Failed to load Google Identity Services"));
+    document.head.appendChild(script);
+  });
 const today = () => /* @__PURE__ */ new Date().toISOString().slice(0, 10),
   id = () => crypto.randomUUID();
+const shiftDate = (value, days) => {
+  const base = value ? new Date(`${value}T00:00:00`) : new Date();
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+};
+const buildDiskName = (code, fileName, index, total) => {
+  const safeCode = code.replaceAll(".", "_");
+  return total > 1
+    ? `${safeCode}__${index + 1}of${total}__${fileName}`
+    : `${safeCode}__${fileName}`;
+};
 const num = (value) => Number(String(value ?? "").replaceAll(",", "")) || 0,
-  round = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+  round = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100,
+  roundPct = (value) =>
+    Math.round((Number(value) + Number.EPSILON) * 1e6) / 1e6;
+const recalcDistribution = (distribution, grossAmount) => {
+  const gross = num(grossAmount);
+  let splitIndex = 0;
+  while (
+    splitIndex < distribution.length &&
+    isKickback(distribution[splitIndex].line_kind)
+  )
+    splitIndex++;
+  // 5a: every row is calculated in parallel against the total commission —
+  // rows don't cascade against each other.
+  const topAmounts = distribution
+    .slice(0, splitIndex)
+    .map((item) => round((gross * num(item.pct_of_base)) / 100));
+  const kickbackTotal = topAmounts.reduce((sum, amount) => sum + amount, 0),
+    remaining = round(Math.max(gross - kickbackTotal, 0));
+  // 5b: every row is calculated in parallel against what's left after 5a —
+  // rows don't cascade against each other either.
+  return distribution.map((item, index) => {
+    const isTop = index < splitIndex,
+      base = isTop ? gross : remaining,
+      amount = isTop
+        ? topAmounts[index]
+        : round((remaining * num(item.pct_of_base)) / 100);
+    return {
+      ...item,
+      base_aed: base,
+      payable_aed: amount,
+      remaining_after: remaining,
+    };
+  });
+};
 const fmt = (value) =>
     num(value).toLocaleString("en-US", {
       minimumFractionDigits: 2,
@@ -118,6 +194,7 @@ const line = (
   payable_aed: "",
   notes: "",
   payments: [],
+  auto_balance: false,
 });
 const empty = () => ({
   id: null,
@@ -220,7 +297,13 @@ async function saveSetting(key, value) {
     };
   });
 }
-function Amount({ value, onChange, readOnly = false, required = false }) {
+function Amount({
+  value,
+  onChange,
+  onBlur,
+  readOnly = false,
+  required = false,
+}) {
   const [focus, setFocus] = useState(false);
   return (
     <input
@@ -236,7 +319,10 @@ function Amount({ value, onChange, readOnly = false, required = false }) {
             : fmt(value)
       }
       onFocus={() => setFocus(true)}
-      onBlur={() => setFocus(false)}
+      onBlur={() => {
+        setFocus(false);
+        onBlur?.();
+      }}
       onKeyDown={(e) => {
         if (["ArrowUp", "ArrowDown"].includes(e.key)) e.preventDefault();
       }}
@@ -246,17 +332,23 @@ function Amount({ value, onChange, readOnly = false, required = false }) {
 }
 function DateInput({ value, onChange, required = false }) {
   const ref = useRef(null);
+  const [focused, setFocused] = useState(false);
+  const openPicker = () => {
+    if (ref.current?.showPicker) ref.current.showPicker();
+    else ref.current?.focus();
+  };
   return (
-    <div className="cis-date">
+    <div className="cis-date" style={{ position: "relative" }}>
       <input
         className="form-control"
         readOnly
         required={required}
         value={value ? dateText(value) : ""}
         placeholder="dd-MMM-yyyy"
-        onClick={() => ref.current?.showPicker?.()}
+        onClick={openPicker}
+        style={focused ? { visibility: "hidden" } : undefined}
       />
-      <button type="button" onClick={() => ref.current?.showPicker?.()}>
+      <button type="button" onClick={openPicker}>
         ▣
       </button>
       <input
@@ -265,7 +357,213 @@ function DateInput({ value, onChange, required = false }) {
         type="date"
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onKeyDown={(e) => {
+          if (e.key === "+" || e.key === "=") {
+            e.preventDefault();
+            onChange(shiftDate(value, 1));
+          } else if (e.key === "-" || e.key === "_") {
+            e.preventDefault();
+            onChange(shiftDate(value, -1));
+          }
+        }}
+        style={
+          focused
+            ? {
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                opacity: 1,
+                zIndex: 2,
+                background: "#fff",
+                border: "2px solid #2563eb",
+                borderRadius: "4px",
+                padding: "0 8px",
+                fontSize: "13px",
+                lineHeight: "normal",
+                color: "#111",
+              }
+            : undefined
+        }
       />
+    </div>
+  );
+}
+function GoogleDriveConnectPrompt({ onConnect, onDismiss }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 8,
+          padding: "24px 28px",
+          maxWidth: 440,
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+        }}
+      >
+        <h3 style={{ marginTop: 0 }}>Google Drive needs to be connected</h3>
+        <p className="form-hint">
+          Attachments are saved to your Google Drive. Connect your Google
+          account to save or open attachments — this stays connected for
+          about an hour at a time, then you'll be asked again.
+        </p>
+        <div
+          className="cis-inline-actions"
+          style={{ marginTop: 16, display: "flex", gap: 8 }}
+        >
+          <button type="button" className="btn primary" onClick={onConnect}>
+            Connect Google Drive
+          </button>
+          <button type="button" className="btn ghost" onClick={onDismiss}>
+            Not now
+          </button>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+function AttachmentViewerModal({
+  viewer,
+  onClose,
+  onDownload,
+  onPrint,
+  onRemove,
+}) {
+  if (!viewer) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.7)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1100,
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 8,
+          width: "min(900px, 92vw)",
+          maxHeight: "90vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "12px 16px",
+            borderBottom: "1px solid #e5e7eb",
+          }}
+        >
+          <strong
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {viewer.name}
+          </strong>
+          <button type="button" className="btn" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 300,
+            overflow: "auto",
+            padding: viewer.url ? 0 : 24,
+            display: "flex",
+            alignItems: viewer.url ? "stretch" : "center",
+            justifyContent: "center",
+          }}
+        >
+          {viewer.loading && (
+            <p className="form-hint">Loading attachment…</p>
+          )}
+          {viewer.error && (
+            <p className="alert alert-error">{viewer.error}</p>
+          )}
+          {viewer.url &&
+            !viewer.error &&
+            (viewer.mimeType?.startsWith("image/") ? (
+              <img
+                src={viewer.url}
+                alt={viewer.name}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "80vh",
+                  margin: "auto",
+                  display: "block",
+                }}
+              />
+            ) : (
+              <iframe
+                title={viewer.name}
+                src={viewer.url}
+                style={{ width: "100%", height: "80vh", border: "none" }}
+              />
+            ))}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "12px 16px",
+            borderTop: "1px solid #e5e7eb",
+          }}
+        >
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!viewer.url}
+            onClick={onDownload}
+          >
+            Download
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!viewer.url}
+            onClick={onPrint}
+          >
+            Print
+          </button>
+          {viewer.canRemove && (
+            <button
+              type="button"
+              className="btn danger"
+              disabled={!viewer.fileId}
+              onClick={onRemove}
+              style={{ marginLeft: "auto" }}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -413,8 +711,14 @@ function CommissionSheets() {
     [templates, setTemplates] = useState([]),
     [options, setOptions] = useState([]);
   const [files, setFiles] = useState({}),
-    [folder, setFolder] = useState(null),
+    [driveToken, setDriveToken] = useState(null),
+    [driveTokenExpiry, setDriveTokenExpiry] = useState(0),
+    [driveEmail, setDriveEmail] = useState(""),
+    [driveRootFolderId, setDriveRootFolderId] = useState(null),
+    [driveConnectDismissed, setDriveConnectDismissed] = useState(false),
+    [viewer, setViewer] = useState(null),
     [letterhead, setLetterhead] = useState(null);
+  const tokenClientRef = useRef(null);
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState(""),
     [deal, setDeal] = useState(""),
@@ -448,6 +752,20 @@ function CommissionSheets() {
     gross = num(form.gross_commission_aed),
     vat = round(gross * 0.05),
     total = round(gross + vat);
+  useEffect(() => {
+    if (form.id || form.prepared_by) return;
+    const displayName =
+      profile?.full_name ||
+      profile?.display_name ||
+      profile?.name ||
+      [profile?.first_name, profile?.last_name].filter(Boolean).join(" ") ||
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      user?.email ||
+      "";
+    if (displayName) set("prepared_by", displayName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.id, user, profile]);
   const paid = (line2) =>
       (line2.payments || []).reduce(
         (sum, item) => sum + num(item.amount_aed),
@@ -458,8 +776,15 @@ function CommissionSheets() {
       (sum, item) => sum + num(item.amount_aed),
       0,
     );
-  const residual = gross;
-  const expectedPayable = form.distribution
+  const distComputed = recalcDistribution(form.distribution, gross);
+  const kickbackTotal = distComputed
+    .filter((item) => isKickback(item.line_kind))
+    .reduce((sum, item) => sum + num(item.payable_aed), 0);
+  const retained = distComputed.length
+    ? distComputed.at(-1).remaining_after
+    : round(gross);
+  const residual = retained;
+  const expectedPayable = distComputed
     .filter((item) => item.party !== "Company Share")
     .reduce((sum, item) => sum + num(item.payable_aed), 0);
   const types = options
@@ -506,8 +831,8 @@ function CommissionSheets() {
       setTemplates(t.data || []);
       setOptions(o.data || []);
       try {
-        setFolder(await setting("folder"));
         setLetterhead(await setting("letterhead"));
+        setDriveRootFolderId(await setting("driveRootFolderId"));
       } catch (localError) {
         console.warn("Commission local settings are unavailable:", localError);
       }
@@ -520,6 +845,11 @@ function CommissionSheets() {
   useEffect(() => {
     if (user?.id) load();
   }, [user?.id]);
+  useEffect(() => {
+    loadGoogleIdentity().catch((driveLoadError) =>
+      console.warn("Google Identity Services unavailable:", driveLoadError),
+    );
+  }, []);
   useEffect(() => {
     if (!form.deal_type) return;
     const source = activeDocs.length
@@ -567,7 +897,10 @@ function CommissionSheets() {
     Object.assign(next, row, {
       distribution: (row.commission_distribution_lines || [])
         .sort((a, b) => a.sort_order - b.sort_order)
-        .filter((item) => item.line_kind === "residual")
+        .filter(
+          (item) =>
+            item.line_kind === "residual" || isKickback(item.line_kind),
+        )
         .map((item) => ({
           ...item,
           payments: item.commission_distribution_payments || [],
@@ -598,23 +931,149 @@ function CommissionSheets() {
       }),
     }));
   }
-  function updateLine(index, key, value) {
+  function matchClientBy(field, value) {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return;
+    const recent = rows.find(
+      (row) => (row[field] || "").trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (!recent) return;
     setForm((current) => ({
       ...current,
-      distribution: current.distribution.map((item, i) => {
-        if (i !== index) return item;
-        const next = {
-            ...item,
-            [key]: value,
-          },
-          base = num(current.gross_commission_aed);
-        if (key === "pct_of_base")
-          next.payable_aed = round((base * num(value)) / 100);
-        if (key === "payable_aed" && base)
-          next.pct_of_base = round((num(value) / base) * 100);
-        return next;
-      }),
+      client_name: current.client_name || recent.client_name || "",
+      client_contact: current.client_contact || recent.client_contact || "",
+      client_id_number:
+        current.client_id_number || recent.client_id_number || "",
+      client_id_expiry:
+        current.client_id_expiry || recent.client_id_expiry || "",
+      building_project:
+        current.building_project || recent.building_project || "",
+      developer: current.developer || recent.developer || "",
+      unit_type: current.unit_type || recent.unit_type || "",
     }));
+  }
+  function updateLine(index, key, value) {
+    setForm((current) => {
+      const gross2 = num(current.gross_commission_aed),
+        beforeEdit = recalcDistribution(current.distribution, gross2),
+        edited = current.distribution.map((item, i) => {
+          if (i !== index) return item;
+          const next =
+            key === "payable_aed"
+              ? {
+                  ...item,
+                  pct_of_base: beforeEdit[index]?.base_aed
+                    ? roundPct(
+                        (num(value) / beforeEdit[index].base_aed) * 100,
+                      )
+                    : item.pct_of_base,
+                }
+              : key === "line_kind"
+                ? {
+                    ...item,
+                    line_kind: value,
+                    type_label: distTypeLabel(value),
+                  }
+                : { ...item, [key]: value };
+          // Directly editing a row takes it out of "auto-balance" mode —
+          // it's no longer a follower, it's a fixed value the user chose.
+          if (
+            (key === "pct_of_base" || key === "payable_aed") &&
+            item.auto_balance
+          )
+            next.auto_balance = false;
+          return next;
+        });
+      // Live-track: if the trailing row in the 5b group is still in
+      // auto-balance mode (and it isn't the row just edited), keep it
+      // equal to whatever % the rest of the group hasn't used yet — this
+      // runs on every keystroke so it never goes stale as you keep editing
+      // earlier rows.
+      let splitIndex = 0;
+      while (
+        splitIndex < edited.length &&
+        isKickback(edited[splitIndex].line_kind)
+      )
+        splitIndex++;
+      const lastIndex = edited.length - 1;
+      let working = edited;
+      if (
+        lastIndex >= splitIndex &&
+        lastIndex !== index &&
+        edited[lastIndex].auto_balance
+      ) {
+        const othersTotal = edited
+          .slice(splitIndex, lastIndex)
+          .reduce((sum, item) => sum + num(item.pct_of_base), 0);
+        working = edited.map((item, i) =>
+          i === lastIndex
+            ? {
+                ...item,
+                pct_of_base: roundPct(Math.max(100 - othersTotal, 0)),
+              }
+            : item,
+        );
+      }
+      return {
+        ...current,
+        distribution: recalcDistribution(working, gross2).map(
+          ({ base_aed, remaining_after, ...rest }) => rest,
+        ),
+      };
+    });
+  }
+  function finalizeAllocationLine(index) {
+    // Once you finish editing the %/Amount of the LAST row in the 5b
+    // (allocation) group (tab or click away) and nothing is already
+    // tracking the leftover, add a new row that auto-follows whatever %
+    // remains unallocated — it updates live as you keep editing other
+    // rows, rather than freezing at the value it was created with.
+    setForm((current) => {
+      const gross2 = num(current.gross_commission_aed),
+        working = current.distribution;
+      let splitIndex = 0;
+      while (
+        splitIndex < working.length &&
+        isKickback(working[splitIndex].line_kind)
+      )
+        splitIndex++;
+      const isLastRow = index === working.length - 1,
+        inAllocationGroup = index >= splitIndex;
+      if (!isLastRow || !inAllocationGroup) return current;
+      if (working[index]?.auto_balance) return current;
+      const groupTotalPct = working
+          .slice(splitIndex)
+          .reduce((sum, item) => sum + num(item.pct_of_base), 0),
+        remainder = roundPct(100 - groupTotalPct);
+      if (remainder <= 0.01) return current;
+      const finalDistribution = [
+        ...working,
+        {
+          ...line("residual", "Commission", "Internal Agent"),
+          pct_of_base: remainder,
+          auto_balance: true,
+        },
+      ];
+      return {
+        ...current,
+        distribution: recalcDistribution(finalDistribution, gross2).map(
+          ({ base_aed, remaining_after, ...rest }) => rest,
+        ),
+      };
+    });
+  }
+  function insertLine(atIndex, newLine) {
+    setForm((current) => {
+      const gross2 = num(current.gross_commission_aed),
+        distribution = [...current.distribution];
+      distribution.splice(atIndex, 0, newLine);
+      return {
+        ...current,
+        distribution: recalcDistribution(distribution, gross2).map(
+          ({ base_aed, remaining_after, ...rest }) => rest,
+        ),
+      };
+    });
   }
   const addPay = (i) =>
     setForm((current) => ({
@@ -672,18 +1131,239 @@ function CommissionSheets() {
             : item,
         ),
       );
-  async function chooseFolder() {
-    if (!window.showDirectoryPicker)
-      return setError("Folder selection requires Edge or Chrome.");
+  function driveTokenValid() {
+    return !!driveToken && Date.now() < driveTokenExpiry;
+  }
+  async function connectGoogleDrive() {
     try {
-      const handle = await window.showDirectoryPicker({
-        mode: "readwrite",
+      await loadGoogleIdentity();
+      if (!tokenClientRef.current) {
+        tokenClientRef.current = window.google.accounts.oauth2.initTokenClient(
+          {
+            client_id: GOOGLE_CLIENT_ID,
+            scope: DRIVE_SCOPE,
+            callback: (response) => {
+              if (response.error) {
+                setError(`Google Drive connection failed: ${response.error}`);
+                return;
+              }
+              setDriveToken(response.access_token);
+              setDriveTokenExpiry(
+                Date.now() + (Number(response.expires_in) || 3600) * 1000 -
+                  60000,
+              );
+              setDriveConnectDismissed(false);
+              setNotice("Google Drive connected.");
+            },
+          },
+        );
+      }
+      tokenClientRef.current.requestAccessToken({
+        prompt: driveToken ? "" : "consent",
       });
-      await saveSetting("folder", handle);
-      setFolder(handle);
-      setNotice(`Documents folder mapped: ${handle.name}`);
     } catch (e) {
-      if (e.name !== "AbortError") setError(e.message);
+      setError(e.message);
+    }
+  }
+  async function driveFetch(url, options = {}) {
+    if (!driveTokenValid())
+      throw new Error(
+        "Google Drive isn't connected. Click \"Connect Google Drive\" in Setup, then try again.",
+      );
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${driveToken}`,
+      },
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Google Drive error (${response.status}): ${body.slice(0, 200) || response.statusText}`,
+      );
+    }
+    return response;
+  }
+  async function findOrCreateFolder(name, parentId) {
+    const safeName = name.replace(/'/g, "\\'"),
+      query = [
+        `name='${safeName}'`,
+        "mimeType='application/vnd.google-apps.folder'",
+        "trashed=false",
+        parentId ? `'${parentId}' in parents` : "'root' in parents",
+      ].join(" and "),
+      listRes = await driveFetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&spaces=drive`,
+      ),
+      listData = await listRes.json();
+    if (listData.files?.length) return listData.files[0].id;
+    const createRes = await driveFetch(
+        "https://www.googleapis.com/drive/v3/files",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            mimeType: "application/vnd.google-apps.folder",
+            parents: parentId ? [parentId] : undefined,
+          }),
+        },
+      ),
+      created = await createRes.json();
+    return created.id;
+  }
+  async function ensureRootFolder() {
+    if (driveRootFolderId) return driveRootFolderId;
+    const stored = await setting("driveRootFolderId");
+    if (stored) {
+      setDriveRootFolderId(stored);
+      return stored;
+    }
+    const id = await findOrCreateFolder(DRIVE_ROOT_FOLDER_NAME);
+    await saveSetting("driveRootFolderId", id);
+    setDriveRootFolderId(id);
+    return id;
+  }
+  async function ensureTransactionFolder(ref) {
+    const rootId = await ensureRootFolder();
+    return findOrCreateFolder(ref.replace(/[^a-z0-9_-]/gi, "_"), rootId);
+  }
+  async function uploadFileToDrive(folderId, diskName, file) {
+    const metadata = { name: diskName, parents: [folderId] },
+      body = new FormData();
+    body.append(
+      "metadata",
+      new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+    );
+    body.append("file", file);
+    const res = await driveFetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+      { method: "POST", body },
+    );
+    return res.json();
+  }
+  async function driveFindFile(folderId, diskName) {
+    const query = [
+        `name='${diskName.replace(/'/g, "\\'")}'`,
+        `'${folderId}' in parents`,
+        "trashed=false",
+      ].join(" and "),
+      res = await driveFetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,mimeType)&spaces=drive`,
+      ),
+      data = await res.json();
+    return data.files?.[0] || null;
+  }
+  async function driveFetchBlob(fileId) {
+    const res = await driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    );
+    return res.blob();
+  }
+  async function driveTrashFile(fileId) {
+    await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trashed: true }),
+    });
+  }
+  function previewLocalFile(file) {
+    const url = URL.createObjectURL(file);
+    setViewer({
+      name: file.name,
+      loading: false,
+      error: "",
+      url,
+      fileId: null,
+      mimeType: file.type,
+      canRemove: false,
+      onRemoved: null,
+    });
+  }
+  async function openAttachment({
+    folderId,
+    diskName,
+    displayName,
+    canRemove = false,
+    onRemoved,
+  }) {
+    setViewer({
+      name: displayName,
+      loading: true,
+      error: "",
+      url: "",
+      fileId: null,
+      mimeType: "",
+      canRemove,
+      onRemoved,
+    });
+    try {
+      if (!driveTokenValid())
+        throw new Error(
+          "Connect Google Drive in Setup to view attachments.",
+        );
+      const found = await driveFindFile(folderId, diskName);
+      if (!found)
+        throw new Error(
+          "File not found in Google Drive — it may have been removed there.",
+        );
+      const blob = await driveFetchBlob(found.id),
+        url = URL.createObjectURL(blob);
+      setViewer((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              url,
+              fileId: found.id,
+              mimeType: found.mimeType || blob.type,
+            }
+          : current,
+      );
+    } catch (e) {
+      setViewer((current) =>
+        current ? { ...current, loading: false, error: e.message } : current,
+      );
+    }
+  }
+  function closeAttachment() {
+    setViewer((current) => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  }
+  function downloadAttachment() {
+    if (!viewer?.url) return;
+    const link = document.createElement("a");
+    link.href = viewer.url;
+    link.download = viewer.name || "attachment";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+  function printAttachment() {
+    if (!viewer?.url) return;
+    const win = window.open(viewer.url, "_blank");
+    if (win)
+      win.addEventListener("load", () => {
+        try {
+          win.focus();
+          win.print();
+        } catch {
+          // best-effort — some browsers restrict scripted print on certain viewers
+        }
+      });
+  }
+  async function removeAttachment() {
+    if (!viewer?.fileId) return;
+    try {
+      await driveTrashFile(viewer.fileId);
+      viewer.onRemoved?.();
+      setNotice("Attachment removed (recoverable from Google Drive Trash).");
+      closeAttachment();
+    } catch (e) {
+      setError(e.message);
     }
   }
   async function chooseLetterhead(file) {
@@ -701,41 +1381,56 @@ function CommissionSheets() {
     reader.readAsDataURL(file);
   }
   async function copyFiles(ref) {
-    const entries = Object.entries(files).filter(([, file]) => file);
+    const entries = Object.entries(files).filter(
+      ([, fileList]) => fileList?.length,
+    );
     if (!entries.length) return {};
-    if (!folder)
+    if (!driveTokenValid())
       throw new Error(
-        "Choose a documents folder in Setup before saving selected attachments.",
+        "Connect Google Drive in Setup before saving selected attachments.",
       );
-    if (
-      (await folder.requestPermission({
-        mode: "readwrite",
-      })) !== "granted"
-    )
-      throw new Error("Folder write permission was not granted.");
-    const dir = await folder.getDirectoryHandle(
-        ref.replace(/[^a-z0-9_-]/gi, "_"),
-        {
-          create: true,
-        },
-      ),
+    const folderId = await ensureTransactionFolder(ref),
       result = {};
-    for (const [code, file] of entries) {
-      const handle = await dir.getFileHandle(
-          `${code.replaceAll(".", "_")}__${file.name}`,
-          {
-            create: true,
-          },
-        ),
-        writer = await handle.createWritable();
-      await writer.write(file);
-      await writer.close();
+    for (const [code, fileList] of entries) {
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i],
+          diskName = buildDiskName(code, file.name, i, fileList.length);
+        await uploadFileToDrive(folderId, diskName, file);
+      }
       result[code] = {
-        local_file_name: file.name,
-        local_folder_label: `${folder.name}/${dir.name}`,
+        local_file_name: fileList.map((file) => file.name).join("|"),
+        local_folder_label: folderId,
       };
     }
     return result;
+  }
+  async function shareTransaction(row) {
+    try {
+      const ref = row?.form_ref;
+      if (!ref) return setError("Save the transaction before sharing.");
+      if (!driveTokenValid()) {
+        setError(
+          "Connect Google Drive in Setup before sharing attachments.",
+        );
+        return;
+      }
+      const folderId = await ensureTransactionFolder(ref);
+      await driveFetch(
+        `https://www.googleapis.com/drive/v3/files/${folderId}/permissions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "writer", type: "anyone" }),
+        },
+      );
+      const link = `https://drive.google.com/drive/folders/${folderId}`;
+      await navigator.clipboard.writeText(link);
+      setNotice(
+        "Link copied. Anyone with this link can view, add, and edit these files — only share it with people you trust.",
+      );
+    } catch (e) {
+      setError(e.message);
+    }
   }
   async function save(event) {
     event.preventDefault();
@@ -750,11 +1445,33 @@ function CommissionSheets() {
       return setError(`Missing required: ${missing.join(", ")}.`);
     const attachments = form.documents.filter(
       (doc) =>
-        doc.is_selected && !files[doc.document_code] && !doc.local_file_name,
+        doc.is_selected &&
+        !files[doc.document_code]?.length &&
+        !doc.local_file_name,
     );
     if (attachments.length)
       return setError(
         `Attachment required for: ${attachments.map((doc) => doc.document_label).join(", ")}.`,
+      );
+    let splitIndex = 0;
+    while (
+      splitIndex < form.distribution.length &&
+      isKickback(form.distribution[splitIndex].line_kind)
+    )
+      splitIndex++;
+    const kickbackPctTotal = form.distribution
+        .slice(0, splitIndex)
+        .reduce((sum, item) => sum + num(item.pct_of_base), 0),
+      allocationPctTotal = form.distribution
+        .slice(splitIndex)
+        .reduce((sum, item) => sum + num(item.pct_of_base), 0);
+    if (kickbackPctTotal > 100.01)
+      return setError(
+        `5a. Kickback percentages add up to ${fmt(kickbackPctTotal)}% of total commission — that's over 100%. Please correct before saving.`,
+      );
+    if (allocationPctTotal > 100.01)
+      return setError(
+        `5b. Remaining commission allocation percentages add up to ${fmt(allocationPctTotal)}% — that's over 100%. Please correct before saving.`,
       );
     if (
       form.finance_amount_paid_override_aed !== "" &&
@@ -869,8 +1586,10 @@ function CommissionSheets() {
         .from("commission_distribution_lines")
         .delete()
         .eq("commission_sheet_id", sheetId);
+      const finalDistribution = recalcDistribution(form.distribution, gross);
       for (let i = 0; i < form.distribution.length; i++) {
         const item = form.distribution[i],
+          finalAmount = finalDistribution[i].payable_aed,
           lineId = id(),
           result = await supabase.from("commission_distribution_lines").insert({
             id: lineId,
@@ -881,7 +1600,7 @@ function CommissionSheets() {
             party: item.party || null,
             recipient_name: item.recipient_name || null,
             pct_of_base: num(item.pct_of_base) || null,
-            payable_aed: num(item.payable_aed),
+            payable_aed: num(finalAmount),
             paid_aed: paid(item),
             payment_mode: item.payments.at(-1)?.payment_mode || null,
             notes: item.notes || null,
@@ -997,25 +1716,34 @@ function CommissionSheets() {
   function print(row) {
     const company =
         companies.find((item) => item.id === row.company_id)?.name || "—",
-      distribution = (
-        row.commission_distribution_lines ||
-        row.distribution ||
-        []
-      ).filter((item) => item.line_kind === "residual"),
+      allLines = (row.commission_distribution_lines || row.distribution || [])
+        .slice()
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
+      lineComputed = recalcDistribution(allLines, row.gross_commission_aed),
       documents = row.commission_sheet_documents || row.documents || [],
       receipts = row.commission_receipts || row.receipts || [];
+    const kickbackTotal = lineComputed
+        .filter((item) => isKickback(item.line_kind))
+        .reduce((sum, item) => sum + num(item.payable_aed), 0),
+      retainedAmt = lineComputed.length
+        ? lineComputed.at(-1).remaining_after
+        : num(row.gross_commission_aed);
     const checked = (value) => (value ? "☑" : "☐"),
       cell = (label, value) =>
         `<div class="ps-cell"><span class="l">${esc(label)}</span><span class="v">${value ?? "—"}</span></div>`;
     const docRows =
       documents
-        .map(
-          (doc) =>
-            `<div>${checked(doc.is_selected)} ${esc(doc.document_label)}${doc.local_file_name ? ` — <em>${esc(doc.local_file_name)}</em>` : ""}</div>`,
-        )
+        .map((doc) => {
+          const fileList = (doc.local_file_name || "")
+            .split("|")
+            .filter(Boolean)
+            .join(", ");
+          return `<div>${checked(doc.is_selected)} ${esc(doc.document_label)}${fileList ? ` — <em>${esc(fileList)}</em>` : ""}</div>`;
+        })
         .join("") || "<div>—</div>";
+    const docRowsWrapped = `<div class="ps-doc-list">${docRows}</div>`;
     const distRows =
-      distribution
+      lineComputed
         .map((item) => {
           const itemPaid = item.paid_aed ?? paid(item),
             mode =
@@ -1023,9 +1751,9 @@ function CommissionSheets() {
               item.commission_distribution_payments?.at(-1)?.payment_mode ||
               item.payments?.at(-1)?.payment_mode ||
               "—";
-          return `<tr><td>${esc(item.type_label || item.party || "—")}</td><td>${esc(item.recipient_name || "—")}</td><td>${money(item.payable_aed)}${num(item.pct_of_base) ? ` (${fmt(item.pct_of_base)}%)` : ""}</td><td>${money(itemPaid)}</td><td>${money(num(item.payable_aed) - num(itemPaid))}</td><td>${esc(mode)}</td><td>&nbsp;</td></tr>`;
+          return `<tr><td>${esc(distTypeLabel(item.line_kind))}</td><td>${esc(item.party || "—")}</td><td>${esc(item.recipient_name || "—")}</td><td>${money(item.payable_aed)}${num(item.pct_of_base) ? ` (${fmt(item.pct_of_base)}%)` : ""}</td><td>${money(itemPaid)}</td><td>${money(num(item.payable_aed) - num(itemPaid))}</td><td>${esc(mode)}</td><td>&nbsp;</td></tr>`;
         })
-        .join("") || `<tr><td colspan="7">—</td></tr>`;
+        .join("") || `<tr><td colspan="8">—</td></tr>`;
     const receivedTotal = receipts.length
         ? receipts.reduce((sum, item) => sum + num(item.amount_aed), 0)
         : num(row.amount_received_aed),
@@ -1050,7 +1778,7 @@ function CommissionSheets() {
       )
       .join(
         " &nbsp; ",
-      )}</div></div></div><div class="ps-section"><div class="ps-section-head">3. COMMISSION SUMMARY</div><div class="ps-row">${cell("Gross Commission (AED)", `${money(row.gross_commission_aed)}${num(row.commission_pct) ? ` (${fmt(row.commission_pct)}%)` : ""}`)}${cell("VAT 5%", money(row.vat_amount_aed ?? round(num(row.gross_commission_aed) * 0.05)))}${cell("Total Payable (AED)", money(row.total_payable_aed ?? round(num(row.gross_commission_aed) * 1.05)))}</div></div><div class="ps-section"><div class="ps-section-head">4. CLIENT DOCUMENTS REQUIRED</div><div class="ps-doc-cols"><div class="ps-doc-col"><h4>${esc(DEALS[row.deal_type] || "Documents")}</h4>${docRows}</div></div></div><div class="ps-section"><div class="ps-section-head">5. COMMISSION DISTRIBUTION</div><div class="ps-section-body cis-print-note">Residual after off-the-top items: ${money(Math.max(num(row.gross_commission_aed) - distribution.filter((item) => item.line_kind !== "residual").reduce((sum, item) => sum + num(item.payable_aed), 0), 0))}</div><table class="ps-dist-table"><tr><th>Party</th><th>Name / Company</th><th>Payable Amount (AED)</th><th>Paid Amount (AED)</th><th>Balance (AED)</th><th>Payment Mode</th><th>Signature</th></tr>${distRows}</table></div><div class="ps-section"><div class="ps-section-head">6. ACCOUNTS TRACKING (FOR OFFICE USE)</div><div class="ps-row">${cell("Status", esc(row.tracking_status || "—"))}${cell("Invoice No", esc(row.invoice_no || "—"))}${cell("Invoice Sent (Date)", dateText(row.invoice_sent_date))}</div><div class="ps-row">${cell("Commission Received", dateText(receivedDate))}${cell("Receive Mode", esc(receivedMode || "—"))}${cell("Amount Received", money(receivedTotal))}</div><div class="ps-row">${cell("Commission Paid to Agent", dateText(row.commission_paid_date))}${cell("Payment Mode", esc(row.payment_mode_paid || "—"))}${cell("Amount Paid", money(row.finance_amount_paid_override_aed ?? row.calculated_amount_paid_aed))}</div><div class="ps-row">${cell("Paid to Client/Ext. Agent", dateText(row.paid_client_ext_date))}${cell("Paid to Client/Ext. Agent (AED)", money(row.paid_client_ext_amount))}${cell("Deductions (AED)", money(row.deductions_aed))}</div><div class="ps-row">${cell("Additional Payment (AED)", money(row.additional_payment_aed))}${cell("Net Agent Payable (AED)", money(row.net_agent_payable_aed))}${cell("Total Comm. After Deduction", money(row.total_after_deduction_aed))}</div>${row.remarks ? `<div class="ps-section-body"><strong>Remarks:</strong> ${esc(row.remarks)}</div>` : ""}</div><div class="ps-section"><div class="ps-section-head">7. APPROVALS</div><div class="ps-approvals"><div class="a"><div class="name">${esc(row.prepared_by || "&nbsp;")}</div><div class="line">Prepared By</div></div><div class="a"><div class="name">${esc(row.manager || "&nbsp;")}</div><div class="line">Manager</div></div><div class="a"><div class="name">${esc(row.accounts || "&nbsp;")}</div><div class="line">Accounts</div></div></div></div></div>`;
+      )}</div></div></div><div class="ps-section"><div class="ps-section-head">3. COMMISSION SUMMARY</div><div class="ps-row">${cell("Gross Commission (AED)", `${money(row.gross_commission_aed)}${num(row.commission_pct) ? ` (${fmt(row.commission_pct)}%)` : ""}`)}${cell("VAT 5%", money(row.vat_amount_aed ?? round(num(row.gross_commission_aed) * 0.05)))}${cell("Total Payable (AED)", money(row.total_payable_aed ?? round(num(row.gross_commission_aed) * 1.05)))}</div></div><div class="ps-section"><div class="ps-section-head">4. CLIENT DOCUMENTS REQUIRED</div><div class="ps-doc-cols"><div class="ps-doc-col"><h4>${esc(DEALS[row.deal_type] || "Documents")}</h4>${docRowsWrapped}</div></div></div><div class="ps-section"><div class="ps-section-head">5. COMMISSION DISTRIBUTION</div><div class="ps-section-body cis-print-note">Total commission: ${money(row.gross_commission_aed)} &nbsp;·&nbsp; Total kickback: ${money(kickbackTotal)} &nbsp;·&nbsp; Remaining commission: ${money(retainedAmt)}</div><table class="ps-dist-table"><tr><th>Type</th><th>Party</th><th>Name / Company</th><th>Amount (AED)</th><th>Paid Amount (AED)</th><th>Balance (AED)</th><th>Payment Mode</th><th>Signature</th></tr>${distRows}</table></div><div class="ps-section"><div class="ps-section-head">6. ACCOUNTS TRACKING (FOR OFFICE USE)</div><div class="ps-row">${cell("Status", esc(row.tracking_status || "—"))}${cell("Invoice No", esc(row.invoice_no || "—"))}${cell("Invoice Sent (Date)", dateText(row.invoice_sent_date))}</div><div class="ps-row">${cell("Commission Received", dateText(receivedDate))}${cell("Receive Mode", esc(receivedMode || "—"))}${cell("Amount Received", money(receivedTotal))}</div><div class="ps-row">${cell("Commission Paid to Agent", dateText(row.commission_paid_date))}${cell("Payment Mode", esc(row.payment_mode_paid || "—"))}${cell("Amount Paid", money(row.finance_amount_paid_override_aed ?? row.calculated_amount_paid_aed))}</div><div class="ps-row">${cell("Paid to Client/Ext. Agent", dateText(row.paid_client_ext_date))}${cell("Paid to Client/Ext. Agent (AED)", money(row.paid_client_ext_amount))}${cell("Deductions (AED)", money(row.deductions_aed))}</div><div class="ps-row">${cell("Additional Payment (AED)", money(row.additional_payment_aed))}${cell("Net Agent Payable (AED)", money(row.net_agent_payable_aed))}${cell("Total Comm. After Deduction", money(row.total_after_deduction_aed))}</div>${row.remarks ? `<div class="ps-section-body"><strong>Remarks:</strong> ${esc(row.remarks)}</div>` : ""}</div><div class="ps-section"><div class="ps-section-head">7. APPROVALS</div><div class="ps-approvals"><div class="a"><div class="name">${row.prepared_by ? esc(row.prepared_by) : "&nbsp;"}</div><div class="line">Prepared By</div></div><div class="a"><div class="name">${row.manager ? esc(row.manager) : "&nbsp;"}</div><div class="line">Manager</div></div><div class="a"><div class="name">${row.accounts ? esc(row.accounts) : "&nbsp;"}</div><div class="line">Accounts</div></div></div></div></div>`;
     const popup = window.open(
       "",
       "_blank",
@@ -1060,7 +1788,7 @@ function CommissionSheets() {
       return setError(
         "Pop-up blocked — allow pop-ups for this page to use View.",
       );
-    const popupCss = `body{margin:0;background:#f0f1ec;font-family:Arial,Helvetica,sans-serif}.vp-toolbar{position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#16232e;color:#fff}.vp-actions{display:flex;gap:8px}.vp-toolbar button{padding:7px 16px;border:0;border-radius:3px;background:#a9782e;color:#fff;cursor:pointer}.vp-toolbar .danger{background:#b23b3b}.vp-wrap{max-width:880px;margin:18px auto;padding:0 16px 40px}.ps-page{background:#fff;color:#111;font-size:11px}.ps-letterhead{display:block;width:100%;max-height:130px;object-fit:contain;margin:0 0 6px}.ps-title{text-align:center;font-size:18px;font-weight:700;letter-spacing:.05em;border:2px solid #111;padding:8px}.ps-metarow{display:flex;justify-content:space-between;border:1px solid #111;border-top:0;padding:5px 8px}.ps-section{border:1px solid #111;border-top:0}.ps-section-head{padding:4px 8px;background:#111;color:#fff;font-weight:700;letter-spacing:.03em}.ps-section-body{padding:7px 9px}.ps-row{display:flex;border-bottom:1px solid #ccc}.ps-row:last-child{border-bottom:0}.ps-cell{display:flex;flex:1;align-items:baseline;gap:4px;min-width:0;padding:3px 6px;border-right:1px solid #ccc}.ps-cell:last-child{border-right:0}.ps-cell .l{flex:0 0 104px;color:#555;font-size:8.5px;line-height:1.25;text-transform:uppercase}.ps-cell .l:after{content:':'}.ps-cell .v{overflow:hidden;flex:1;font-size:10.5px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}.ps-checkline{padding:3px 0}.ps-doc-cols{display:flex}.ps-doc-col{flex:1;padding:4px 8px}.ps-doc-col h4{margin:0 0 5px;font-size:10px;text-transform:uppercase}.ps-doc-col div{margin-bottom:3px;font-size:10.5px}.ps-dist-table{width:100%;border-collapse:collapse;font-size:10.5px}.ps-dist-table th,.ps-dist-table td{padding:5px 6px;border:1px solid #ccc;text-align:left}.cis-print-note{padding-bottom:0;color:#555;font-size:10px}.ps-approvals{display:flex}.ps-approvals .a{flex:1;padding:10px 8px;border-right:1px solid #ccc;text-align:center}.ps-approvals .a:last-child{border:0}.ps-approvals .name{min-height:14px;margin-bottom:18px;font-weight:600}.ps-approvals .line{padding-top:3px;border-top:1px solid #111;color:#555;font-size:9px;text-transform:uppercase}@media print{.vp-toolbar{display:none}.vp-wrap{max-width:none;margin:0;padding:0}body{background:#fff}}`;
+    const popupCss = `body{margin:0;background:#f0f1ec;font-family:Arial,Helvetica,sans-serif}.vp-toolbar{position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#16232e;color:#fff}.vp-actions{display:flex;gap:8px}.vp-toolbar button{padding:7px 16px;border:0;border-radius:3px;background:#a9782e;color:#fff;cursor:pointer}.vp-toolbar .danger{background:#b23b3b}.vp-wrap{max-width:880px;margin:18px auto;padding:0 16px 40px}.ps-page{background:#fff;color:#111;font-size:11px}.ps-letterhead{display:block;width:100%;max-height:130px;object-fit:contain;margin:0 0 6px}.ps-title{text-align:center;font-size:18px;font-weight:700;letter-spacing:.05em;border:2px solid #111;padding:8px}.ps-metarow{display:flex;justify-content:space-between;border:1px solid #111;border-top:0;padding:5px 8px}.ps-section{border:1px solid #111;border-top:0}.ps-section-head{padding:4px 8px;background:#111;color:#fff;font-weight:700;letter-spacing:.03em}.ps-section-body{padding:7px 9px}.ps-row{display:flex;border-bottom:1px solid #ccc}.ps-row:last-child{border-bottom:0}.ps-cell{display:flex;flex:1;align-items:flex-start;gap:4px;min-width:0;padding:3px 6px;border-right:1px solid #ccc}.ps-cell:last-child{border-right:0}.ps-cell .l{flex:0 0 104px;color:#555;font-size:8.5px;line-height:1.25;text-transform:uppercase}.ps-cell .l:after{content:':'}.ps-cell .v{flex:1;font-size:10.5px;font-weight:600;line-height:1.3;white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word}.ps-checkline{padding:3px 0}.ps-doc-cols{display:flex}.ps-doc-col{flex:1;padding:4px 8px}.ps-doc-col h4{margin:0 0 5px;font-size:10px;text-transform:uppercase}.ps-doc-list{display:grid;grid-template-columns:repeat(2,1fr);column-gap:18px;row-gap:3px}.ps-doc-list>div{font-size:10.5px;overflow-wrap:break-word;word-break:break-word}.ps-dist-table{width:100%;border-collapse:collapse;font-size:10.5px}.ps-dist-table th,.ps-dist-table td{padding:5px 6px;border:1px solid #ccc;text-align:left}.cis-print-note{padding-bottom:0;color:#555;font-size:10px}.ps-approvals{display:flex}.ps-approvals .a{flex:1;padding:10px 8px;border-right:1px solid #ccc;text-align:center}.ps-approvals .a:last-child{border:0}.ps-approvals .name{min-height:14px;margin-bottom:18px;font-weight:600}.ps-approvals .line{padding-top:3px;border-top:1px solid #111;color:#555;font-size:9px;text-transform:uppercase}@media print{.vp-toolbar{display:none}.vp-wrap{max-width:none;margin:0;padding:0}body{background:#fff}}`;
     popup.document.write(
       `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(row.form_ref || "Commission Sheet")}${row.client_name ? ` — ${esc(row.client_name)}` : ""}</title><style>${popupCss}</style></head><body><div class="vp-toolbar"><strong>${esc(row.form_ref || "Commission Sheet")}${row.client_name ? ` — ${esc(row.client_name)}` : ""}</strong><div class="vp-actions">${canMake ? `<button id="edit">Edit</button>` : ""}<button id="print">Print / Save PDF</button>${isSuper ? `<button id="delete" class="danger">Delete</button>` : ""}</div></div><div class="vp-wrap">${printHtml}</div></body></html>`,
     );
@@ -1197,115 +1925,155 @@ function CommissionSheets() {
     onSetup: setup,
     onDate: (value) => set("transaction_date", value),
   };
+  const showDriveConnectPrompt = !driveTokenValid() && !driveConnectDismissed;
+  const driveConnectPrompt = showDriveConnectPrompt ? (
+    <GoogleDriveConnectPrompt
+      onConnect={connectGoogleDrive}
+      onDismiss={() => setDriveConnectDismissed(true)}
+    />
+  ) : null;
+  const attachmentViewerModal = (
+    <AttachmentViewerModal
+      viewer={viewer}
+      onClose={closeAttachment}
+      onDownload={downloadAttachment}
+      onPrint={printAttachment}
+      onRemove={removeAttachment}
+    />
+  );
   if (view === "setup")
     return (
-      <CommissionChrome active="setup" {...chrome}>
-        <Setup
-          {...{
-            folder,
-            letterhead,
-            templates,
-            options,
-            newDoc,
-            setNewDoc,
-            newOption,
-            setNewOption,
-            chooseFolder,
-            chooseLetterhead,
-            addDoc,
-            removeDoc,
-            addOption,
-            removeOption,
-            isSuper,
-            canFinance,
-            rows,
-            companies,
-            error,
-            notice,
-            restore,
-            purge,
-            user,
-            load,
-          }}
-        />
-      </CommissionChrome>
+      <>
+        {driveConnectPrompt}
+        {attachmentViewerModal}
+        <CommissionChrome active="setup" {...chrome}>
+          <Setup
+            {...{
+              letterhead,
+              templates,
+              options,
+              newDoc,
+              setNewDoc,
+              newOption,
+              setNewOption,
+              chooseLetterhead,
+              addDoc,
+              removeDoc,
+              addOption,
+              removeOption,
+              isSuper,
+              canFinance,
+              rows,
+              companies,
+              error,
+              notice,
+              restore,
+              purge,
+              user,
+              load,
+              driveEmail,
+              driveTokenValid: driveTokenValid(),
+              connectGoogleDrive,
+            }}
+          />
+        </CommissionChrome>
+      </>
     );
   if (view === "editor")
     return (
-      <CommissionChrome active="editor" {...chrome}>
-        <Editor
-          {...{
-            form,
-            set,
-            setForm,
-            companies,
-            rows,
-            types,
-            parties,
-            activeDocs,
-            files,
-            setFiles,
-            gross,
-            vat,
-            total,
-            residual,
-            paid,
-            allPaid,
-            received,
-            expectedPayable,
-            canFinance,
-            canMake,
-            saving,
-            error,
-            notice,
-            client,
-            updateLine,
-            addPay,
-            updatePay,
-            removePay,
-            addReceipt,
-            updateReceipt,
-            setup,
-            save,
-            folder,
-            print,
-            fresh,
-          }}
-          onCancel={() => setView("dashboard")}
-        />
-      </CommissionChrome>
+      <>
+        {driveConnectPrompt}
+        {attachmentViewerModal}
+        <CommissionChrome active="editor" {...chrome}>
+          <Editor
+            {...{
+              form,
+              set,
+              setForm,
+              companies,
+              rows,
+              types,
+              parties,
+              activeDocs,
+              files,
+              setFiles,
+              gross,
+              vat,
+              total,
+              residual,
+              kickbackTotal,
+              retained,
+              distComputed,
+              paid,
+              allPaid,
+              received,
+              expectedPayable,
+              canFinance,
+              canMake,
+              saving,
+              error,
+              notice,
+              client,
+              matchClientBy,
+              updateLine,
+              finalizeAllocationLine,
+              insertLine,
+              addPay,
+              updatePay,
+              removePay,
+              addReceipt,
+              updateReceipt,
+              setup,
+              save,
+              driveTokenValid: driveTokenValid(),
+              shareTransaction,
+              openAttachment,
+              previewLocalFile,
+              print,
+              fresh,
+            }}
+            onCancel={() => setView("dashboard")}
+          />
+        </CommissionChrome>
+      </>
     );
   return (
-    <CommissionChrome active="dashboard" {...chrome}>
-      <Dashboard
-        {...{
-          filtered,
-          companies,
-          loading,
-          error,
-          notice,
-          search,
-          setSearch,
-          status,
-          setStatus,
-          deal,
-          setDeal,
-          dateFrom,
-          setDateFrom,
-          dateTo,
-          setDateTo,
-          canMake,
-          isSuper,
-          fresh,
-          edit,
-          softDelete,
-          print,
-        }}
-      />
-    </CommissionChrome>
+    <>
+      {driveConnectPrompt}
+      {attachmentViewerModal}
+      <CommissionChrome active="dashboard" {...chrome}>
+        <Dashboard
+          {...{
+            filtered,
+            companies,
+            loading,
+            error,
+            notice,
+            search,
+            setSearch,
+            status,
+            setStatus,
+            deal,
+            setDeal,
+            dateFrom,
+            setDateFrom,
+            dateTo,
+            setDateTo,
+            canMake,
+            isSuper,
+            fresh,
+            edit,
+            softDelete,
+            print,
+            openAttachment,
+          }}
+        />
+      </CommissionChrome>
+    </>
   );
 }
 function Dashboard(p) {
+  const [expandedRow, setExpandedRow] = useState(null);
   const sumGross = p.filtered.reduce(
       (sum, row) => sum + num(row.gross_commission_aed),
       0,
@@ -1394,61 +2162,147 @@ function Dashboard(p) {
               <th>VAT</th>
               <th>Total</th>
               <th>Status</th>
+              <th>Files</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {p.loading ? (
               <tr>
-                <td colSpan="11">Loading…</td>
+                <td colSpan="12">Loading…</td>
               </tr>
             ) : p.filtered.length ? (
-              p.filtered.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.form_ref}</td>
-                  <td>{dateText(row.transaction_date)}</td>
-                  <td>{row.client_name || "—"}</td>
-                  <td>{row.unit_no || "—"}</td>
-                  <td>{DEALS[row.deal_type] || "—"}</td>
-                  <td>
-                    {(row.commission_distribution_lines || [])
-                      .filter((item) => item.party === "Internal Agent")
-                      .map((item) => item.recipient_name)
-                      .filter(Boolean)
-                      .join(", ") || "—"}
-                  </td>
-                  <td>{fmt(row.gross_commission_aed)}</td>
-                  <td>{fmt(row.vat_amount_aed)}</td>
-                  <td>{fmt(row.total_payable_aed)}</td>
-                  <td>
-                    {row.tracking_status ? (
-                      <span className="cis-status-badge">
-                        {row.tracking_status}
-                      </span>
-                    ) : (
-                      "—"
+              p.filtered.map((row) => {
+                const docs = (row.commission_sheet_documents || []).filter(
+                  (doc) => doc.is_selected && doc.local_file_name,
+                );
+                const fileCount = docs.reduce(
+                  (sum, doc) =>
+                    sum + doc.local_file_name.split("|").filter(Boolean).length,
+                  0,
+                );
+                return (
+                  <Fragment key={row.id}>
+                    <tr>
+                      <td>{row.form_ref}</td>
+                      <td>{dateText(row.transaction_date)}</td>
+                      <td>{row.client_name || "—"}</td>
+                      <td>{row.unit_no || "—"}</td>
+                      <td>{DEALS[row.deal_type] || "—"}</td>
+                      <td>
+                        {(row.commission_distribution_lines || [])
+                          .filter((item) => item.party === "Internal Agent")
+                          .map((item) => item.recipient_name)
+                          .filter(Boolean)
+                          .join(", ") || "—"}
+                      </td>
+                      <td>{fmt(row.gross_commission_aed)}</td>
+                      <td>{fmt(row.vat_amount_aed)}</td>
+                      <td>{fmt(row.total_payable_aed)}</td>
+                      <td>
+                        {row.tracking_status ? (
+                          <span className="cis-status-badge">
+                            {row.tracking_status}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        {fileCount ? (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() =>
+                              setExpandedRow((current) =>
+                                current === row.id ? null : row.id,
+                              )
+                            }
+                          >
+                            📎 {fileCount}
+                          </button>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="cis-actions">
+                        <button type="button" onClick={() => p.print(row)}>
+                          View
+                        </button>
+                        {p.canMake && (
+                          <button type="button" onClick={() => p.edit(row)}>
+                            Edit
+                          </button>
+                        )}
+                        {p.isSuper && (
+                          <button
+                            type="button"
+                            onClick={() => p.softDelete(row)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {expandedRow === row.id && (
+                      <tr>
+                        <td colSpan="12">
+                          <ul
+                            style={{
+                              listStyle: "none",
+                              margin: 0,
+                              padding: 0,
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: 8,
+                            }}
+                          >
+                            {docs.flatMap((doc) => {
+                              const names = doc.local_file_name
+                                .split("|")
+                                .filter(Boolean);
+                              return names.map((name, index) => (
+                                <li
+                                  key={`${doc.document_code}-${index}`}
+                                  style={{
+                                    background: "#eef2ff",
+                                    borderRadius: 4,
+                                    padding: "2px 8px",
+                                    fontSize: 12,
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    className="cis-link"
+                                    onClick={() =>
+                                      p.openAttachment({
+                                        folderId: doc.local_folder_label,
+                                        diskName: buildDiskName(
+                                          doc.document_code,
+                                          name,
+                                          index,
+                                          names.length,
+                                        ),
+                                        displayName: name,
+                                        canRemove: false,
+                                      })
+                                    }
+                                  >
+                                    {doc.document_label}: {name}
+                                  </button>
+                                </li>
+                              ));
+                            })}
+                          </ul>
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="cis-actions">
-                    <button type="button" onClick={() => p.print(row)}>
-                      View
-                    </button>
-                    {p.canMake && (
-                      <button type="button" onClick={() => p.edit(row)}>
-                        Edit
-                      </button>
-                    )}
-                    {p.isSuper && (
-                      <button type="button" onClick={() => p.softDelete(row)}>
-                        Delete
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))
+                  </Fragment>
+                );
+              })
             ) : (
               <tr>
-                <td colSpan="11" className="cis-empty">
+                <td colSpan="12" className="cis-empty">
                   No transactions match — record one in New Entry, or adjust the
                   filters.
                 </td>
@@ -1471,6 +2325,19 @@ function Editor(p) {
           }),
         ) || [],
     history = (key) => p.rows.map((row) => row[key]);
+  let distSplitIndex = 0;
+  while (
+    distSplitIndex < p.form.distribution.length &&
+    isKickback(p.form.distribution[distSplitIndex].line_kind)
+  )
+    distSplitIndex++;
+  const kickbackPctTotal = p.form.distribution
+      .slice(0, distSplitIndex)
+      .reduce((sum, item) => sum + num(item.pct_of_base), 0),
+    allocationPctTotal = p.form.distribution
+      .slice(distSplitIndex)
+      .reduce((sum, item) => sum + num(item.pct_of_base), 0),
+    overAllocated = kickbackPctTotal > 100.01 || allocationPctTotal > 100.01;
   const hasEnteredData =
     !!p.form.id ||
     [
@@ -1506,7 +2373,19 @@ function Editor(p) {
     p.setFiles({});
   };
   return (
-    <form className="cis-wrap cis-entry" onSubmit={p.save}>
+    <form
+      className="cis-wrap cis-entry"
+      onSubmit={p.save}
+      onKeyDown={(event) => {
+        if (
+          event.key === "Enter" &&
+          event.target.tagName !== "TEXTAREA" &&
+          event.target.type !== "submit"
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
       <div className="cis-entry-heading">
         <div>
           <h1>
@@ -1559,6 +2438,7 @@ function Editor(p) {
               className="form-control"
               value={p.form.client_contact}
               onChange={(e) => p.set("client_contact", e.target.value)}
+              onBlur={(e) => p.matchClientBy("client_contact", e.target.value)}
               placeholder="+971… or email"
             />
           </Field>
@@ -1567,6 +2447,9 @@ function Editor(p) {
               className="form-control"
               value={p.form.client_id_number}
               onChange={(e) => p.set("client_id_number", e.target.value)}
+              onBlur={(e) =>
+                p.matchClientBy("client_id_number", e.target.value)
+              }
             />
           </Field>
           <Field label="Client ID expiry">
@@ -1773,13 +2656,16 @@ function Editor(p) {
           </button>
         }
       >
-        <div className={`cis-folder ${p.folder ? "ok" : "missing"}`}>
+        <div className={`cis-folder ${p.driveTokenValid ? "ok" : "missing"}`}>
           <b>
-            {p.folder ? "Documents folder mapped" : "Documents folder not set"}
+            {p.driveTokenValid
+              ? "Google Drive connected"
+              : "Google Drive not connected"}
           </b>
           <span>
-            {p.folder?.name ||
-              "Open Setup to choose a local or network folder."}
+            {p.driveTokenValid
+              ? "Attachments will be saved to your Google Drive."
+              : "Open Setup to connect Google Drive before saving attachments."}
           </span>
         </div>
         {!p.form.deal_type ? (
@@ -1821,18 +2707,150 @@ function Editor(p) {
                       <input
                         className="form-control"
                         type="file"
-                        onChange={(e) =>
+                        multiple
+                        onChange={(e) => {
+                          const picked = Array.from(e.target.files || []);
+                          if (!picked.length) return;
                           p.setFiles((current) => ({
                             ...current,
-                            [item.document_code]: e.target.files?.[0] || null,
-                          }))
-                        }
+                            [item.document_code]: [
+                              ...(current[item.document_code] || []),
+                              ...picked,
+                            ],
+                          }));
+                          e.target.value = "";
+                        }}
                       />
-                      <small>
-                        {p.files[item.document_code]?.name ||
-                          doc.local_file_name ||
-                          "Attachment required"}
-                      </small>
+                      {p.files[item.document_code]?.length ? (
+                        <ul
+                          className="cis-doc-files"
+                          style={{
+                            listStyle: "none",
+                            margin: "4px 0 0",
+                            padding: 0,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 4,
+                          }}
+                        >
+                          {p.files[item.document_code].map((file, fileIndex) => (
+                            <li
+                              key={`${file.name}-${fileIndex}`}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 8,
+                                fontSize: 12,
+                                background: "#f3f4f6",
+                                borderRadius: 4,
+                                padding: "2px 8px",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                className="cis-link"
+                                onClick={() => p.previewLocalFile(file)}
+                              >
+                                {file.name}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn"
+                                onClick={() =>
+                                  p.setFiles((current) => ({
+                                    ...current,
+                                    [item.document_code]: current[
+                                      item.document_code
+                                    ].filter((_, i) => i !== fileIndex),
+                                  }))
+                                }
+                              >
+                                ×
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : doc.local_file_name ? (
+                        <ul
+                          className="cis-doc-files"
+                          style={{
+                            listStyle: "none",
+                            margin: "4px 0 0",
+                            padding: 0,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 4,
+                          }}
+                        >
+                          {doc.local_file_name
+                            .split("|")
+                            .filter(Boolean)
+                            .map((name, fileIndex, names) => (
+                              <li
+                                key={`${name}-${fileIndex}`}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 8,
+                                  fontSize: 12,
+                                  background: "#eef2ff",
+                                  borderRadius: 4,
+                                  padding: "2px 8px",
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  className="cis-link"
+                                  onClick={() =>
+                                    p.openAttachment({
+                                      folderId: doc.local_folder_label,
+                                      diskName: buildDiskName(
+                                        item.document_code,
+                                        name,
+                                        fileIndex,
+                                        names.length,
+                                      ),
+                                      displayName: name,
+                                      canRemove: true,
+                                      onRemoved: () =>
+                                        p.setForm((current) => ({
+                                          ...current,
+                                          documents: current.documents.map(
+                                            (d) => {
+                                              if (
+                                                d.document_code !==
+                                                item.document_code
+                                              )
+                                                return d;
+                                              const remaining = names.filter(
+                                                (_, i) => i !== fileIndex,
+                                              );
+                                              return {
+                                                ...d,
+                                                local_file_name:
+                                                  remaining.length
+                                                    ? remaining.join("|")
+                                                    : null,
+                                              };
+                                            },
+                                          ),
+                                        })),
+                                    })
+                                  }
+                                >
+                                  {name}
+                                </button>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <small>
+                          Attachment required — add one file per page (e.g. 5
+                          passport pages)
+                        </small>
+                      )}
                     </>
                   )}
                 </div>
@@ -1902,7 +2920,24 @@ function Editor(p) {
           >
             Print / Save PDF
           </button>
-          <button className="btn primary" disabled={!p.canMake || p.saving}>
+          <button
+            type="button"
+            className="btn"
+            disabled={!p.form.id}
+            onClick={() => p.shareTransaction(p.form)}
+            title="Anyone with the link can view, add, and edit these files"
+          >
+            Share attachments
+          </button>
+          <button
+            className="btn primary"
+            disabled={!p.canMake || p.saving || overAllocated}
+            title={
+              overAllocated
+                ? "Fix the over-100% allocation in Section 5 before saving."
+                : undefined
+            }
+          >
             {p.saving ? "Saving…" : "Save"}
           </button>
           <button
@@ -1923,12 +2958,40 @@ function Editor(p) {
   );
 }
 function Distribution(p) {
-  const allocations = p.form.distribution
-    .map((item, index) => ({
+  const [focusRowId, setFocusRowId] = useState(null);
+  const rowRefs = useRef({});
+  useEffect(() => {
+    if (focusRowId && rowRefs.current[focusRowId]) {
+      rowRefs.current[focusRowId].focus();
+      setFocusRowId(null);
+    }
+  }, [focusRowId, p.form.distribution]);
+  let splitIndex = 0;
+  while (
+    splitIndex < p.form.distribution.length &&
+    isKickback(p.form.distribution[splitIndex].line_kind)
+  )
+    splitIndex++;
+  const rows = p.form.distribution.map((item, index) => ({
       item,
       index,
-    }))
-    .filter(({ item }) => item.line_kind === "residual");
+      computed: p.distComputed[index] || item,
+    })),
+    topRows = rows.slice(0, splitIndex),
+    restRows = rows.slice(splitIndex),
+    afterTop = splitIndex
+      ? rows[splitIndex - 1].computed.remaining_after
+      : round(p.gross),
+    topPctTotal = topRows.reduce(
+      (sum, row) => sum + num(row.item.pct_of_base),
+      0,
+    ),
+    restPctTotal = restRows.reduce(
+      (sum, row) => sum + num(row.item.pct_of_base),
+      0,
+    ),
+    topOverAllocated = topPctTotal > 100.01,
+    restOverAllocated = restPctTotal > 100.01;
   const paymentRows = (item, lineIndex, colSpan) =>
     item.payments.map((entry, paymentIndex) => (
       <tr className="cis-payment-row" key={entry.id}>
@@ -2002,12 +3065,12 @@ function Distribution(p) {
         </td>
       </tr>
     ));
-  const amountCell = (item, lineIndex) => (
+  const amountCell = (computed, lineIndex) => (
     <>
       <span
-        className={`cis-balance ${num(item.payable_aed) - p.paid(item) > 0 ? "due" : "settled"}`}
+        className={`cis-balance ${num(computed.payable_aed) - p.paid(computed) > 0 ? "due" : "settled"}`}
       >
-        {money(p.paid(item))}
+        {money(p.paid(computed))}
       </span>
       <button
         type="button"
@@ -2018,11 +3081,176 @@ function Distribution(p) {
       </button>
     </>
   );
+  const rowActions = (index) => (
+    <button
+      type="button"
+      className="btn"
+      onClick={() =>
+        p.setForm((current) => ({
+          ...current,
+          distribution: current.distribution.filter(
+            (_, rowIndex) => rowIndex !== index,
+          ),
+        }))
+      }
+    >
+      ×
+    </button>
+  );
   return (
     <Section number="5" title="Commission distribution">
+      <div className="cis-bases">
+        <span>
+          Total commission: <b>{money(p.gross)}</b>
+        </span>
+        <span>
+          Total kickback: <b>{money(p.kickbackTotal)}</b>
+        </span>
+        <span>
+          Remaining commission (auto-calculated): <b>{money(p.retained)}</b>
+        </span>
+      </div>
+      <div className="cis-subhead">
+        <h3>5a. Kickback (from total commission)</h3>
+      </div>
+      <p className="form-hint">
+        Kickback given back to the client or external referrer, calculated
+        against the total commission ({money(p.gross)}). Every row here is
+        calculated independently against that same total — add more than
+        one row if the kickback is split between parties.
+      </p>
+      <div className="table-wrap">
+        <table className="cis-dist">
+          <thead>
+            <tr>
+              <th>Party</th>
+              <th>Name / company</th>
+              <th>%</th>
+              <th>Base (AED)</th>
+              <th>Kickback amount (AED)</th>
+              <th>Paid amount (AED)</th>
+              <th>Balance (AED)</th>
+              <th>Payment mode</th>
+              <th>Notes</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {topRows.length === 0 && (
+              <tr>
+                <td colSpan="10" className="form-hint">
+                  No kickback — full commission carries into 5b.
+                </td>
+              </tr>
+            )}
+            {topRows.map(({ item, index, computed }) => (
+              <Fragment key={item.id}>
+                <tr>
+                  <td>
+                    <select
+                      ref={(el) => {
+                        rowRefs.current[item.id] = el;
+                      }}
+                      className="form-control"
+                      value={item.party || ""}
+                      onChange={(event) =>
+                        p.updateLine(index, "party", event.target.value)
+                      }
+                    >
+                      <option value="">Select</option>
+                      {p.parties.map((party) => (
+                        <option key={party}>{party}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      className="form-control"
+                      list="cis-recipients"
+                      value={item.recipient_name || ""}
+                      onChange={(event) =>
+                        p.updateLine(
+                          index,
+                          "recipient_name",
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <Amount
+                      value={item.pct_of_base ?? ""}
+                      onChange={(value) =>
+                        p.updateLine(index, "pct_of_base", value)
+                      }
+                    />
+                  </td>
+                  <td>
+                    <span className="form-hint">
+                      {money(computed.base_aed)}
+                    </span>
+                  </td>
+                  <td>
+                    <Amount
+                      value={computed.payable_aed ?? ""}
+                      onChange={(value) =>
+                        p.updateLine(index, "payable_aed", value)
+                      }
+                    />
+                  </td>
+                  <td>{amountCell(computed, index)}</td>
+                  <td>
+                    <span className="cis-balance">
+                      {money(num(computed.payable_aed) - p.paid(computed))}
+                    </span>
+                  </td>
+                  <td>{item.payments.at(-1)?.payment_mode || "—"}</td>
+                  <td>
+                    <input
+                      className="form-control"
+                      value={item.notes || ""}
+                      onChange={(event) =>
+                        p.updateLine(index, "notes", event.target.value)
+                      }
+                    />
+                  </td>
+                  <td>{rowActions(index)}</td>
+                </tr>
+                {paymentRows(item, index, 10)}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <button
+        type="button"
+        className="btn ghost"
+        onClick={() => {
+          const newLine = line("kickback_agent", "Kickback", "");
+          p.insertLine(splitIndex, newLine);
+          setFocusRowId(newLine.id);
+        }}
+      >
+        + Add kickback
+      </button>
+      {topOverAllocated && (
+        <p className="alert alert-error">
+          5a kickback percentages add up to {fmt(topPctTotal)}% of total
+          commission — that's over 100%. Fix this before you can save.
+        </p>
+      )}
+      <div className="cis-subhead">
+        <h3>5b. Remaining commission allocation</h3>
+      </div>
       <p className="form-hint strong">
-        Commission receivable (net of VAT) — 100% distribution base:{" "}
-        {money(p.gross)}
+        Remaining commission entering 5b — 100% base here: {money(afterTop)}
+      </p>
+      <p className="form-hint">
+        Every row here is calculated independently against the remaining
+        commission above ({money(afterTop)}) — rows don't reduce the base
+        for each other. Use the <b>Type</b> column only if a row here should
+        also count as kickback for reporting purposes; the calculation is
+        the same either way.
       </p>
       <div className="table-wrap">
         <table className="cis-dist">
@@ -2032,7 +3260,8 @@ function Distribution(p) {
               <th>Party</th>
               <th>Name / company</th>
               <th>%</th>
-              <th>Payable amount (AED)</th>
+              <th>Base (AED)</th>
+              <th>Amount (AED)</th>
               <th>Paid amount (AED)</th>
               <th>Balance (AED)</th>
               <th>Payment mode</th>
@@ -2041,20 +3270,31 @@ function Distribution(p) {
             </tr>
           </thead>
           <tbody>
-            {allocations.map(({ item, index }) => (
+            {restRows.length === 0 && (
+              <tr>
+                <td colSpan="11" className="form-hint">
+                  No rows yet.
+                </td>
+              </tr>
+            )}
+            {restRows.map(({ item, index, computed }) => (
               <Fragment key={item.id}>
                 <tr>
                   <td>
                     <select
+                      ref={(el) => {
+                        rowRefs.current[item.id] = el;
+                      }}
                       className="form-control"
-                      value={item.type_label || ""}
+                      value={item.line_kind || ""}
                       onChange={(event) =>
-                        p.updateLine(index, "type_label", event.target.value)
+                        p.updateLine(index, "line_kind", event.target.value)
                       }
                     >
-                      <option value="">Select</option>
-                      {p.types.map((type) => (
-                        <option key={type}>{type}</option>
+                      {DIST_TYPE_OPTIONS.map(([kind, label]) => (
+                        <option key={kind} value={kind}>
+                          {label}
+                        </option>
                       ))}
                     </select>
                   </td>
@@ -2092,20 +3332,27 @@ function Distribution(p) {
                       onChange={(value) =>
                         p.updateLine(index, "pct_of_base", value)
                       }
+                      onBlur={() => p.finalizeAllocationLine(index)}
                     />
+                  </td>
+                  <td>
+                    <span className="form-hint">
+                      {money(computed.base_aed)}
+                    </span>
                   </td>
                   <td>
                     <Amount
-                      value={item.payable_aed ?? ""}
+                      value={computed.payable_aed ?? ""}
                       onChange={(value) =>
                         p.updateLine(index, "payable_aed", value)
                       }
+                      onBlur={() => p.finalizeAllocationLine(index)}
                     />
                   </td>
-                  <td>{amountCell(item, index)}</td>
+                  <td>{amountCell(computed, index)}</td>
                   <td>
                     <span className="cis-balance">
-                      {money(num(item.payable_aed) - p.paid(item))}
+                      {money(num(computed.payable_aed) - p.paid(computed))}
                     </span>
                   </td>
                   <td>{item.payments.at(-1)?.payment_mode || "—"}</td>
@@ -2118,24 +3365,9 @@ function Distribution(p) {
                       }
                     />
                   </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() =>
-                        p.setForm((current) => ({
-                          ...current,
-                          distribution: current.distribution.filter(
-                            (_, rowIndex) => rowIndex !== index,
-                          ),
-                        }))
-                      }
-                    >
-                      ×
-                    </button>
-                  </td>
+                  <td>{rowActions(index)}</td>
                 </tr>
-                {paymentRows(item, index, 10)}
+                {paymentRows(item, index, 11)}
               </Fragment>
             ))}
           </tbody>
@@ -2144,27 +3376,30 @@ function Distribution(p) {
       <button
         type="button"
         className="btn ghost"
-        onClick={() =>
+        onClick={() => {
+          const newLine = line("residual", "Commission", "Internal Agent");
+          if (restRows.length === 0) newLine.pct_of_base = 100;
           p.setForm((current) => ({
             ...current,
-            distribution: [
-              ...current.distribution,
-              line(
-                "residual",
-                p.types[0] || "Residual Allocation",
-                "Internal Agent",
-              ),
-            ],
-          }))
-        }
+            distribution: recalcDistribution(
+              [...current.distribution, newLine],
+              num(current.gross_commission_aed),
+            ).map(({ base_aed, remaining_after, ...rest }) => rest),
+          }));
+          setFocusRowId(newLine.id);
+        }}
       >
-        + Add agent
+        + Add row
       </button>
+      {restOverAllocated && (
+        <p className="alert alert-error">
+          5b allocation percentages add up to {fmt(restPctTotal)}% of the
+          remaining commission — that's over 100%. Fix this before you can
+          save.
+        </p>
+      )}
       <p className="form-hint">
-        Allocated from residual:{" "}
-        {money(
-          allocations.reduce((sum, row) => sum + num(row.item.payable_aed), 0),
-        )}{" "}
+        Remaining commission after all rows above: <b>{money(p.retained)}</b>{" "}
         · Paid across all payment splits: {money(p.allPaid)}
       </p>
       <p className="form-hint">
@@ -3028,23 +4263,27 @@ function Setup(p) {
             : "No letterhead uploaded — the printed sheet will use the default title."}
         </p>
       </Section>
-      <Section title="Documents storage location">
+      <Section title="Google Drive attachments">
         <p className="form-hint strong">
-          {p.folder ? `Folder mapped: ${p.folder.name}` : "Folder not set."}
+          {p.driveTokenValid
+            ? "Connected. Attachments will be saved to your Google Drive."
+            : "Not connected."}
         </p>
         <div className="cis-inline-actions">
-          <button className="btn primary" onClick={p.chooseFolder}>
-            Choose documents folder…
+          <button className="btn primary" onClick={p.connectGoogleDrive}>
+            {p.driveTokenValid ? "Reconnect" : "Connect Google Drive"}
           </button>
         </div>
         <p className="form-hint">
-          Point this at any folder on your computer. Once your shared network
-          drive is ready (for example N:\CommissionDocs), choose the new
-          location; every attachment from then on goes there.
+          Every transaction gets its own folder inside a "Commission Sheets
+          Attachments" folder in your Google Drive. Use the "Share
+          attachments" button on a saved transaction to get a link you can
+          send to anyone — they'll be able to view, add, and edit files in
+          that folder, so only share it with people you trust.
         </p>
         <p className="form-hint">
-          Works in Chrome and Edge. Your browser may ask you to reconfirm access
-          when you reopen the app.
+          The connection lasts about an hour at a time — you'll be asked to
+          reconnect after that, or whenever it expires mid-session.
         </p>
       </Section>
       <Section title="Transaction records storage">
@@ -3052,8 +4291,7 @@ function Setup(p) {
           Transaction records are stored in the project Supabase database.
         </p>
         <p className="form-hint">
-          Local folder preferences remain in this browser. Use the Excel backup
-          below for a portable record backup.
+          Use the Excel backup below for a portable record backup.
         </p>
       </Section>
       <Section title="Recycle Bin — recall & restore deleted transactions">
