@@ -9,8 +9,10 @@ create table if not exists public.user_module_roles (
   primary key (user_id, module_key, role_key)
 );
 alter table public.user_module_roles enable row level security;
+drop policy if exists "Users read their module roles" on public.user_module_roles;
 create policy "Users read their module roles" on public.user_module_roles for select to authenticated
 using (user_id = auth.uid() or exists (select 1 from public.users where id = auth.uid() and role = 'superadmin'));
+drop policy if exists "Superadmins manage module roles" on public.user_module_roles;
 create policy "Superadmins manage module roles" on public.user_module_roles for all to authenticated
 using (exists (select 1 from public.users where id = auth.uid() and role = 'superadmin'))
 with check (exists (select 1 from public.users where id = auth.uid() and role = 'superadmin'));
@@ -21,8 +23,10 @@ create table if not exists public.commission_sheets (
   form_ref text not null unique,
   company_id uuid not null references public.companies(id) on delete restrict,
   transaction_date date not null default current_date,
-  client_name text not null, client_contact text,
-  building_project text, developer text, unit_no text not null, unit_type text, bedrooms text,
+  client_name text not null, client_contact text, client_id_number text, client_id_expiry date,
+  building_project text, developer text,
+  developer_bdm_name text, developer_bdm_email text, developer_bdm_contact text,
+  unit_no text not null, unit_type text, bedrooms text,
   unit_value_aed numeric(14,2), agent_name text, agent_team text,
   deal_type text not null check (deal_type in ('rental','primary_offplan','buy_sell')),
   lead_source text, lead_source_other text,
@@ -56,8 +60,8 @@ begin
       or new.prepared_by is not null or new.manager is not null or new.accounts is not null then
       raise exception 'Commission Sheet finance access required for accounts and approval fields';
     end if;
-  elsif to_jsonb(new) - array['updated_at','updated_by','created_at','created_by','company_id','form_ref','transaction_date','client_name','client_contact','building_project','developer','unit_no','unit_type','bedrooms','unit_value_aed','agent_name','agent_team','deal_type','lead_source','lead_source_other','commission_pct','gross_commission_aed','vat_amount_aed','total_payable_aed','calculated_amount_paid_aed','net_agent_payable_aed','total_after_deduction_aed']
-      is distinct from to_jsonb(old) - array['updated_at','updated_by','created_at','created_by','company_id','form_ref','transaction_date','client_name','client_contact','building_project','developer','unit_no','unit_type','bedrooms','unit_value_aed','agent_name','agent_team','deal_type','lead_source','lead_source_other','commission_pct','gross_commission_aed','vat_amount_aed','total_payable_aed','calculated_amount_paid_aed','net_agent_payable_aed','total_after_deduction_aed'] then
+  elsif to_jsonb(new) - array['updated_at','updated_by','created_at','created_by','company_id','form_ref','transaction_date','client_name','client_contact','client_id_number','client_id_expiry','building_project','developer','developer_bdm_name','developer_bdm_email','developer_bdm_contact','unit_no','unit_type','bedrooms','unit_value_aed','agent_name','agent_team','deal_type','lead_source','lead_source_other','commission_pct','gross_commission_aed','vat_amount_aed','total_payable_aed','calculated_amount_paid_aed','net_agent_payable_aed','total_after_deduction_aed']
+      is distinct from to_jsonb(old) - array['updated_at','updated_by','created_at','created_by','company_id','form_ref','transaction_date','client_name','client_contact','client_id_number','client_id_expiry','building_project','developer','developer_bdm_name','developer_bdm_email','developer_bdm_contact','unit_no','unit_type','bedrooms','unit_value_aed','agent_name','agent_team','deal_type','lead_source','lead_source_other','commission_pct','gross_commission_aed','vat_amount_aed','total_payable_aed','calculated_amount_paid_aed','net_agent_payable_aed','total_after_deduction_aed'] then
     raise exception 'Commission Sheet finance access required for accounts and approval fields';
   end if;
   return new;
@@ -97,13 +101,21 @@ alter table public.commission_sheets enable row level security;
 alter table public.commission_distribution_lines enable row level security;
 alter table public.commission_sheet_documents enable row level security;
 
+drop policy if exists "Commission viewers read sheets" on public.commission_sheets;
 create policy "Commission viewers read sheets" on public.commission_sheets for select to authenticated using (public.commission_module_role_at_least('view'));
+drop policy if exists "Commission makers insert sheets" on public.commission_sheets;
 create policy "Commission makers insert sheets" on public.commission_sheets for insert to authenticated with check (created_by = auth.uid() and public.commission_module_role_at_least('make'));
+drop policy if exists "Commission makers update sheets" on public.commission_sheets;
 create policy "Commission makers update sheets" on public.commission_sheets for update to authenticated using (public.commission_module_role_at_least('make')) with check (public.commission_module_role_at_least('make'));
+drop policy if exists "Commission superadmins delete sheets" on public.commission_sheets;
 create policy "Commission superadmins delete sheets" on public.commission_sheets for delete to authenticated using (exists (select 1 from public.users where id=auth.uid() and role='superadmin'));
+drop policy if exists "Commission viewers read lines" on public.commission_distribution_lines;
 create policy "Commission viewers read lines" on public.commission_distribution_lines for select to authenticated using (public.commission_module_role_at_least('view'));
+drop policy if exists "Commission makers manage lines" on public.commission_distribution_lines;
 create policy "Commission makers manage lines" on public.commission_distribution_lines for all to authenticated using (public.commission_module_role_at_least('make')) with check (public.commission_module_role_at_least('make'));
+drop policy if exists "Commission viewers read documents" on public.commission_sheet_documents;
 create policy "Commission viewers read documents" on public.commission_sheet_documents for select to authenticated using (public.commission_module_role_at_least('view'));
+drop policy if exists "Commission makers manage documents" on public.commission_sheet_documents;
 create policy "Commission makers manage documents" on public.commission_sheet_documents for all to authenticated using (public.commission_module_role_at_least('make')) with check (public.commission_module_role_at_least('make'));
 grant select, insert, update, delete on public.commission_sheets, public.commission_distribution_lines, public.commission_sheet_documents to authenticated;
 

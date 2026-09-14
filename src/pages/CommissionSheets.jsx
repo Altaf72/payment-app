@@ -207,6 +207,9 @@ const empty = () => ({
   client_id_expiry: "",
   building_project: "",
   developer: "",
+  developer_bdm_name: "",
+  developer_bdm_email: "",
+  developer_bdm_contact: "",
   unit_no: "",
   unit_type: "",
   bedrooms: "",
@@ -927,6 +930,9 @@ function CommissionSheets() {
         client_id_expiry: recent.client_id_expiry || "",
         building_project: recent.building_project || "",
         developer: recent.developer || "",
+        developer_bdm_name: recent.developer_bdm_name || "",
+        developer_bdm_email: recent.developer_bdm_email || "",
+        developer_bdm_contact: recent.developer_bdm_contact || "",
         unit_type: recent.unit_type || "",
       }),
     }));
@@ -949,8 +955,41 @@ function CommissionSheets() {
       building_project:
         current.building_project || recent.building_project || "",
       developer: current.developer || recent.developer || "",
+      developer_bdm_name:
+        current.developer_bdm_name || recent.developer_bdm_name || "",
+      developer_bdm_email:
+        current.developer_bdm_email || recent.developer_bdm_email || "",
+      developer_bdm_contact:
+        current.developer_bdm_contact || recent.developer_bdm_contact || "",
       unit_type: current.unit_type || recent.unit_type || "",
     }));
+  }
+  function selectDeveloperBdm(name) {
+    setForm((current) => {
+      const normalizedName = name.trim().toLowerCase();
+      const matchingDeveloper = rows.filter(
+        (row) =>
+          row.developer_bdm_name?.trim().toLowerCase() === normalizedName &&
+          (!current.developer ||
+            row.developer?.trim().toLowerCase() ===
+              current.developer.trim().toLowerCase()),
+      );
+      const recent =
+        matchingDeveloper.find(
+          (row) =>
+            current.building_project &&
+            row.building_project?.trim().toLowerCase() ===
+              current.building_project.trim().toLowerCase(),
+        ) || matchingDeveloper[0];
+      return {
+        ...current,
+        developer_bdm_name: name,
+        ...(recent && {
+          developer_bdm_email: recent.developer_bdm_email || "",
+          developer_bdm_contact: recent.developer_bdm_contact || "",
+        }),
+      };
+    });
   }
   function updateLine(index, key, value) {
     setForm((current) => {
@@ -1793,6 +1832,16 @@ function CommissionSheets() {
       `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(row.form_ref || "Commission Sheet")}${row.client_name ? ` — ${esc(row.client_name)}` : ""}</title><style>${popupCss}</style></head><body><div class="vp-toolbar"><strong>${esc(row.form_ref || "Commission Sheet")}${row.client_name ? ` — ${esc(row.client_name)}` : ""}</strong><div class="vp-actions">${canMake ? `<button id="edit">Edit</button>` : ""}<button id="print">Print / Save PDF</button>${isSuper ? `<button id="delete" class="danger">Delete</button>` : ""}</div></div><div class="vp-wrap">${printHtml}</div></body></html>`,
     );
     popup.document.close();
+    const propertySection = popup.document.querySelector(".ps-section");
+    if (propertySection) {
+      const bdmRow = popup.document.createElement("div");
+      bdmRow.className = "ps-row";
+      bdmRow.innerHTML =
+        cell("Developer BDM", esc(row.developer_bdm_name || "—")) +
+        cell("BDM Email", esc(row.developer_bdm_email || "—")) +
+        cell("BDM Contact", esc(row.developer_bdm_contact || "—"));
+      propertySection.appendChild(bdmRow);
+    }
     popup.document.querySelector(".cis-print-note")?.remove();
     popup.document
       .getElementById("print")
@@ -1907,6 +1956,9 @@ function CommissionSheets() {
           row.unit_no,
           row.building_project,
           row.developer,
+          row.developer_bdm_name,
+          row.developer_bdm_email,
+          row.developer_bdm_contact,
           row.agent_name,
           row.agent_team,
         ]
@@ -2015,6 +2067,7 @@ function CommissionSheets() {
               notice,
               client,
               matchClientBy,
+              selectDeveloperBdm,
               updateLine,
               finalizeAllocationLine,
               insertLine,
@@ -2325,6 +2378,22 @@ function Editor(p) {
           }),
         ) || [],
     history = (key) => p.rows.map((row) => row[key]);
+  const developerBdmHistory = p.rows.filter(
+      (row) =>
+        row.developer_bdm_name &&
+        (!p.form.developer ||
+          row.developer?.trim().toLowerCase() ===
+            p.form.developer.trim().toLowerCase()),
+    ),
+    projectBdmHistory = developerBdmHistory.filter(
+      (row) =>
+        p.form.building_project &&
+        row.building_project?.trim().toLowerCase() ===
+          p.form.building_project.trim().toLowerCase(),
+    ),
+    availableBdms = projectBdmHistory.length
+      ? projectBdmHistory
+      : developerBdmHistory;
   let distSplitIndex = 0;
   while (
     distSplitIndex < p.form.distribution.length &&
@@ -2348,6 +2417,9 @@ function Editor(p) {
       "client_id_expiry",
       "building_project",
       "developer",
+      "developer_bdm_name",
+      "developer_bdm_email",
+      "developer_bdm_contact",
       "unit_no",
       "unit_type",
       "bedrooms",
@@ -2411,6 +2483,10 @@ function Editor(p) {
       <List id="cis-clients" values={history("client_name")} />
       <List id="cis-projects" values={history("building_project")} />
       <List id="cis-developers" values={history("developer")} />
+      <List
+        id="cis-developer-bdms"
+        values={availableBdms.map((row) => row.developer_bdm_name)}
+      />
       <List id="cis-agents" values={history("agent_name")} />
       <List id="cis-teams" values={history("agent_team")} />
       <List
@@ -2474,6 +2550,33 @@ function Editor(p) {
               value={p.form.developer}
               onChange={(e) => p.set("developer", e.target.value)}
               placeholder="Start typing or pick"
+            />
+          </Field>
+          <Field label="Developer BDM name">
+            <input
+              className="form-control"
+              list="cis-developer-bdms"
+              value={p.form.developer_bdm_name}
+              onChange={(e) => p.selectDeveloperBdm(e.target.value)}
+              placeholder="Start typing or pick"
+            />
+          </Field>
+          <Field label="Developer BDM email">
+            <input
+              className="form-control"
+              type="email"
+              value={p.form.developer_bdm_email}
+              onChange={(e) => p.set("developer_bdm_email", e.target.value)}
+            />
+          </Field>
+          <Field label="Developer BDM contact">
+            <input
+              className="form-control"
+              type="tel"
+              value={p.form.developer_bdm_contact}
+              onChange={(e) =>
+                p.set("developer_bdm_contact", e.target.value)
+              }
             />
           </Field>
           <Field label="Unit no" required>
@@ -4046,6 +4149,9 @@ function Setup(p) {
           "client_id_expiry",
           "building_project",
           "developer",
+          "developer_bdm_name",
+          "developer_bdm_email",
+          "developer_bdm_contact",
           "unit_no",
           "unit_type",
           "bedrooms",
