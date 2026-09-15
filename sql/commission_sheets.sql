@@ -38,7 +38,7 @@ create table if not exists public.commission_sheets (
   finance_override_reason text, paid_client_ext_date date, paid_client_ext_amount numeric(14,2),
   deductions_aed numeric(14,2) not null default 0, additional_payment_aed numeric(14,2) not null default 0,
   net_agent_payable_aed numeric(14,2) not null default 0, total_after_deduction_aed numeric(14,2) not null default 0,
-  remarks text, prepared_by text, manager text, accounts text,
+  staff_remarks text, remarks text, prepared_by text, manager text, accounts text,
   created_by uuid not null references public.users(id), updated_by uuid references public.users(id),
   created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   deleted_at timestamptz, deleted_by uuid references public.users(id)
@@ -50,18 +50,49 @@ create index if not exists commission_sheets_active_idx on public.commission_she
 create or replace function public.guard_commission_finance_fields()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  if public.commission_module_role_at_least('finance') then return new; end if;
+  if public.commission_module_role_at_least('finance') then
+    return new;
+  end if;
   if tg_op = 'INSERT' then
-    if new.tracking_status is not null or new.invoice_no is not null or new.invoice_sent_date is not null
-      or new.commission_received_date is not null or new.receive_mode is not null or new.amount_received_aed is not null
-      or new.commission_paid_date is not null or new.payment_mode_paid is not null or new.finance_amount_paid_override_aed is not null
-      or new.finance_override_reason is not null or new.paid_client_ext_date is not null or new.paid_client_ext_amount is not null
-      or new.deductions_aed <> 0 or new.additional_payment_aed <> 0 or new.remarks is not null
-      or new.prepared_by is not null or new.manager is not null or new.accounts is not null then
+    if nullif(btrim(new.tracking_status), '') is not null
+      or nullif(btrim(new.invoice_no), '') is not null
+      or new.invoice_sent_date is not null
+      or new.commission_received_date is not null
+      or nullif(btrim(new.receive_mode), '') is not null
+      or coalesce(new.amount_received_aed, 0) <> 0
+      or new.commission_paid_date is not null
+      or nullif(btrim(new.payment_mode_paid), '') is not null
+      or new.finance_amount_paid_override_aed is not null
+      or nullif(btrim(new.finance_override_reason), '') is not null
+      or new.paid_client_ext_date is not null
+      or new.paid_client_ext_amount is not null
+      or coalesce(new.deductions_aed, 0) <> 0
+      or coalesce(new.additional_payment_aed, 0) <> 0
+      or nullif(btrim(new.remarks), '') is not null
+      or nullif(btrim(new.prepared_by), '') is not null
+      or nullif(btrim(new.manager), '') is not null
+      or nullif(btrim(new.accounts), '') is not null then
       raise exception 'Commission Sheet finance access required for accounts and approval fields';
     end if;
-  elsif to_jsonb(new) - array['updated_at','updated_by','created_at','created_by','company_id','form_ref','transaction_date','client_name','client_contact','client_id_number','client_id_expiry','building_project','developer','developer_bdm_name','developer_bdm_email','developer_bdm_contact','unit_no','unit_type','bedrooms','unit_value_aed','agent_name','agent_team','deal_type','lead_source','lead_source_other','commission_pct','gross_commission_aed','vat_amount_aed','total_payable_aed','calculated_amount_paid_aed','net_agent_payable_aed','total_after_deduction_aed']
-      is distinct from to_jsonb(old) - array['updated_at','updated_by','created_at','created_by','company_id','form_ref','transaction_date','client_name','client_contact','client_id_number','client_id_expiry','building_project','developer','developer_bdm_name','developer_bdm_email','developer_bdm_contact','unit_no','unit_type','bedrooms','unit_value_aed','agent_name','agent_team','deal_type','lead_source','lead_source_other','commission_pct','gross_commission_aed','vat_amount_aed','total_payable_aed','calculated_amount_paid_aed','net_agent_payable_aed','total_after_deduction_aed'] then
+  elsif
+    nullif(btrim(new.tracking_status), '') is distinct from nullif(btrim(old.tracking_status), '')
+    or nullif(btrim(new.invoice_no), '') is distinct from nullif(btrim(old.invoice_no), '')
+    or new.invoice_sent_date is distinct from old.invoice_sent_date
+    or new.commission_received_date is distinct from old.commission_received_date
+    or nullif(btrim(new.receive_mode), '') is distinct from nullif(btrim(old.receive_mode), '')
+    or new.amount_received_aed is distinct from old.amount_received_aed
+    or new.commission_paid_date is distinct from old.commission_paid_date
+    or nullif(btrim(new.payment_mode_paid), '') is distinct from nullif(btrim(old.payment_mode_paid), '')
+    or new.finance_amount_paid_override_aed is distinct from old.finance_amount_paid_override_aed
+    or nullif(btrim(new.finance_override_reason), '') is distinct from nullif(btrim(old.finance_override_reason), '')
+    or new.paid_client_ext_date is distinct from old.paid_client_ext_date
+    or new.paid_client_ext_amount is distinct from old.paid_client_ext_amount
+    or new.deductions_aed is distinct from old.deductions_aed
+    or new.additional_payment_aed is distinct from old.additional_payment_aed
+    or nullif(btrim(new.remarks), '') is distinct from nullif(btrim(old.remarks), '')
+    or nullif(btrim(new.prepared_by), '') is distinct from nullif(btrim(old.prepared_by), '')
+    or nullif(btrim(new.manager), '') is distinct from nullif(btrim(old.manager), '')
+    or nullif(btrim(new.accounts), '') is distinct from nullif(btrim(old.accounts), '') then
     raise exception 'Commission Sheet finance access required for accounts and approval fields';
   end if;
   return new;
@@ -82,7 +113,9 @@ create index if not exists commission_distribution_lines_sheet_idx on public.com
 create table if not exists public.commission_sheet_documents (
   id uuid primary key default gen_random_uuid(), commission_sheet_id uuid not null references public.commission_sheets(id) on delete cascade,
   document_code text not null, document_label text not null, is_selected boolean not null default false,
-  other_description text, local_file_name text, local_folder_label text, created_at timestamptz not null default now(),
+  other_description text, local_file_name text, local_folder_label text,
+  drive_files jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
   unique(commission_sheet_id, document_code)
 );
 

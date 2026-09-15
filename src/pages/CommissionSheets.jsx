@@ -106,6 +106,13 @@ const buildDiskName = (code, fileName, index, total) => {
     ? `${safeCode}__${index + 1}of${total}__${fileName}`
     : `${safeCode}__${fileName}`;
 };
+const driveFileAt = (document, index, displayName) => {
+  const entries = Array.isArray(document?.drive_files)
+    ? document.drive_files
+    : [];
+  if (entries[index]?.display_name === displayName) return entries[index];
+  return entries.find((entry) => entry?.display_name === displayName) || null;
+};
 const num = (value) => Number(String(value ?? "").replaceAll(",", "")) || 0,
   round = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100,
   roundPct = (value) =>
@@ -232,6 +239,7 @@ const empty = () => ({
   additional_payment_aed: "",
   finance_amount_paid_override_aed: "",
   finance_override_reason: "",
+  staff_remarks: "",
   remarks: "",
   prepared_by: "",
   manager: "",
@@ -441,7 +449,6 @@ function GoogleDriveConnectPrompt({ onConnect, onDismiss }) {
 function AttachmentViewerModal({
   viewer,
   onClose,
-  onDownload,
   onPrint,
   onRemove,
 }) {
@@ -541,14 +548,6 @@ function AttachmentViewerModal({
           <button
             type="button"
             className="btn primary"
-            disabled={!viewer.url}
-            onClick={onDownload}
-          >
-            Download
-          </button>
-          <button
-            type="button"
-            className="btn"
             disabled={!viewer.url}
             onClick={onPrint}
           >
@@ -896,9 +895,11 @@ function CommissionSheets() {
       setNotice("");
     };
   function edit(row) {
-    const next = empty();
+    const defaults = empty(),
+      next = { ...defaults };
     Object.assign(next, row, {
       distribution: (row.commission_distribution_lines || [])
+        .slice()
         .sort((a, b) => a.sort_order - b.sort_order)
         .filter(
           (item) =>
@@ -910,6 +911,9 @@ function CommissionSheets() {
         })),
       documents: row.commission_sheet_documents || [],
       receipts: row.commission_receipts || [],
+    });
+    Object.keys(defaults).forEach((key) => {
+      if (defaults[key] === "" && next[key] == null) next[key] = "";
     });
     setForm(next);
     setFiles({});
@@ -1282,17 +1286,23 @@ function CommissionSheets() {
     );
     return res.json();
   }
-  async function driveFindFile(folderId, diskName) {
-    const query = [
-        `name='${diskName.replace(/'/g, "\\'")}'`,
-        `'${folderId}' in parents`,
-        "trashed=false",
-      ].join(" and "),
-      res = await driveFetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,mimeType)&spaces=drive`,
-      ),
-      data = await res.json();
-    return data.files?.[0] || null;
+  async function driveFindFile(folderId, names) {
+    const candidates = [...new Set(names.filter(Boolean))];
+    for (const name of candidates) {
+      const query = [
+          `name='${name.replace(/'/g, "\\'")}'`,
+          folderId ? `'${folderId}' in parents` : null,
+          "trashed=false",
+        ]
+          .filter(Boolean)
+          .join(" and "),
+        res = await driveFetch(
+          `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,parents)&spaces=drive&pageSize=20`,
+        ),
+        data = await res.json();
+      if (data.files?.length) return data.files[0];
+    }
+    return null;
   }
   async function driveFetchBlob(fileId) {
     const res = await driveFetch(
@@ -1307,7 +1317,7 @@ function CommissionSheets() {
       body: JSON.stringify({ trashed: true }),
     });
   }
-  function previewLocalFile(file) {
+  function previewSelectedFile(file) {
     const url = URL.createObjectURL(file);
     setViewer({
       name: file.name,
@@ -1321,9 +1331,14 @@ function CommissionSheets() {
     });
   }
   async function openAttachment({
+    fileId,
     folderId,
     diskName,
     displayName,
+    formRef,
+    documentId,
+    fileIndex = 0,
+    driveFiles = [],
     canRemove = false,
     onRemoved,
   }) {
@@ -1342,13 +1357,51 @@ function CommissionSheets() {
         throw new Error(
           "Connect Google Drive in Setup to view attachments.",
         );
-      const found = await driveFindFile(folderId, diskName);
+      let found = fileId ? { id: fileId, mimeType: "" } : null,
+        blob = null;
+      if (found) {
+        try {
+          blob = await driveFetchBlob(found.id);
+        } catch {
+          found = null;
+        }
+      }
+      if (!found)
+        found = await driveFindFile(folderId, [diskName, displayName]);
+      if (!found && formRef) {
+        try {
+          const currentFolderId = await ensureTransactionFolder(formRef);
+          found = await driveFindFile(currentFolderId, [diskName, displayName]);
+        } catch {
+          // Continue with the account-wide fallback below.
+        }
+      }
+      if (!found)
+        found = await driveFindFile(null, [diskName, displayName]);
       if (!found)
         throw new Error(
-          "File not found in Google Drive — it may have been removed there.",
+          "File is not accessible in the connected Google Drive account. Reconnect the account that uploaded it, or attach the file again.",
         );
-      const blob = await driveFetchBlob(found.id),
-        url = URL.createObjectURL(blob);
+      if (!blob) blob = await driveFetchBlob(found.id);
+      const url = URL.createObjectURL(blob);
+      if (canMake && documentId && found.id !== fileId) {
+        const remembered = Array.isArray(driveFiles) ? [...driveFiles] : [];
+        remembered[fileIndex] = {
+          id: found.id,
+          drive_name: found.name || diskName,
+          display_name: displayName,
+          mime_type: found.mimeType || blob.type || "",
+        };
+        const rememberResult = await supabase
+          .from("commission_sheet_documents")
+          .update({ drive_files: remembered })
+          .eq("id", documentId);
+        if (rememberResult.error)
+          console.warn(
+            "Could not remember resolved Drive file ID:",
+            rememberResult.error,
+          );
+      }
       setViewer((current) =>
         current
           ? {
@@ -1371,15 +1424,6 @@ function CommissionSheets() {
       if (current?.url) URL.revokeObjectURL(current.url);
       return null;
     });
-  }
-  function downloadAttachment() {
-    if (!viewer?.url) return;
-    const link = document.createElement("a");
-    link.href = viewer.url;
-    link.download = viewer.name || "attachment";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
   }
   function printAttachment() {
     if (!viewer?.url) return;
@@ -1431,14 +1475,22 @@ function CommissionSheets() {
     const folderId = await ensureTransactionFolder(ref),
       result = {};
     for (const [code, fileList] of entries) {
+      const uploaded = [];
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i],
           diskName = buildDiskName(code, file.name, i, fileList.length);
-        await uploadFileToDrive(folderId, diskName, file);
+        const driveFile = await uploadFileToDrive(folderId, diskName, file);
+        uploaded.push({
+          id: driveFile.id,
+          drive_name: diskName,
+          display_name: file.name,
+          mime_type: file.type || "",
+        });
       }
       result[code] = {
         local_file_name: fileList.map((file) => file.name).join("|"),
         local_folder_label: folderId,
+        drive_files: uploaded,
       };
     }
     return result;
@@ -1478,6 +1530,7 @@ function CommissionSheets() {
     if (!form.company_id) missing.push("Company");
     if (!form.client_name) missing.push("Client name");
     if (!form.unit_no) missing.push("Unit no");
+    if (!form.transaction_date) missing.push("Transaction date");
     if (!form.deal_type) missing.push("Deal type");
     if (!gross) missing.push("Gross commission");
     if (missing.length)
@@ -1512,9 +1565,69 @@ function CommissionSheets() {
       return setError(
         `5b. Remaining commission allocation percentages add up to ${fmt(allocationPctTotal)}% — that's over 100%. Please correct before saving.`,
       );
+    for (let lineIndex = 0; lineIndex < form.distribution.length; lineIndex++) {
+      const item = form.distribution[lineIndex],
+        computedPayable = num(distComputed[lineIndex]?.payable_aed);
+      for (
+        let paymentIndex = 0;
+        paymentIndex < (item.payments || []).length;
+        paymentIndex++
+      ) {
+        const entry = item.payments[paymentIndex],
+          amount = num(entry.amount_aed),
+          hasPaymentDetails =
+            amount > 0 ||
+            !!entry.payment_mode ||
+            !!entry.instrument_no?.trim() ||
+            !!entry.notes?.trim();
+        if (!hasPaymentDetails) continue;
+        if (amount <= 0)
+          return setError(
+            `Section 5 row ${lineIndex + 1}, payment ${paymentIndex + 1}: enter the paid amount.`,
+          );
+        if (!entry.payment_date)
+          return setError(
+            `Section 5 row ${lineIndex + 1}, payment ${paymentIndex + 1}: select the payment date.`,
+          );
+        if (!entry.payment_mode)
+          return setError(
+            `Section 5 row ${lineIndex + 1}, payment ${paymentIndex + 1}: select the payment mode.`,
+          );
+      }
+      if (paid(item) > computedPayable + 0.01)
+        return setError(
+          `Section 5 row ${lineIndex + 1}: paid amount ${money(paid(item))} exceeds payable ${money(computedPayable)}.`,
+        );
+    }
+    if (canFinance) {
+      for (let receiptIndex = 0; receiptIndex < form.receipts.length; receiptIndex++) {
+        const entry = form.receipts[receiptIndex],
+          amount = num(entry.amount_aed),
+          hasReceiptDetails =
+            amount > 0 ||
+            !!entry.receive_mode ||
+            !!entry.instrument_no?.trim() ||
+            !!entry.remarks?.trim();
+        if (!hasReceiptDetails) continue;
+        if (amount <= 0)
+          return setError(
+            `Section 6 receipt ${receiptIndex + 1}: enter the amount received.`,
+          );
+        if (!entry.received_date)
+          return setError(
+            `Section 6 receipt ${receiptIndex + 1}: select the received date.`,
+          );
+        if (!entry.receive_mode)
+          return setError(
+            `Section 6 receipt ${receiptIndex + 1}: select the receive mode.`,
+          );
+      }
+    }
     if (
+      canFinance &&
+      form.finance_amount_paid_override_aed != null &&
       form.finance_amount_paid_override_aed !== "" &&
-      !form.finance_override_reason.trim()
+      !String(form.finance_override_reason || "").trim()
     )
       return setError("Finance override reason is required.");
     setSaving(true);
@@ -1546,6 +1659,7 @@ function CommissionSheets() {
             gross - num(form.deductions_aed) + num(form.additional_payment_aed),
           ),
           updated_by: user.id,
+          updated_at: new Date().toISOString(),
         };
       [
         "distribution",
@@ -1555,6 +1669,10 @@ function CommissionSheets() {
         "commission_sheet_documents",
         "commission_receipts",
         "id",
+        "created_by",
+        "created_at",
+        "deleted_at",
+        "deleted_by",
       ].forEach((key) => delete payload[key]);
       [
         "unit_value_aed",
@@ -1612,8 +1730,11 @@ function CommissionSheets() {
         const result = await supabase
           .from("commission_sheets")
           .update(payload)
-          .eq("id", sheetId);
-        if (result.error) throw result.error;
+          .eq("id", sheetId)
+          .select("id")
+          .single();
+        if (result.error)
+          throw new Error(`Could not update the transaction: ${result.error.message}`);
       } else {
         const result = await supabase
           .from("commission_sheets")
@@ -1623,99 +1744,190 @@ function CommissionSheets() {
           })
           .select("id")
           .single();
-        if (result.error) throw result.error;
+        if (result.error)
+          throw new Error(`Could not create the transaction: ${result.error.message}`);
         sheetId = result.data.id;
       }
-      await supabase
-        .from("commission_distribution_lines")
-        .delete()
-        .eq("commission_sheet_id", sheetId);
-      const finalDistribution = recalcDistribution(form.distribution, gross);
-      for (let i = 0; i < form.distribution.length; i++) {
-        const item = form.distribution[i],
-          finalAmount = finalDistribution[i].payable_aed,
-          lineId = id(),
-          result = await supabase.from("commission_distribution_lines").insert({
-            id: lineId,
+      const original = rows.find((row) => row.id === sheetId),
+        originalLines = original?.commission_distribution_lines || [],
+        finalDistribution = recalcDistribution(form.distribution, gross),
+        linePayloads = form.distribution.map((item, index) => ({
+            id: item.id || id(),
             commission_sheet_id: sheetId,
             line_kind: item.line_kind,
             type_label: item.type_label || null,
-            sort_order: i,
+            sort_order: index,
             party: item.party || null,
             recipient_name: item.recipient_name || null,
             pct_of_base: num(item.pct_of_base) || null,
-            payable_aed: num(finalAmount),
+            payable_aed: num(finalDistribution[index]?.payable_aed),
             paid_aed: paid(item),
             payment_mode: item.payments.at(-1)?.payment_mode || null,
             notes: item.notes || null,
-          });
-        if (result.error) throw result.error;
-        const payments = item.payments
-          .filter((entry) => num(entry.amount_aed) > 0)
-          .map((entry) => ({
-            distribution_line_id: lineId,
+          })),
+        currentLineIds = new Set(linePayloads.map((item) => item.id)),
+        paymentPayloads = form.distribution.flatMap((item, lineIndex) =>
+          (item.payments || [])
+            .filter((entry) => num(entry.amount_aed) > 0)
+            .map((entry) => ({
+            id: entry.id || id(),
+            distribution_line_id: linePayloads[lineIndex].id,
             payment_date: entry.payment_date,
             amount_aed: num(entry.amount_aed),
             payment_mode: entry.payment_mode || null,
             instrument_no: entry.instrument_no || null,
             notes: entry.notes || null,
-            created_by: user.id,
-          }));
-        if (payments.length) {
-          const payResult = await supabase
-            .from("commission_distribution_payments")
-            .insert(payments);
-          if (payResult.error) throw payResult.error;
-        }
+            created_by: entry.created_by || user.id,
+          })),
+        ),
+        currentPaymentIds = new Set(paymentPayloads.map((item) => item.id)),
+        removedPaymentIds = originalLines
+          .flatMap((item) => item.commission_distribution_payments || [])
+          .map((item) => item.id)
+          .filter((paymentId) => !currentPaymentIds.has(paymentId)),
+        removedLineIds = originalLines
+          .map((item) => item.id)
+          .filter((lineId) => !currentLineIds.has(lineId));
+      if (linePayloads.length) {
+        const result = await supabase
+          .from("commission_distribution_lines")
+          .upsert(linePayloads, { onConflict: "id" });
+        if (result.error)
+          throw new Error(`Could not save Section 5 rows: ${result.error.message}`);
       }
-      await supabase
-        .from("commission_sheet_documents")
-        .delete()
-        .eq("commission_sheet_id", sheetId);
-      const docs = form.documents.map((doc) => ({
-        commission_sheet_id: sheetId,
-        document_code: doc.document_code,
-        document_label: doc.document_label,
-        is_selected: !!doc.is_selected,
-        local_file_name:
-          copied[doc.document_code]?.local_file_name ||
-          doc.local_file_name ||
-          null,
-        local_folder_label:
-          copied[doc.document_code]?.local_folder_label ||
-          doc.local_folder_label ||
-          null,
-      }));
+      if (paymentPayloads.length) {
+        const result = await supabase
+          .from("commission_distribution_payments")
+          .upsert(paymentPayloads, { onConflict: "id" });
+        if (result.error)
+          throw new Error(`Could not save Section 5 payments: ${result.error.message}`);
+      }
+      const docs = form.documents.map((doc) => {
+        const uploaded = copied[doc.document_code],
+          existingNames = (doc.local_file_name || "")
+            .split("|")
+            .filter(Boolean),
+          uploadedNames = (uploaded?.local_file_name || "")
+            .split("|")
+            .filter(Boolean),
+          allNames = [...existingNames, ...uploadedNames];
+        return {
+          id: doc.id || id(),
+          commission_sheet_id: sheetId,
+          document_code: doc.document_code,
+          document_label: doc.document_label,
+          is_selected: !!doc.is_selected,
+          local_file_name: allNames.length ? allNames.join("|") : null,
+          local_folder_label:
+            uploaded?.local_folder_label || doc.local_folder_label || null,
+          drive_files: [
+            ...(Array.isArray(doc.drive_files) ? doc.drive_files : []),
+            ...(uploaded?.drive_files || []),
+          ],
+        };
+      }),
+        currentDocumentIds = new Set(docs.map((doc) => doc.id)),
+        removedDocumentIds = (original?.commission_sheet_documents || [])
+          .map((doc) => doc.id)
+          .filter((documentId) => !currentDocumentIds.has(documentId));
       if (docs.length) {
         const result = await supabase
           .from("commission_sheet_documents")
-          .insert(docs);
-        if (result.error) throw result.error;
+          .upsert(docs, { onConflict: "id" });
+        if (result.error)
+          throw new Error(`Could not save Section 4 documents: ${result.error.message}`);
       }
+      let receiptPayloads = [],
+        removedReceiptIds = [];
       if (canFinance) {
-        await supabase
-          .from("commission_receipts")
-          .delete()
-          .eq("commission_sheet_id", sheetId);
-        const receipts = form.receipts
+        receiptPayloads = form.receipts
           .filter((item) => num(item.amount_aed) > 0)
           .map((item) => ({
+            id: item.id || id(),
             commission_sheet_id: sheetId,
             received_date: item.received_date,
             amount_aed: num(item.amount_aed),
             receive_mode: item.receive_mode || null,
             instrument_no: item.instrument_no || null,
             remarks: item.remarks || null,
-            created_by: user.id,
+            created_by: item.created_by || user.id,
           }));
-        if (receipts.length) {
+        const currentReceiptIds = new Set(receiptPayloads.map((item) => item.id));
+        removedReceiptIds = (original?.commission_receipts || [])
+          .map((item) => item.id)
+          .filter((receiptId) => !currentReceiptIds.has(receiptId));
+        if (receiptPayloads.length) {
           const result = await supabase
             .from("commission_receipts")
-            .insert(receipts);
-          if (result.error) throw result.error;
+            .upsert(receiptPayloads, { onConflict: "id" });
+          if (result.error)
+            throw new Error(`Could not save Section 6 receipts: ${result.error.message}`);
         }
       }
-      await load();
+      if (removedPaymentIds.length) {
+        const result = await supabase
+          .from("commission_distribution_payments")
+          .delete()
+          .in("id", removedPaymentIds);
+        if (result.error)
+          throw new Error(`Could not remove deleted payments: ${result.error.message}`);
+      }
+      if (removedLineIds.length) {
+        const result = await supabase
+          .from("commission_distribution_lines")
+          .delete()
+          .in("id", removedLineIds);
+        if (result.error)
+          throw new Error(`Could not remove deleted Section 5 rows: ${result.error.message}`);
+      }
+      if (removedDocumentIds.length) {
+        const result = await supabase
+          .from("commission_sheet_documents")
+          .delete()
+          .in("id", removedDocumentIds);
+        if (result.error)
+          throw new Error(`Could not remove old documents: ${result.error.message}`);
+      }
+      if (canFinance && removedReceiptIds.length) {
+        const result = await supabase
+          .from("commission_receipts")
+          .delete()
+          .in("id", removedReceiptIds);
+        if (result.error)
+          throw new Error(`Could not remove old receipts: ${result.error.message}`);
+      }
+      const verification = await supabase
+        .from("commission_sheets")
+        .select(
+          "*,commission_distribution_lines(*,commission_distribution_payments(*)),commission_sheet_documents(*),commission_receipts(*)",
+        )
+        .eq("id", sheetId)
+        .single();
+      if (verification.error)
+        throw new Error(`Saved, but could not verify the transaction: ${verification.error.message}`);
+      const saved = verification.data,
+        savedPaymentCount = (saved.commission_distribution_lines || []).reduce(
+          (sum, item) =>
+            sum + (item.commission_distribution_payments || []).length,
+          0,
+        );
+      if (
+        (saved.commission_distribution_lines || []).length !== linePayloads.length ||
+        savedPaymentCount !== paymentPayloads.length ||
+        (saved.commission_sheet_documents || []).length !== docs.length ||
+        (canFinance &&
+          (saved.commission_receipts || []).length !== receiptPayloads.length)
+      )
+        throw new Error(
+          "The transaction was not fully saved. Please keep this screen open and try again.",
+        );
+      setRows((current) =>
+        [saved, ...current.filter((row) => row.id !== sheetId)].sort((a, b) =>
+          String(b.transaction_date || "").localeCompare(
+            String(a.transaction_date || ""),
+          ),
+        ),
+      );
       setView("dashboard");
       setNotice(`${ref} saved successfully.`);
     } catch (e) {
@@ -1789,21 +2001,66 @@ function CommissionSheets() {
     const distRows =
       lineComputed
         .map((item) => {
-          const itemPaid = item.paid_aed ?? paid(item),
+          const hasEditorPayments = Array.isArray(item.payments),
+            paymentEntries = (
+              hasEditorPayments
+                ? item.payments
+                : item.commission_distribution_payments || []
+            )
+              .filter((entry) => num(entry.amount_aed) > 0)
+              .slice()
+              .sort((a, b) =>
+                `${a.payment_date || ""}|${a.created_at || ""}`.localeCompare(
+                  `${b.payment_date || ""}|${b.created_at || ""}`,
+                ),
+              ),
+            itemPaid =
+              hasEditorPayments || paymentEntries.length
+                ? paymentEntries.reduce(
+                    (sum, entry) => sum + num(entry.amount_aed),
+                    0,
+                  )
+                : num(item.paid_aed),
+            modes = [
+              ...new Set(
+                paymentEntries
+                  .map((entry) => entry.payment_mode)
+                  .filter(Boolean),
+              ),
+            ],
             mode =
-              item.payment_mode ||
-              item.commission_distribution_payments?.at(-1)?.payment_mode ||
-              item.payments?.at(-1)?.payment_mode ||
-              "—";
-          return `<tr><td>${esc(distTypeLabel(item.line_kind))}</td><td>${esc(item.party || "—")}</td><td>${esc(item.recipient_name || "—")}</td><td>${money(item.payable_aed)}${num(item.pct_of_base) ? ` (${fmt(item.pct_of_base)}%)` : ""}</td><td>${money(itemPaid)}</td><td>${money(num(item.payable_aed) - num(itemPaid))}</td><td>${esc(mode)}</td><td>&nbsp;</td></tr>`;
+              modes.join(" / ") ||
+              (!hasEditorPayments && item.payment_mode) ||
+              "—",
+            paymentDetails = paymentEntries
+              .map(
+                (entry) =>
+                  `${dateText(entry.payment_date)} · ${money(entry.amount_aed)} · ${esc(entry.payment_mode || "—")}${entry.instrument_no ? ` · Instrument: ${esc(entry.instrument_no)}` : ""}${entry.notes ? ` · ${esc(entry.notes)}` : ""}`,
+              )
+              .join("<br>");
+          return `<tr><td>${esc(distTypeLabel(item.line_kind))}</td><td>${esc(item.party || "—")}</td><td>${esc(item.recipient_name || "—")}</td><td>${money(item.payable_aed)}${num(item.pct_of_base) ? ` (${fmt(item.pct_of_base)}%)` : ""}</td><td>${money(itemPaid)}</td><td>${money(num(item.payable_aed) - num(itemPaid))}</td><td>${esc(mode)}</td><td>&nbsp;</td></tr>${paymentDetails ? `<tr class="ps-payment-row"><td colspan="8" style="padding:4px 7px;background:#f5f5f5;color:#444;font-size:9px;line-height:1.45"><strong>Payment details:</strong> ${paymentDetails}</td></tr>` : ""}`;
         })
         .join("") || `<tr><td colspan="8">—</td></tr>`;
-    const receivedTotal = receipts.length
-        ? receipts.reduce((sum, item) => sum + num(item.amount_aed), 0)
+    const sortedReceipts = receipts
+        .slice()
+        .sort((a, b) =>
+          `${a.received_date || ""}|${a.created_at || ""}`.localeCompare(
+            `${b.received_date || ""}|${b.created_at || ""}`,
+          ),
+        ),
+      receivedTotal = sortedReceipts.length
+        ? sortedReceipts.reduce((sum, item) => sum + num(item.amount_aed), 0)
         : num(row.amount_received_aed),
       receivedDate =
-        receipts.at(-1)?.received_date || row.commission_received_date,
-      receivedMode = receipts.at(-1)?.receive_mode || row.receive_mode;
+        sortedReceipts.at(-1)?.received_date || row.commission_received_date,
+      receivedMode = sortedReceipts.at(-1)?.receive_mode || row.receive_mode,
+      receiptDetails = sortedReceipts
+        .filter((item) => num(item.amount_aed) > 0)
+        .map(
+          (item) =>
+            `${dateText(item.received_date)} · ${money(item.amount_aed)} · ${esc(item.receive_mode || "—")}${item.instrument_no ? ` · Instrument: ${esc(item.instrument_no)}` : ""}${item.remarks ? ` · ${esc(item.remarks)}` : ""}`,
+        )
+        .join("<br>");
     const titleHtml = letterhead?.dataUrl
       ? `<img class="ps-letterhead" src="${letterhead.dataUrl}" alt="Letterhead">`
       : `<div class="ps-title">COMMISSION SHEET</div>`;
@@ -1837,6 +2094,34 @@ function CommissionSheets() {
       `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(row.form_ref || "Commission Sheet")}${row.client_name ? ` — ${esc(row.client_name)}` : ""}</title><style>${popupCss}</style></head><body><div class="vp-toolbar"><strong>${esc(row.form_ref || "Commission Sheet")}${row.client_name ? ` — ${esc(row.client_name)}` : ""}</strong><div class="vp-actions">${canMake ? `<button id="edit">Edit</button>` : ""}<button id="print">Print / Save PDF</button>${isSuper ? `<button id="delete" class="danger">Delete</button>` : ""}</div></div><div class="vp-wrap">${printHtml}</div></body></html>`,
     );
     popup.document.close();
+    if (row.staff_remarks) {
+      const dealSection = [...popup.document.querySelectorAll(".ps-section")].find(
+        (section) =>
+          section.querySelector(".ps-section-head")?.textContent?.startsWith("2."),
+      );
+      if (dealSection) {
+        const remark = popup.document.createElement("div");
+        remark.className = "ps-section-body";
+        remark.innerHTML = `<strong>Staff remark:</strong> ${esc(row.staff_remarks)}`;
+        dealSection.appendChild(remark);
+      }
+    }
+    if (receiptDetails) {
+      const accountsSection = [...popup.document.querySelectorAll(".ps-section")].find(
+          (section) =>
+            section
+              .querySelector(".ps-section-head")
+              ?.textContent?.startsWith("6."),
+        ),
+        receivedRow = accountsSection?.querySelectorAll(".ps-row")?.[1];
+      if (receivedRow) {
+        const detail = popup.document.createElement("div");
+        detail.style.cssText =
+          "padding:4px 7px;background:#f5f5f5;color:#444;font-size:9px;line-height:1.45";
+        detail.innerHTML = `<strong>Receipt details:</strong> ${receiptDetails}`;
+        receivedRow.insertAdjacentElement("afterend", detail);
+      }
+    }
     const propertySection = popup.document.querySelector(".ps-section");
     if (propertySection) {
       const bdmRow = popup.document.createElement("div");
@@ -1966,6 +2251,7 @@ function CommissionSheets() {
           row.developer_bdm_contact,
           row.agent_name,
           row.agent_team,
+          row.staff_remarks,
         ]
           .join(" ")
           .toLowerCase()
@@ -1993,7 +2279,6 @@ function CommissionSheets() {
     <AttachmentViewerModal
       viewer={viewer}
       onClose={closeAttachment}
-      onDownload={downloadAttachment}
       onPrint={printAttachment}
       onRemove={removeAttachment}
     />
@@ -2086,7 +2371,7 @@ function CommissionSheets() {
               driveTokenValid: driveTokenValid(),
               shareTransaction,
               openAttachment,
-              previewLocalFile,
+              previewSelectedFile,
               print,
               fresh,
             }}
@@ -2319,7 +2604,9 @@ function Dashboard(p) {
                               const names = doc.local_file_name
                                 .split("|")
                                 .filter(Boolean);
-                              return names.map((name, index) => (
+                              return names.map((name, index) => {
+                                const driveFile = driveFileAt(doc, index, name);
+                                return (
                                 <li
                                   key={`${doc.document_code}-${index}`}
                                   style={{
@@ -2334,14 +2621,21 @@ function Dashboard(p) {
                                     className="cis-link"
                                     onClick={() =>
                                       p.openAttachment({
+                                        fileId: driveFile?.id,
                                         folderId: doc.local_folder_label,
-                                        diskName: buildDiskName(
-                                          doc.document_code,
-                                          name,
-                                          index,
-                                          names.length,
-                                        ),
+                                        diskName:
+                                          driveFile?.drive_name ||
+                                          buildDiskName(
+                                            doc.document_code,
+                                            name,
+                                            index,
+                                            names.length,
+                                          ),
                                         displayName: name,
+                                        formRef: row.form_ref,
+                                        documentId: doc.id,
+                                        fileIndex: index,
+                                        driveFiles: doc.drive_files,
                                         canRemove: false,
                                       })
                                     }
@@ -2349,7 +2643,8 @@ function Dashboard(p) {
                                     {doc.document_label}: {name}
                                   </button>
                                 </li>
-                              ));
+                                );
+                              });
                             })}
                           </ul>
                         </td>
@@ -2436,6 +2731,7 @@ function Editor(p) {
       "lead_source_other",
       "commission_pct",
       "gross_commission_aed",
+      "staff_remarks",
       "remarks",
     ].some((key) => String(p.form[key] ?? "").trim()) ||
     p.form.distribution.length > 0 ||
@@ -2453,6 +2749,7 @@ function Editor(p) {
     <form
       className="cis-wrap cis-entry"
       onSubmit={p.save}
+      noValidate
       onKeyDown={(event) => {
         if (
           event.key === "Enter" &&
@@ -2709,6 +3006,18 @@ function Editor(p) {
             ))}
           </div>
         </Field>
+        <Field
+          label="Staff remark"
+          hint="Visible to Finance and included in the printed Commission Sheet."
+        >
+          <textarea
+            className="form-control"
+            rows="3"
+            value={p.form.staff_remarks || ""}
+            onChange={(event) => p.set("staff_remarks", event.target.value)}
+            placeholder="Add deal context, follow-up information, or an explanation for Finance"
+          />
+        </Field>
       </Section>
       <Section number="3" title="Commission summary">
         <div className="cis-summary">
@@ -2772,7 +3081,7 @@ function Editor(p) {
           </b>
           <span>
             {p.driveTokenValid
-              ? "Attachments will be saved to your Google Drive."
+              ? "Attachments are stored only in Google Drive; the application keeps no local file copy."
               : "Open Setup to connect Google Drive before saving attachments."}
           </span>
         </div>
@@ -2858,7 +3167,7 @@ function Editor(p) {
                               <button
                                 type="button"
                                 className="cis-link"
-                                onClick={() => p.previewLocalFile(file)}
+                                onClick={() => p.previewSelectedFile(file)}
                               >
                                 {file.name}
                               </button>
@@ -2894,7 +3203,13 @@ function Editor(p) {
                           {doc.local_file_name
                             .split("|")
                             .filter(Boolean)
-                            .map((name, fileIndex, names) => (
+                            .map((name, fileIndex, names) => {
+                              const driveFile = driveFileAt(
+                                doc,
+                                fileIndex,
+                                name,
+                              );
+                              return (
                               <li
                                 key={`${name}-${fileIndex}`}
                                 style={{
@@ -2913,14 +3228,21 @@ function Editor(p) {
                                   className="cis-link"
                                   onClick={() =>
                                     p.openAttachment({
+                                      fileId: driveFile?.id,
                                       folderId: doc.local_folder_label,
-                                      diskName: buildDiskName(
-                                        item.document_code,
-                                        name,
-                                        fileIndex,
-                                        names.length,
-                                      ),
+                                      diskName:
+                                        driveFile?.drive_name ||
+                                        buildDiskName(
+                                          item.document_code,
+                                          name,
+                                          fileIndex,
+                                          names.length,
+                                        ),
                                       displayName: name,
+                                      formRef: p.form.form_ref,
+                                      documentId: doc.id,
+                                      fileIndex,
+                                      driveFiles: doc.drive_files,
                                       canRemove: true,
                                       onRemoved: () =>
                                         p.setForm((current) => ({
@@ -2941,6 +3263,14 @@ function Editor(p) {
                                                   remaining.length
                                                     ? remaining.join("|")
                                                     : null,
+                                                drive_files: Array.isArray(
+                                                  d.drive_files,
+                                                )
+                                                  ? d.drive_files.filter(
+                                                      (_, i) =>
+                                                        i !== fileIndex,
+                                                    )
+                                                  : [],
                                               };
                                             },
                                           ),
@@ -2951,7 +3281,8 @@ function Editor(p) {
                                   {name}
                                 </button>
                               </li>
-                            ))}
+                              );
+                            })}
                         </ul>
                       ) : (
                         <small>
@@ -3106,14 +3437,12 @@ function Distribution(p) {
         <td colSpan={colSpan}>
           <div className="cis-split">
             <DateInput
-              required
               value={entry.payment_date}
               onChange={(value) =>
                 p.updatePay(lineIndex, paymentIndex, "payment_date", value)
               }
             />
             <Amount
-              required
               value={entry.amount_aed}
               onChange={(value) =>
                 p.updatePay(lineIndex, paymentIndex, "amount_aed", value)
@@ -3860,14 +4189,12 @@ function Accounts(p) {
         p.form.receipts.map((item, index) => (
           <div className="cis-split" key={item.id}>
             <DateInput
-              required
               value={item.received_date}
               onChange={(value) =>
                 p.updateReceipt(index, "received_date", value)
               }
             />
             <Amount
-              required
               value={item.amount_aed}
               onChange={(value) => p.updateReceipt(index, "amount_aed", value)}
             />
@@ -4168,6 +4495,7 @@ function Setup(p) {
           "lead_source_other",
           "commission_pct",
           "gross_commission_aed",
+          "staff_remarks",
           "vat_amount_aed",
           "total_payable_aed",
           "tracking_status",
@@ -4264,6 +4592,9 @@ function Setup(p) {
             other_description: value.other_description || null,
             local_file_name: value.local_file_name || null,
             local_folder_label: value.local_folder_label || null,
+            drive_files: Array.isArray(value.drive_files)
+              ? value.drive_files
+              : [],
           }),
         );
         await restoreChildren(
@@ -4377,7 +4708,7 @@ function Setup(p) {
       <Section title="Google Drive attachments">
         <p className="form-hint strong">
           {p.driveTokenValid
-            ? "Connected. Attachments will be saved to your Google Drive."
+            ? "Connected. Attachments are stored only in your Google Drive."
             : "Not connected."}
         </p>
         <div className="cis-inline-actions">
@@ -4391,6 +4722,10 @@ function Setup(p) {
           attachments" button on a saved transaction to get a link you can
           send to anyone — they'll be able to view, add, and edit files in
           that folder, so only share it with people you trust.
+        </p>
+        <p className="form-hint">
+          No attachment copy is stored on the user's computer. Attachments can
+          be viewed or printed from Google Drive inside the application.
         </p>
         <p className="form-hint">
           The connection lasts about an hour at a time — you'll be asked to

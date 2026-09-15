@@ -1391,7 +1391,7 @@ export default function FinanceDashboard() {
                         {/* Payment reason — 1 line ellipsis */}
                         <td style={{verticalAlign:'middle',maxWidth:'140px',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          <CopyableField copyText={app.payment_reason || ''} label="Payment reason" style={{fontSize:'12px',overflow:'hidden',
+                          <CopyableField copyText={app.payment_reason || ''} label="Payment reason" title={app.payment_reason || ''} style={{fontSize:'12px',overflow:'hidden',
                             textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                             {app.payment_reason}
                           </CopyableField>
