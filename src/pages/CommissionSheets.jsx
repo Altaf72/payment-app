@@ -70,8 +70,14 @@ const DIST_TYPE_OPTIONS = [
 const distTypeLabel = (kind) => (isKickback(kind) ? "Kickback" : "Commission");
 const GOOGLE_CLIENT_ID =
   "70086088232-f0c97ls3nljbber210frbugmdam03bo0.apps.googleusercontent.com";
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const DRIVE_ROOT_FOLDER_NAME = "Commission Sheets Attachments";
+// drive.file: needed so this app can create/upload new files.
+// drive.readonly: needed so a user can VIEW files someone else uploaded —
+// without this, a viewer's token can only see files their own account created.
+const DRIVE_SCOPE =
+  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly";
+// Fixed folder in homesvipakram@gmail.com's Drive, shared with all staff/finance.
+// Everyone uses this same folder — nobody's own "My Drive" is used anymore.
+const DRIVE_ROOT_FOLDER_ID = "1miwKoM8rLRhNwpE5qmEOucS83R3PzFYc";
 const loadGoogleIdentity = () =>
   new Promise((resolve, reject) => {
     if (window.google?.accounts?.oauth2) return resolve();
@@ -716,7 +722,7 @@ function CommissionSheets() {
     [driveToken, setDriveToken] = useState(null),
     [driveTokenExpiry, setDriveTokenExpiry] = useState(0),
     [driveEmail, setDriveEmail] = useState(""),
-    [driveRootFolderId, setDriveRootFolderId] = useState(null),
+    [driveGrantedScope, setDriveGrantedScope] = useState(""),
     [driveConnectDismissed, setDriveConnectDismissed] = useState(false),
     [viewer, setViewer] = useState(null),
     [letterhead, setLetterhead] = useState(null);
@@ -834,7 +840,6 @@ function CommissionSheets() {
       setOptions(o.data || []);
       try {
         setLetterhead(await setting("letterhead"));
-        setDriveRootFolderId(await setting("driveRootFolderId"));
       } catch (localError) {
         console.warn("Commission local settings are unavailable:", localError);
       }
@@ -852,6 +857,25 @@ function CommissionSheets() {
       console.warn("Google Identity Services unavailable:", driveLoadError),
     );
   }, []);
+  useEffect(() => {
+    if (!driveTokenExpiry || !tokenClientRef.current) return;
+    // Google's access tokens are capped at ~1hr by Google itself — that
+    // window can't be extended. Instead, renew silently a few minutes
+    // before it runs out, with no popup or click, so the connection just
+    // keeps working through a normal work day. This only succeeds while
+    // the tab stays open and the browser still has an active Google
+    // session; otherwise it fails quietly and the person sees the usual
+    // "Reconnect" state next time they try to open a file.
+    const refreshBufferMs = 5 * 60 * 1000,
+      delay = Math.max(
+        driveTokenExpiry - Date.now() - refreshBufferMs,
+        5000,
+      ),
+      timer = setTimeout(() => {
+        tokenClientRef.current?.requestAccessToken({ prompt: "" });
+      }, delay);
+    return () => clearTimeout(timer);
+  }, [driveTokenExpiry]);
   useEffect(() => {
     if (!form.deal_type) return;
     const source = activeDocs.length
@@ -1185,7 +1209,7 @@ function CommissionSheets() {
           {
             client_id: GOOGLE_CLIENT_ID,
             scope: DRIVE_SCOPE,
-            callback: (response) => {
+            callback: async (response) => {
               if (response.error) {
                 setError(`Google Drive connection failed: ${response.error}`);
                 return;
@@ -1195,8 +1219,17 @@ function CommissionSheets() {
                 Date.now() + (Number(response.expires_in) || 3600) * 1000 -
                   60000,
               );
+              setDriveGrantedScope(response.scope || "");
               setDriveConnectDismissed(false);
               setNotice("Google Drive connected.");
+              try {
+                const info = await fetch(
+                  `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${response.access_token}`,
+                ).then((r) => r.json());
+                setDriveEmail(info.email || "");
+              } catch {
+                setDriveEmail("");
+              }
             },
           },
         );
@@ -1257,16 +1290,9 @@ function CommissionSheets() {
     return created.id;
   }
   async function ensureRootFolder() {
-    if (driveRootFolderId) return driveRootFolderId;
-    const stored = await setting("driveRootFolderId");
-    if (stored) {
-      setDriveRootFolderId(stored);
-      return stored;
-    }
-    const id = await findOrCreateFolder(DRIVE_ROOT_FOLDER_NAME);
-    await saveSetting("driveRootFolderId", id);
-    setDriveRootFolderId(id);
-    return id;
+    // Fixed, pre-shared folder — same for every user, so attachments are
+    // never tied to whichever account happened to upload them.
+    return DRIVE_ROOT_FOLDER_ID;
   }
   async function ensureTransactionFolder(ref) {
     const rootId = await ensureRootFolder();
@@ -1506,18 +1532,15 @@ function CommissionSheets() {
         return;
       }
       const folderId = await ensureTransactionFolder(ref);
-      await driveFetch(
-        `https://www.googleapis.com/drive/v3/files/${folderId}/permissions`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role: "writer", type: "anyone" }),
-        },
-      );
+      // No permission is granted here anymore — the parent "Commission
+      // Sheets Attachments" folder is already shared with named team
+      // members (Editor for staff, Viewer for finance), and every
+      // transaction subfolder inherits that. This just hands back a
+      // direct link into a folder the recipient can already open.
       const link = `https://drive.google.com/drive/folders/${folderId}`;
       await navigator.clipboard.writeText(link);
       setNotice(
-        "Link copied. Anyone with this link can view, add, and edit these files — only share it with people you trust.",
+        "Link copied. Only opens for people already granted access to the shared attachments folder.",
       );
     } catch (e) {
       setError(e.message);
@@ -2315,6 +2338,8 @@ function CommissionSheets() {
               load,
               driveEmail,
               driveTokenValid: driveTokenValid(),
+              driveTokenExpiry,
+              driveGrantedScope,
               connectGoogleDrive,
             }}
           />
@@ -4708,7 +4733,7 @@ function Setup(p) {
       <Section title="Google Drive attachments">
         <p className="form-hint strong">
           {p.driveTokenValid
-            ? "Connected. Attachments are stored only in your Google Drive."
+            ? "Connected. Attachments are stored in the shared team Drive folder."
             : "Not connected."}
         </p>
         <div className="cis-inline-actions">
@@ -4716,20 +4741,80 @@ function Setup(p) {
             {p.driveTokenValid ? "Reconnect" : "Connect Google Drive"}
           </button>
         </div>
+        {p.driveTokenValid && (
+          <div
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: 6,
+              padding: "10px 14px",
+              margin: "10px 0",
+              fontSize: 13,
+              lineHeight: 1.7,
+            }}
+          >
+            <div>
+              <b>Signed in as:</b>{" "}
+              {p.driveEmail || "Unknown (older connection — click Reconnect to detect)"}
+            </div>
+            <div>
+              <b>Files stored in:</b>{" "}
+              <a
+                href={`https://drive.google.com/drive/folders/${DRIVE_ROOT_FOLDER_ID}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Commission Sheets Attachments
+              </a>{" "}
+              (shared folder — same one for every user, not this account's
+              own Drive)
+            </div>
+            <div>
+              <b>Permissions granted:</b>{" "}
+              {p.driveGrantedScope
+                ? p.driveGrantedScope
+                    .split(" ")
+                    .map((s) =>
+                      s.endsWith("drive.file")
+                        ? "Create/upload files"
+                        : s.endsWith("drive.readonly")
+                          ? "View files shared with this account"
+                          : s,
+                    )
+                    .join(" · ")
+                : "Unknown (older connection — click Reconnect to detect)"}
+            </div>
+            <div>
+              <b>Current token renews at:</b>{" "}
+              {p.driveTokenExpiry
+                ? new Date(p.driveTokenExpiry).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "—"}{" "}
+              — renews itself automatically in the background a few minutes
+              before then, no click needed, as long as this tab stays open.
+              "Reconnect" is only needed if the browser's Google session
+              itself has ended (laptop closed overnight, signed out, etc.).
+            </div>
+          </div>
+        )}
         <p className="form-hint">
-          Every transaction gets its own folder inside a "Commission Sheets
-          Attachments" folder in your Google Drive. Use the "Share
-          attachments" button on a saved transaction to get a link you can
-          send to anyone — they'll be able to view, add, and edit files in
-          that folder, so only share it with people you trust.
+          Every transaction gets its own folder inside the shared "Commission
+          Sheets Attachments" folder. Access is limited to people explicitly
+          added to that folder — staff as Editors, finance as Viewers. The
+          "Share attachments" button on a saved transaction just copies a
+          direct link into that folder for someone who already has access;
+          it does not grant new access to anyone.
         </p>
         <p className="form-hint">
           No attachment copy is stored on the user's computer. Attachments can
           be viewed or printed from Google Drive inside the application.
         </p>
         <p className="form-hint">
-          The connection lasts about an hour at a time — you'll be asked to
-          reconnect after that, or whenever it expires mid-session.
+          Each token lasts about an hour, but renews itself silently in the
+          background while this tab stays open — you shouldn't need to
+          reconnect during a normal work day. You'll only be asked to
+          reconnect if the browser's Google session itself has ended.
         </p>
       </Section>
       <Section title="Transaction records storage">
