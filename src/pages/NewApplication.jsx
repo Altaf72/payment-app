@@ -246,7 +246,7 @@ export default function NewApplication() {
     company_id: '', payment_reason_id: '', payment_reason_text: '',
     payment_method_id: '', payment_method_text: '',
     amount: '', amount_words: '',
-    payee_name: '', bank_id: '', bank_name: '', bank_account: '', class_names: [], remarks: '',
+    payee_name: '', bank_id: '', bank_name: '', bank_account: '', class_names: [], remarks: '', owner_will_pay: false,
   }
   const [form, setForm]               = useState(emptyForm)
   const [savedForm, setSavedForm]     = useState(null)   // for back-navigation restore
@@ -350,7 +350,7 @@ export default function NewApplication() {
       // applications_full may be an explicit legacy view without class_name.
       const { data: applicationClass } = await supabase
         .from('applications')
-        .select('class_name,class_names')
+        .select('class_name,class_names,owner_will_pay')
         .eq('id', app.id)
         .single()
       const classNames = applicationClass?.class_names?.length ? applicationClass.class_names : (applicationClass?.class_name ? [applicationClass.class_name] : [])
@@ -384,6 +384,7 @@ export default function NewApplication() {
           bank_account:        app.bank_account || '',
           class_names:         classNames,
           remarks:             app.remarks || '',
+          owner_will_pay:      !!applicationClass?.owner_will_pay,
         })
         // No outcome note, no existing attachment
       } else {
@@ -402,6 +403,7 @@ export default function NewApplication() {
           bank_account:        app.bank_account || '',
           class_names:         classNames,
           remarks:             app.remarks || '',
+          owner_will_pay:      !!applicationClass?.owner_will_pay,
         })
         setOutcomeNote(app.outcome_note || '')
         if (app.attachment_name) setExistingAtt({ name: app.attachment_name, path: app.attachment_path })
@@ -586,7 +588,7 @@ export default function NewApplication() {
     setError('')
     if (!asDraft) {
       if (!form.company_id)               return setError('Please select a company')
-      if (!form.payment_reason_text.trim()) return setError('Payment reason is required')
+      if (!form.payment_reason_text.trim()) return setError('Category is required')
       if (!form.amount || parseFloat(form.amount) <= 0) return setError('Please enter a valid amount')
     }
     submittingRef.current = true
@@ -606,6 +608,7 @@ export default function NewApplication() {
         class_name:        form.class_names?.join(', ') || null,
         class_names:       form.class_names || [],
         remarks:           form.remarks,
+        owner_will_pay:    !!form.owner_will_pay,
         status:            asDraft ? 'draft' : 'pending',
         outcome_note:      null,
         submitted_at:      asDraft ? null : new Date().toISOString(),
@@ -678,7 +681,7 @@ export default function NewApplication() {
           <strong>⧉ Duplicated application</strong> — pre-filled fields are shown below.<br/>
           <span style={{fontSize:'12px'}}>
             <span style={{color:'var(--status-approved)',fontWeight:500}}>✓ Copied: </span>
-            Company, Payment Reason, Method, Receiving Company, Bank, Account, Remarks
+            Company, Category, Method, Receiving Company, Bank, Account, Remarks
             &nbsp;&nbsp;
             <span style={{color:'var(--status-rejected)',fontWeight:500}}>✗ Reset: </span>
             Amount (enter fresh), Attachment, Reference number, Date
@@ -709,13 +712,13 @@ export default function NewApplication() {
             </div>
           </div>
 
-          {/* Payment Reason */}
+          {/* Category */}
           <div className="form-group">
-            <label className="form-label">付款事由 <span className="cn">Payment Reason</span><span className="required">*</span></label>
+            <label className="form-label">付款事由 <span className="cn">Category</span><span className="required">*</span></label>
             <Combobox
               options={paymentReasons}
               value={form.payment_reason_id}
-              placeholder="Type or select reason… (↑↓ to navigate, Enter to select)"
+              placeholder="Type or select category… (↑↓ to navigate, Enter to select)"
               allowNew
               onChange={async (id, name) => {
                 if (id === '__new__') {
@@ -827,11 +830,16 @@ export default function NewApplication() {
             </div>
           </div>
 
-          {/* Remarks */}
+          {/* Payment Reason & Remarks */}
           <div className="form-group">
-            <label className="form-label">备注说明 <span className="cn">Remarks</span></label>
+            <label className="form-label">备注说明 <span className="cn">Payment Reason &amp; Remarks</span></label>
             <textarea className="form-control" placeholder="Unit numbers, references, additional notes…"
               value={form.remarks} onChange={e => set('remarks', e.target.value)} />
+            <label style={{display:'inline-flex',alignItems:'center',gap:'7px',marginTop:'8px',cursor:'pointer',fontSize:'13px',fontWeight:600}}>
+              <input type="checkbox" checked={!!form.owner_will_pay}
+                onChange={e => set('owner_will_pay', e.target.checked)} />
+              Owner Will Pay
+            </label>
           </div>
 
           {/* Attachment */}

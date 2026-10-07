@@ -163,6 +163,28 @@ function CopyApplicationSummaryButton({ app }) {
   </button>
 }
 
+function PaymentMethodHint({ method }) {
+  const name = String(method || '').trim()
+  if (!name) return null
+  const normalized = name.toLowerCase()
+  let icon = '⇄'
+  let color = '#475569'
+  let background = '#f1f5f9'
+  if (normalized.includes('cash')) {
+    icon = '💵'; color = '#166534'; background = '#dcfce7'
+  } else if (normalized.includes('cheque') || normalized.includes('check')) {
+    icon = '🧾'; color = '#854d0e'; background = '#fef9c3'
+  } else if (normalized.includes('card') || normalized.includes('credit') || normalized.includes('debit')) {
+    icon = '💳'; color = '#1d4ed8'; background = '#dbeafe'
+  } else if (normalized.includes('bank') || normalized.includes('transfer') || normalized.includes('wire') || normalized.includes('iban')) {
+    icon = '🏦'; color = '#6d28d9'; background = '#ede9fe'
+  }
+  return <span title={`Payment method: ${name}`} aria-label={`Payment method: ${name}`} style={{
+    display:'inline-flex',alignItems:'center',justifyContent:'center',width:'21px',height:'21px',
+    borderRadius:'50%',background,color,fontSize:'12px',lineHeight:1,flexShrink:0,cursor:'help',
+  }}>{icon}</span>
+}
+
 // Lets finance staff move through values with Tab and copy the focused value
 // straight into another application with Ctrl/Cmd+C.
 function CopyableField({ children, copyText, label, title, style, onCopy }) {
@@ -208,7 +230,9 @@ export default function FinanceDashboard() {
   const [usedRefs, setUsedRefs] = useState(loadUsedRefs)
   const [reviewedIds, setReviewedIds] = useState(() => new Set())
   const [showUncheckedOnly, setShowUncheckedOnly] = useState(false)
+  const [activeRowId, setActiveRowId] = useState(() => sessionStorage.getItem('finance_dashboard_active_row') || null)
   const loadRequestRef = useRef(0)
+  const dashboardTableRef = useRef(null)
 
   // Restore filter state from sessionStorage on mount
   const STORAGE_KEY = `finance_dashboard_filters:${user?.id || 'anonymous'}:${profile?.role || 'unknown'}`
@@ -244,6 +268,57 @@ export default function FinanceDashboard() {
       savedAt: Date.now(),
     }))
   }, [search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize])
+
+  useEffect(() => {
+    if (activeRowId) sessionStorage.setItem('finance_dashboard_active_row', activeRowId)
+    else sessionStorage.removeItem('finance_dashboard_active_row')
+  }, [activeRowId])
+
+  // Treat the transaction table as a keyboard grid. Cells are focused only
+  // programmatically, so normal Tab navigation through the page is unchanged.
+  useEffect(() => {
+    dashboardTableRef.current?.querySelectorAll('tr[data-dashboard-row] > td')
+      .forEach(cell => { cell.tabIndex = -1 })
+  }, [applications, reviewedIds, showUncheckedOnly])
+
+  function handleDashboardGridKeyDown(event) {
+    const isArrowKey = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)
+    const isSpaceKey = event.key === ' ' || event.code === 'Space'
+    if (!isArrowKey && !isSpaceKey) return
+
+    const grid = dashboardTableRef.current
+    if (!grid) return
+    if (isSpaceKey && event.target.closest?.('button, input, a, select, textarea, [role="button"]')) return
+    const rows = [...grid.querySelectorAll('tr[data-dashboard-row]')]
+    if (!rows.length) return
+
+    const focusedCell = event.target.closest?.('td')
+    const focusedRow = event.target.closest?.('tr[data-dashboard-row]')
+    const currentRow = focusedRow || rows.find(row => row.dataset.dashboardRow === activeRowId) || rows[0]
+    let rowIndex = rows.indexOf(currentRow)
+    let cells = [...currentRow.querySelectorAll(':scope > td')]
+    let columnIndex = focusedCell?.parentElement === currentRow ? cells.indexOf(focusedCell) : 0
+    if (columnIndex < 0) columnIndex = 0
+
+    if (isSpaceKey) {
+      event.preventDefault()
+      setActiveRowId(currentRow.dataset.dashboardRow)
+      return
+    }
+
+    if (event.key === 'ArrowLeft') columnIndex = Math.max(0, columnIndex - 1)
+    if (event.key === 'ArrowRight') columnIndex = Math.min(cells.length - 1, columnIndex + 1)
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const movement = event.key === 'ArrowUp' ? -1 : 1
+      rowIndex = Math.max(0, Math.min(rows.length - 1, rowIndex + movement))
+      cells = [...rows[rowIndex].querySelectorAll(':scope > td')]
+      columnIndex = Math.min(columnIndex, cells.length - 1)
+    }
+
+    event.preventDefault()
+    const nextRow = rows[rowIndex]
+    cells[columnIndex]?.focus()
+  }
 
   // Reset to page 1 when filters change (but not on page/size changes themselves)
   const isFirstRender = React.useRef(true)
@@ -404,6 +479,7 @@ export default function FinanceDashboard() {
       return
     }
     let commentMatchIds = []
+    let classMatchIds = []
     if (textTerm) {
       let commentOffset = 0
       while (true) {
@@ -423,6 +499,40 @@ export default function FinanceDashboard() {
         commentOffset += QUERY_PAGE_SIZE
       }
       commentMatchIds = [...new Set(commentMatchIds)]
+
+      // Class is stored on the base applications table because older
+      // applications_full views do not expose it. Fetch the lightweight
+      // Class fields and match locally so multi-property selections are also
+      // searchable by any part of their name.
+      let classOffset = 0
+      while (true) {
+        let classResult = await supabase
+          .from('applications')
+          .select('id,class_name,class_names')
+          .range(classOffset, classOffset + QUERY_PAGE_SIZE - 1)
+        if (classResult.error) {
+          // Keep Class search available for deployments that have not yet
+          // added the multi-property column.
+          classResult = await supabase
+            .from('applications')
+            .select('id,class_name')
+            .range(classOffset, classOffset + QUERY_PAGE_SIZE - 1)
+        }
+        if (classResult.error) {
+          console.error('Class search failed', classResult.error)
+          break
+        }
+        const matchText = textTerm.toLocaleLowerCase()
+        classMatchIds.push(...(classResult.data || [])
+          .filter(row => [
+            row.class_name,
+            ...(Array.isArray(row.class_names) ? row.class_names : []),
+          ].some(value => String(value || '').toLocaleLowerCase().includes(matchText)))
+          .map(row => row.id))
+        if ((classResult.data || []).length < QUERY_PAGE_SIZE) break
+        classOffset += QUERY_PAGE_SIZE
+      }
+      classMatchIds = [...new Set(classMatchIds)]
     }
 
     function buildQuery(from, to, includeCount = false, includeTextSearch = true) {
@@ -476,6 +586,15 @@ export default function FinanceDashboard() {
         }
         data.push(...(result.data || []))
       }
+      for (let index = 0; index < classMatchIds.length; index += 200) {
+        const idChunk = classMatchIds.slice(index, index + 200)
+        const result = await buildQuery(0, idChunk.length - 1, false, false).in('id', idChunk)
+        if (result.error) {
+          error = result.error
+          break
+        }
+        data.push(...(result.data || []))
+      }
       data = [...new Map(data.map(row => [row.id, row])).values()]
         .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     } else {
@@ -502,20 +621,33 @@ export default function FinanceDashboard() {
     // not yet expose class_name. Read it from the base table so dashboard
     // loading never depends on a view migration.
     if (rows.length > 0) {
-      let { data: classRows, error: classError } = await supabase
-        .from('applications')
-        .select('id,class_name,class_names')
-        .in('id', rows.map(app => app.id))
-      // Preserve the original Class display in deployments that have not yet
-      // applied the multi-property column migration.
-      if (classError) {
-        const fallback = await supabase.from('applications').select('id,class_name').in('id', rows.map(app => app.id))
-        classRows = fallback.data
-        classError = fallback.error
+      // Search can return many records. Chunk this lookup so a large `in()`
+      // filter never exceeds the API URL limit and silently drops Class data.
+      const classRows = []
+      let classError = null
+      const ids = rows.map(app => app.id)
+      for (let index = 0; index < ids.length; index += 200) {
+        let result = await supabase
+          .from('applications')
+          .select('id,class_name,class_names')
+          .in('id', ids.slice(index, index + 200))
+        // Preserve the original Class display in deployments that have not
+        // yet applied the multi-property column migration.
+        if (result.error) {
+          result = await supabase
+            .from('applications')
+            .select('id,class_name')
+            .in('id', ids.slice(index, index + 200))
+        }
+        if (result.error) {
+          classError = result.error
+          break
+        }
+        classRows.push(...(result.data || []))
       }
       if (classError) console.error('Could not load application classes', classError)
       else {
-        const classById = new Map((classRows || []).map(row => [row.id, { class_name:row.class_name, class_names:row.class_names }]))
+        const classById = new Map(classRows.map(row => [row.id, { class_name:row.class_name, class_names:row.class_names }]))
         rows = rows.map(app => ({ ...app, ...(classById.get(app.id) || { class_name:'', class_names:[] }) }))
       }
     }
@@ -1069,19 +1201,19 @@ export default function FinanceDashboard() {
       </div>
 
       {/* Filters */}
-      <div style={{ display:'flex', gap:'8px', marginBottom:'12px', flexWrap:'wrap', alignItems:'center' }}>
-        <input className="form-control" style={{minWidth:'220px',flex:'2'}}
-          placeholder="🔍 Search ref, reason, applicant, payee, Finance comments…"
+      <div style={{ display:'grid', gridTemplateColumns:'minmax(190px,1.7fr) minmax(112px,.8fr) minmax(112px,.85fr) minmax(145px,1.15fr) minmax(125px,.9fr) minmax(112px,.8fr) minmax(128px,.95fr) auto', gap:'8px', marginBottom:'12px', alignItems:'center' }}>
+        <input className="form-control" style={{minWidth:0,width:'100%'}}
+          placeholder="🔍 Search…"
           value={search} onChange={e => setSearch(e.target.value)} />
-        <input className="form-control" style={{width:'140px'}}
-          placeholder="💰 Amount e.g. 105"
+        <input className="form-control" style={{minWidth:0,width:'100%'}}
+          placeholder="💰 Amount"
           type="number" step="0.01" min="0"
           value={amountSearch} onChange={e => setAmountSearch(e.target.value)} />
-        <select className="form-control" style={{width:'auto'}} value={filterStatus}
+        <select className="form-control" style={{minWidth:0,width:'100%'}} value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}>
           <option value="">All statuses</option>
           <option value="draft">Draft</option>
-          <option value="pending">Pending (grandfathered)</option>
+          <option value="pending">Pending</option>
           <option value="mgr_approved">Mgr Approved — awaiting Finance</option>
           <option value="fin_approved">Fin Approved — awaiting CFO</option>
           <option value="escalated">Escalated</option>
@@ -1091,26 +1223,26 @@ export default function FinanceDashboard() {
           <option value="returned">Returned</option>
           <option value="withdrawn">Withdrawn</option>
         </select>
-        <select className="form-control" style={{width:'auto'}} value={filterCompany}
+        <select className="form-control" style={{minWidth:0,width:'100%'}} value={filterCompany}
           onChange={e => setFilterCompany(e.target.value)}>
           <option value="">All companies</option>
           {companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
         </select>
-        <input className="form-control" style={{width:'175px'}}
-          placeholder="Batch number"
+        <input className="form-control" style={{minWidth:0,width:'100%'}}
+          placeholder="Batch no."
           value={filterBatch} onChange={e => setFilterBatch(e.target.value)} />
-        <input className="form-control" style={{width:'150px'}}
+        <input className="form-control" style={{minWidth:0,width:'100%'}}
           placeholder="Batch total"
           type="number" step="0.01" min="0"
           value={batchTotalSearch} onChange={e => setBatchTotalSearch(e.target.value)} />
-        <select className="form-control" style={{width:'auto'}} value={filterAttachment}
+        <select className="form-control" style={{minWidth:0,width:'100%'}} value={filterAttachment}
           onChange={e => setFilterAttachment(e.target.value)}>
           <option value="">All (attach.)</option>
           <option value="yes">📎 Has attachment</option>
           <option value="no">No attachment</option>
         </select>
         {(search||amountSearch||filterStatus||filterCompany||filterBatch||batchTotalSearch||filterAttachment) && (
-          <button className="btn btn-outline btn-sm" onClick={() => {
+          <button className="btn btn-outline btn-sm" style={{whiteSpace:'nowrap'}} onClick={() => {
             setSearch(''); setAmountSearch(''); setFilterStatus('');
             setFilterCompany(''); setFilterBatch(''); setBatchTotalSearch(''); setFilterAttachment(''); setPage(1)
             sessionStorage.removeItem(STORAGE_KEY)
@@ -1198,7 +1330,7 @@ export default function FinanceDashboard() {
 
       {/* Table */}
       <div className="card">
-        <div className="table-wrap">
+        <div className="table-wrap" ref={dashboardTableRef} onKeyDownCapture={handleDashboardGridKeyDown}>
           {loading ? (
             <div className="empty-state"><p>Loading…</p></div>
           ) : loadError ? (
@@ -1255,13 +1387,19 @@ export default function FinanceDashboard() {
                   const totalCols = 10
                   const refWasUsed = usedRefs.has(app.ref_number)
                   const isReviewed = reviewedIds.has(app.id)
+                  const isActiveRow = activeRowId === app.id
                   const hasDetailRow = !!(app.remarks || app.finance_comments?.length)
                   return (
                     <React.Fragment key={app.id}>
-                      <tr style={{
+                      <tr data-dashboard-row={app.id} onClickCapture={event => {
+                        setActiveRowId(app.id)
+                        const cell = event.target.closest?.('td')
+                        if (cell && !event.target.closest?.('button, input, a, [role="button"]')) cell.focus()
+                      }} style={{
                         lineHeight:'1.3',
-                        background:isReviewed ? '#ecfdf5' : undefined,
+                        background:isActiveRow ? '#fef3c7' : isReviewed ? '#ecfdf5' : undefined,
                         transition:'background-color .15s ease',
+                        cursor:'pointer',
                       }}>
                         {/* Checkbox */}
                         <td style={{verticalAlign:'middle',paddingTop:'8px'}}>
@@ -1294,10 +1432,12 @@ export default function FinanceDashboard() {
                               title={refWasUsed ? 'Reference copied/used on this computer' : ''}
                               onCopy={() => markReferenceUsed(app.ref_number)}
                               style={{
-                                fontSize:'11px',
-                                fontWeight:400,
+                                fontSize:'14px',
+                                fontWeight:700,
                                 whiteSpace:'nowrap',
-                                letterSpacing:'.01em',
+                                letterSpacing:'-.035em',
+                                lineHeight:'1.1',
+                                minWidth:0,
                                 color: refWasUsed ? '#b45309' : 'var(--ink)',
                               }}
                             >
@@ -1416,7 +1556,10 @@ export default function FinanceDashboard() {
                         {/* Amount */}
                         <td style={{fontWeight:600,fontSize:'13px',verticalAlign:'middle',whiteSpace:'nowrap',
                           paddingTop:'8px',paddingBottom: app.remarks ? '2px' : '8px'}}>
-                          <CopyableField copyText={String(app.amount ?? '')} label="Amount">{formatCurrency(app.amount)}</CopyableField>
+                          <div style={{display:'flex',alignItems:'center',gap:'5px'}}>
+                            <PaymentMethodHint method={app.payment_method_name} />
+                            <CopyableField copyText={String(app.amount ?? '')} label="Amount">{formatCurrency(app.amount)}</CopyableField>
+                          </div>
                         </td>
 
                         {/* Date */}
@@ -1506,10 +1649,11 @@ export default function FinanceDashboard() {
 
                       {/* Remarks and Finance comments — spans from company col to end */}
                       {hasDetailRow && (
-                        <tr style={{
+                        <tr onClickCapture={() => setActiveRowId(app.id)} style={{
                           borderTop:'none',
-                          background:isReviewed ? '#ecfdf5' : undefined,
+                          background:isActiveRow ? '#fef3c7' : isReviewed ? '#ecfdf5' : undefined,
                           transition:'background-color .15s ease',
+                          cursor:'pointer',
                         }}>
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />
                           <td style={{padding:'0 0 8px 0', borderTop:'none'}} />

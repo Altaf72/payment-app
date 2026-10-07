@@ -436,6 +436,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
             <td style={{ ...s.vc, textAlign:'left', minHeight:'60px', whiteSpace:'pre-wrap', verticalAlign:'top' }} colSpan={3}>
               {app.remarks || '—'}
+              {app.owner_will_pay && <div style={{marginTop:'7px',fontWeight:'bold',whiteSpace:'normal'}}>☑ Owner Will Pay</div>}
             </td>
           </tr>
 
@@ -784,7 +785,7 @@ export default function ApplicationDetail() {
     setLoading(true)
     const [{ data: appData }, { data: pfsData }, { data: logData }, { data: mgrs }, { data: cos }, { data: applicantFiles }, { data: classes }] = await Promise.all([
       supabase.from('applications_full').select('*').eq('id', id).single(),
-      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by,class_name,class_names').eq('id', id).single(),
+      supabase.from('applications').select('pfs_folder,pfs_no,pfs_display,pfs_assigned_at,pfs_assigned_by,class_name,class_names,owner_will_pay').eq('id', id).single(),
       supabase.from('audit_log')
         .select('id, action, note, created_at, action_by, users!action_by(full_name,role)')
         .eq('application_id', id).order('created_at'),
@@ -2432,7 +2433,7 @@ export default function ApplicationDetail() {
                   </div>
                 </>
               )}
-              {app.remarks && <div className="form-group"><div className="form-label">Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks}</div></div>}
+              {(app.remarks || app.owner_will_pay) && <div className="form-group"><div className="form-label">Payment Reason &amp; Remarks</div><div style={{ whiteSpace:'pre-line' }}>{app.remarks || '—'}</div>{app.owner_will_pay && <div style={{marginTop:'8px',fontWeight:600}}>☑ Owner Will Pay</div>}</div>}
               <div className="form-group">
                 <div className="form-label">Apartment / Property <span className="cn">Class</span></div>
                 {canEditClass ? <>
