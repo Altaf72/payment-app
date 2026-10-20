@@ -231,7 +231,7 @@ export default function NewApplication() {
   const editId             = searchParams.get('edit')
   const duplicateId        = searchParams.get('duplicate')
   const isEditing          = !!editId
-  const isFinanceReturnedEdit = searchParams.get('financeEdit') === '1' && ['finance','superadmin'].includes(profile?.role)
+  const isFinanceEdit = searchParams.get('financeEdit') === '1' && ['finance','superadmin'].includes(profile?.role)
   const submittingRef      = useRef(false)
   const attachmentsRef     = useRef([])
 
@@ -261,6 +261,7 @@ export default function NewApplication() {
   const [pageLoading, setPageLoading] = useState(true)
   const [error, setError]             = useState('')
   const [outcomeNote, setOutcomeNote] = useState('')
+  const [editingStatus, setEditingStatus] = useState('')
 
   // Persist form to sessionStorage so back-navigation restores it
   useEffect(() => {
@@ -307,7 +308,7 @@ export default function NewApplication() {
       .select('company_id')
       .eq('user_id', user.id)
     const allowed = new Set((myCompanyIds || []).map(r => r.company_id))
-    const filteredCo = isFinanceReturnedEdit ? (co || []) : (co || []).filter(c => allowed.has(c.id))
+    const filteredCo = isFinanceEdit ? (co || []) : (co || []).filter(c => allowed.has(c.id))
 
     setCompanies(filteredCo)
     setPaymentMethods(pm || [])
@@ -342,11 +343,7 @@ export default function NewApplication() {
 
     const app = appResult?.data
     if (app) {
-      if (isFinanceReturnedEdit && app.status !== 'returned') {
-        setError('Finance can only edit applications that are currently Returned.')
-        setPageLoading(false)
-        return
-      }
+      setEditingStatus(app.status || '')
       // applications_full may be an explicit legacy view without class_name.
       const { data: applicationClass } = await supabase
         .from('applications')
@@ -609,7 +606,7 @@ export default function NewApplication() {
         class_names:       form.class_names || [],
         remarks:           form.remarks,
         owner_will_pay:    !!form.owner_will_pay,
-        status:            asDraft ? 'draft' : 'pending',
+        status:            asDraft ? 'draft' : (isEditing && isFinanceEdit && editingStatus !== 'returned' ? editingStatus : 'pending'),
         outcome_note:      null,
         submitted_at:      asDraft ? null : new Date().toISOString(),
       }
@@ -645,11 +642,11 @@ export default function NewApplication() {
       await supabase.from('audit_log').insert({
         application_id: appId, action_by: user.id,
         action:  isEditing ? 'submitted' : (asDraft ? 'created' : 'submitted'),
-        note:    isEditing && !asDraft ? (isFinanceReturnedEdit ? 'Resubmitted by Finance after returned corrections' : 'Resubmitted after corrections') : asDraft ? 'Saved as draft' : 'Application submitted',
+        note:    isEditing && !asDraft ? (isFinanceEdit ? (editingStatus === 'returned' ? 'Resubmitted by Finance after returned corrections' : 'Edited by Finance') : 'Resubmitted after corrections') : asDraft ? 'Saved as draft' : 'Application submitted',
       })
       // Clear session storage on success
       sessionStorage.removeItem(`pa_form_${editId||'new'}`)
-      navigate(isFinanceReturnedEdit ? '/dashboard' : '/my-applications')
+      navigate(isFinanceEdit ? '/dashboard' : '/my-applications')
     } catch (err) {
       setError(err.message || 'Something went wrong')
     } finally {

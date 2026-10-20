@@ -145,6 +145,10 @@ async function copyToClipboard(text) {
 function CopyApplicationSummaryButton({ app }) {
   const [copied, setCopied] = useState(false)
   const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
+  const description = [app.remarks, app.owner_will_pay ? 'Owner Will Pay' : '']
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .join(' | ')
   const text = [
     app.ref_number,
     app.submitted_by_name,
@@ -153,7 +157,7 @@ function CopyApplicationSummaryButton({ app }) {
     app.payee_name,
     app.amount ?? '',
     formatDate(app.created_at),
-    app.remarks,
+    description,
   ].map(value => String(value || '').trim()).join(' | ')
 
   return <button type="button" title="Copy all transaction fields" aria-label="Copy all transaction fields"
@@ -183,6 +187,14 @@ function PaymentMethodHint({ method }) {
     display:'inline-flex',alignItems:'center',justifyContent:'center',width:'21px',height:'21px',
     borderRadius:'50%',background,color,fontSize:'12px',lineHeight:1,flexShrink:0,cursor:'help',
   }}>{icon}</span>
+}
+
+function OwnerWillPayHint() {
+  return <span title="Owner Will Pay" aria-label="Owner Will Pay" style={{
+    display:'inline-flex',alignItems:'center',gap:'3px',padding:'2px 6px',borderRadius:'10px',
+    background:'#166534',border:'1px solid #166534',color:'#fff',fontSize:'9px',fontWeight:700,
+    lineHeight:1,whiteSpace:'nowrap',flexShrink:0,cursor:'help',
+  }}>✓ Owner Will Pay</span>
 }
 
 // Lets finance staff move through values with Tab and copy the focused value
@@ -508,14 +520,14 @@ export default function FinanceDashboard() {
       while (true) {
         let classResult = await supabase
           .from('applications')
-          .select('id,class_name,class_names')
+          .select('id,class_name,class_names,owner_will_pay')
           .range(classOffset, classOffset + QUERY_PAGE_SIZE - 1)
         if (classResult.error) {
           // Keep Class search available for deployments that have not yet
           // added the multi-property column.
           classResult = await supabase
             .from('applications')
-            .select('id,class_name')
+            .select('id,class_name,owner_will_pay')
             .range(classOffset, classOffset + QUERY_PAGE_SIZE - 1)
         }
         if (classResult.error) {
@@ -629,14 +641,14 @@ export default function FinanceDashboard() {
       for (let index = 0; index < ids.length; index += 200) {
         let result = await supabase
           .from('applications')
-          .select('id,class_name,class_names')
+          .select('id,class_name,class_names,owner_will_pay')
           .in('id', ids.slice(index, index + 200))
         // Preserve the original Class display in deployments that have not
         // yet applied the multi-property column migration.
         if (result.error) {
           result = await supabase
             .from('applications')
-            .select('id,class_name')
+            .select('id,class_name,owner_will_pay')
             .in('id', ids.slice(index, index + 200))
         }
         if (result.error) {
@@ -647,8 +659,8 @@ export default function FinanceDashboard() {
       }
       if (classError) console.error('Could not load application classes', classError)
       else {
-        const classById = new Map(classRows.map(row => [row.id, { class_name:row.class_name, class_names:row.class_names }]))
-        rows = rows.map(app => ({ ...app, ...(classById.get(app.id) || { class_name:'', class_names:[] }) }))
+        const classById = new Map(classRows.map(row => [row.id, { class_name:row.class_name, class_names:row.class_names, owner_will_pay:row.owner_will_pay }]))
+        rows = rows.map(app => ({ ...app, ...(classById.get(app.id) || { class_name:'', class_names:[], owner_will_pay:false }) }))
       }
     }
     if (amountSearch.trim()) {
@@ -1560,6 +1572,7 @@ export default function FinanceDashboard() {
                             <PaymentMethodHint method={app.payment_method_name} />
                             <CopyableField copyText={String(app.amount ?? '')} label="Amount">{formatCurrency(app.amount)}</CopyableField>
                           </div>
+                          {app.owner_will_pay && <div style={{marginTop:'3px'}}><OwnerWillPayHint /></div>}
                         </td>
 
                         {/* Date */}

@@ -154,6 +154,22 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
   max-width:calc(100vw - 48px);
 }
 
+/* Responsive full-width reconciliation workspace; other tabs retain their layout. */
+.main-stage.recon-wide{
+  width:100%;
+  max-width:none;
+  padding-left:clamp(12px, 1.3vw, 26px);
+  padding-right:clamp(12px, 1.3vw, 26px);
+}
+.main-stage.recon-wide .recon-layout{width:100%;min-width:0;}
+.main-stage.recon-wide .recon-right-panel{flex:1 1 0;min-width:0;}
+.main-stage.recon-wide .recon-scroll{width:100%;}
+@media(max-width:980px){
+  .main-stage.recon-wide{padding-left:12px;padding-right:12px;}
+  .main-stage.recon-wide .recon-right-panel{width:100%;}
+}
+@media print{.main-stage.recon-wide{max-width:100%;padding:0;}}
+
 /* ---------------- settings drawer ---------------- */
 .drawer-overlay{
   position:fixed;inset:0;
@@ -828,12 +844,16 @@ select, input[type=text]{
 }
 @media (max-width:760px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
 .recon-layout{display:flex;align-items:flex-start;gap:16px;}
-.recon-left-panel{flex:0 0 300px;width:300px;min-width:0;display:flex;flex-direction:column;gap:10px;position:sticky;top:12px;max-height:calc(100vh - 24px);overflow-y:auto;padding-right:4px;}
+.recon-left-panel{flex:0 0 var(--recon-sidebar-width, 220px);width:var(--recon-sidebar-width, 220px);min-width:0;display:flex;flex-direction:column;gap:10px;position:sticky;top:12px;max-height:calc(100vh - 24px);overflow-y:auto;padding-right:4px;}
 .recon-left-panel .stat-grid{grid-template-columns:1fr;margin-bottom:0;gap:8px;}
 .recon-left-panel .recon-filter-toprow,.recon-left-panel .recon-filter-bottomrow,.recon-left-panel .recon-filter-options{flex-direction:column;align-items:stretch;}
 .recon-left-panel .recon-filter-toprow .recon-guest-filter-input{width:100%;}
 .recon-right-panel{flex:1;min-width:0;}
-@media (max-width:980px){.recon-layout{flex-direction:column;}.recon-left-panel{position:static;width:100%;flex:1 1 auto;max-height:none;}.recon-left-panel .stat-grid{grid-template-columns:repeat(2,1fr);}}
+.recon-pane-resizer{flex:0 0 8px;align-self:stretch;cursor:col-resize;position:relative;border-radius:4px;background:var(--line-soft);touch-action:none;}
+.recon-pane-resizer:hover,.recon-pane-resizer.dragging{background:var(--brass);}
+.recon-pane-resizer::after{content:"⋮";position:sticky;top:45%;display:block;text-align:center;color:var(--ink-soft);font-size:19px;line-height:30px;}
+.recon-layout.resizing{user-select:none;cursor:col-resize;}
+@media (max-width:980px){.recon-pane-resizer{display:none;}.recon-layout{flex-direction:column;}.recon-left-panel{position:static;width:100%;flex:1 1 auto;max-height:none;}.recon-left-panel .stat-grid{grid-template-columns:repeat(2,1fr);}}
 .stat-card{
   background:var(--paper-raised);
   border:1px solid var(--line);
@@ -1097,6 +1117,153 @@ tr.group-header-row td{
 }
 @keyframes shimmer{0%{background-position:100% 0;}100%{background-position:0 0;}}
 
+/* Monthly setup: a single visible checklist; advanced selection stays optional. */
+.monthly-simple-status{padding:12px 14px;background:#f8faf8;border:1px solid var(--line);border-radius:5px;margin:8px 0 12px}
+.monthly-check{padding:6px 0;font-size:12px;overflow-wrap:anywhere}
+.monthly-check.heading{font-weight:700;color:var(--ink);border-bottom:1px solid var(--line)}
+.monthly-check.good{color:#27663a}.monthly-check.bad{color:#a33a3a}.monthly-check.warn{color:#986019}
+#monthlyAdvanced{border-top:1px solid var(--line);padding-top:9px}
+#monthlyAdvanced>summary{cursor:pointer;color:var(--teal-deep);font-weight:600;font-size:12px;margin-bottom:8px}
+#monthlyAdvanced:not([open]) #monthList{display:none}
+
+/* Monthly setup now lives in a full-width tab, not a side drawer. */
+.monthly-setup-content{display:block;position:static;width:100%;height:auto;max-width:860px;margin:0 auto;background:transparent;border:0;box-shadow:none;transform:none;}
+.monthly-setup-content .drawer-body{padding:0;overflow:visible;}
+.monthly-setup-content .panel{margin-bottom:16px;}
+#setupArea{padding:12px 0 36px;}
+
+/* Reconciliation: top control panel, full-width comparison table below. */
+.main-stage.recon-wide .recon-layout,
+.recon-layout{
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  gap:12px;
+  width:100%;
+  min-width:0;
+}
+.main-stage.recon-wide .recon-left-panel,
+.recon-left-panel{
+  position:static;
+  flex:0 0 auto;
+  width:100%;
+  max-height:none;
+  overflow:visible;
+  padding-right:0;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.recon-left-panel .stat-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+  margin:0;
+}
+.recon-left-panel .recon-filter-toprow,
+.recon-left-panel .recon-filter-bottomrow,
+.recon-left-panel .recon-filter-options{
+  flex-direction:row;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.recon-left-panel .recon-filter-toprow .recon-guest-filter-input{
+  width:min(280px,100%);
+}
+.recon-left-panel .recon-filter-bar{margin:0;}
+.recon-pane-resizer{display:none !important;}
+.main-stage.recon-wide .recon-right-panel,
+.recon-right-panel{flex:1 1 auto;width:100%;min-width:0;}
+@media(max-width:850px){
+  .recon-left-panel .stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@media(max-width:480px){
+  .recon-left-panel .stat-grid{grid-template-columns:1fr;}
+}
+
+/* Compact reconciliation workbench: maximize space for transaction review. */
+body.dtcm-reconcile-mode .masthead{display:none;}
+body.dtcm-reconcile-mode .context-bar-inner{max-width:none;padding:5px 16px;font-size:11px;}
+body.dtcm-reconcile-mode .main-stage{padding-top:7px;padding-bottom:24px;}
+body.dtcm-reconcile-mode .mode-tabs{margin-bottom:8px;gap:10px;}
+body.dtcm-reconcile-mode .mode-tab{padding:7px 4px 8px;margin-right:12px;font-size:14px;}
+#reconcileArea .recon-commandbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 10px;margin-bottom:8px;background:var(--line-soft);border:1px solid var(--line);}
+#reconcileArea .recon-commandbar .recon-meta-banner{display:contents;}
+#reconcileArea .recon-commandbar .recon-meta-banner>span:first-child{font-size:11px;}
+#reconcileArea .recon-commandbar .recon-meta-banner>span:nth-child(2){font-size:11px;}
+#reconcileArea .recon-commandbar .recon-meta-banner>span:nth-child(3){font-size:12px;font-weight:600;}
+#reconcileArea .recon-commandbar .actions-row{display:contents;}
+#reconcileArea .recon-commandbar .replace-btn{margin-left:0;}
+#reconcileArea .recon-commandbar .recon-command-spacer{flex:1 1 auto;}
+#reconcileArea .recon-archive-details{margin:0 0 7px;border:1px solid var(--line);background:#fff;border-radius:3px;}
+#reconcileArea .recon-archive-details>summary{padding:6px 10px;cursor:pointer;font-size:11px;color:var(--ink-soft);font-weight:600;}
+#reconcileArea .recon-archive-details>.banner{margin:0!important;border:0;border-top:1px solid var(--line);border-radius:0;padding:8px;}
+#reconcileArea .recon-parse-message{padding:6px 10px;margin-bottom:7px!important;font-size:11px;}
+#reconcileArea .recon-layout{gap:7px;}
+#reconcileArea .recon-left-panel{gap:7px;}
+#reconcileArea .stat-grid{gap:8px;}
+#reconcileArea .stat-card{padding:7px 11px;}
+#reconcileArea .stat-card .stat-label{margin-bottom:1px;font-size:9px;}
+#reconcileArea .stat-card .stat-value{font-size:20px;}
+#reconcileArea .recon-filter-bar{display:flex;flex-direction:column;gap:5px;padding:7px 9px;}
+#reconcileArea .recon-filter-checkedrow{flex-direction:row!important;align-items:center;flex-wrap:wrap;padding-bottom:5px!important;gap:9px!important;}
+#reconcileArea .recon-filter-bottomrow{order:2;gap:6px;}
+#reconcileArea .recon-filter-toprow{order:3;padding:5px 0 0;border-bottom:0;border-top:1px solid var(--line);justify-content:flex-end;}
+#reconcileArea .recon-filter-totals{width:auto;flex:1 1 350px;gap:6px;}
+#reconcileArea .recon-filter-chip{padding:3px 6px;font-size:10px;}
+#reconcileArea .recon-filter-total{padding:3px 6px;font-size:10px;}
+#reconcileArea .recon-match-tray{width:100%;padding:2px 0;}
+#reconcileArea .recon-scroll{max-height:calc(100vh - 310px);min-height:260px;}
+@media(max-width:900px){#reconcileArea .recon-commandbar .recon-command-spacer{display:none;}#reconcileArea .recon-filter-totals{flex-basis:100%;}}
+@media print{body.dtcm-reconcile-mode .masthead{display:block;}}
+
+
+/* Space-efficient reconciliation controls (October 2026). */
+#reconcileArea .recon-left-panel{gap:4px;}
+#reconcileArea .stat-grid{gap:6px;}
+#reconcileArea .stat-card{padding:5px 10px;min-height:0;}
+#reconcileArea .stat-card .stat-label{font-size:9px;line-height:1.15;margin-bottom:2px;}
+#reconcileArea .stat-card .stat-value{font-size:19px;line-height:1.2;}
+#reconcileArea .stat-card .stat-value .unit{font-size:10px;}
+#reconcileArea .stat-card .hint,#reconcileArea .stat-card small{font-size:10px;line-height:1.2;}
+#reconcileArea .recon-filter-bar{gap:3px;padding:5px 8px;margin:0;}
+#reconcileArea .recon-filter-checkedrow{padding:0 0 3px!important;gap:5px!important;}
+#reconcileArea .recon-filter-bottomrow{gap:4px;}
+#reconcileArea .recon-filter-options{gap:4px;}
+#reconcileArea .recon-filter-chip{padding:2px 5px;font-size:9.5px;line-height:1.3;}
+#reconcileArea .recon-filter-total{padding:2px 5px;font-size:9.5px;}
+#reconcileArea .recon-filter-totals{gap:5px;}
+#reconcileArea .recon-filter-toprow{padding:3px 0 0;gap:6px;}
+#reconcileArea .recon-filter-toprow .btn{padding:4px 8px;font-size:11px;}
+#reconcileArea .recon-filter-toprow .recon-guest-filter-input{padding:4px 7px;}
+#reconcileArea .recon-match-tray{padding:0;gap:5px;}
+#reconcileArea .recon-match-tray .slot{padding:3px 6px;}
+#reconcileArea .recon-layout{gap:4px;}
+#reconcileArea .recon-scroll{max-height:calc(100vh - 245px);}
+@media(max-width:900px){#reconcileArea .stat-card .stat-value{font-size:17px;}#reconcileArea .recon-filter-totals{flex-basis:auto;}}
+
+
+/* Compact reconciliation layout: remove unused toolbar rows and card space. */
+#reconcileArea .recon-left-panel .stat-grid{align-items:stretch;gap:5px;}
+#reconcileArea .stat-card{padding:4px 9px;display:flex;flex-direction:column;justify-content:center;min-height:48px;}
+#reconcileArea .stat-card .stat-label{margin:0 0 1px;line-height:1.1;}
+#reconcileArea .stat-card .stat-value{line-height:1.12;margin:0;}
+#reconcileArea .stat-card .hint{margin:1px 0 0!important;}
+#reconcileArea .recon-filter-bar{padding:4px 7px;gap:2px;}
+#reconcileArea .recon-filter-checkedrow{border-bottom:0!important;padding:0!important;min-height:0;}
+#reconcileArea .recon-filter-bottomrow{display:flex;align-items:center;align-content:center;gap:4px 6px;flex-wrap:wrap;}
+#reconcileArea .recon-filter-bottomrow>.recon-filter-options{flex:0 1 auto;}
+#reconcileArea .recon-filter-count{white-space:nowrap;}
+#reconcileArea .recon-filter-totals{flex:0 1 auto;width:auto;min-width:0;gap:4px;}
+#reconcileArea .recon-filter-toprow{order:initial;display:flex;align-items:center;justify-content:flex-end;flex:1 1 auto;min-width:min(100%,430px);margin-left:auto;padding:0;border:0;gap:5px;}
+#reconcileArea .recon-filter-toprow .recon-guest-filter{flex:0 1 220px;min-width:140px;}
+#reconcileArea .recon-filter-toprow .recon-guest-filter-input{width:100%;min-width:0!important;box-sizing:border-box;}
+#reconcileArea .recon-filter-toprow .btn{padding:3px 7px;}
+#reconcileArea .recon-match-tray{margin:0;padding:0;min-height:0;}
+#reconcileArea .recon-layout,#reconcileArea .recon-left-panel{gap:3px;}
+#reconcileArea .recon-scroll{max-height:calc(100vh - 205px);}
+@media(max-width:850px){#reconcileArea .recon-filter-toprow{justify-content:flex-start;min-width:0;flex-wrap:wrap;margin-left:0;}}
+
 </style>
 </head>
 <body>
@@ -1107,10 +1274,7 @@ tr.group-header-row td{
       <span>DTCM Tourism Dirham Ledger</span>
       <span class="mark">AED</span>
     </div>
-    <button id="gearBtn" class="gear-btn" type="button" aria-label="Folder, month &amp; field settings" title="Folders, months &amp; field mapping">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15.5a3.5 3.5 0 100-7 3.5 3.5 0 000 7z"/><path d="M19.4 13.5a7.97 7.97 0 000-3l1.9-1.5-2-3.4-2.2.9a8 8 0 00-2.6-1.5L14 2h-4l-.5 2.5a8 8 0 00-2.6 1.5l-2.2-.9-2 3.4 1.9 1.5a8 8 0 000 3l-1.9 1.5 2 3.4 2.2-.9a8 8 0 002.6 1.5L10 22h4l.5-2.5a8 8 0 002.6-1.5l2.2.9 2-3.4-1.9-1.5z"/></svg>
-      <span class="gear-label">Setup</span>
-    </button>
+
   </div>
 </header>
 
@@ -1120,7 +1284,7 @@ tr.group-header-row td{
     <span class="cb-item">Folder: <b id="cbFolder">not connected</b></span>
     <span class="cb-sep">·</span>
     <span class="cb-item" id="cbMonths">No months selected</span>
-    <button id="manageBtn" class="btn secondary small" type="button">⚙ Manage folders &amp; months</button>
+
   </div>
 </div>
 
@@ -1132,24 +1296,33 @@ tr.group-header-row td{
     <button class="mode-tab" type="button" data-mode="summary" id="modeTabSummary">Unit Summary</button>
     <button class="mode-tab" type="button" data-mode="hostaway" id="modeTabHostaway">Hostaway Reconciliation</button>
   </div>
+  <div id="monthlyReportControls" class="mode-view active">
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-head">Upload Monthly Files</div>
+      <div class="panel-body">
+        <p class="hint" style="margin:0 0 10px;">Upload Account History and UNITTABLE Excel files together. You can also drop both files onto the Monthly Report below.</p>
+        <input id="monthlyFileInput" type="file" accept=".xlsx,.xls,.xlsm" multiple style="display:none;">
+        <button id="monthlyUploadBtn" type="button" class="btn brass">Upload Monthly Files…</button>
+        <span id="monthlyUploadStatus" class="hint" style="margin-left:10px;">Select both files together</span>
+        <details style="margin-top:12px;"><summary style="cursor:pointer;font-weight:600;color:var(--ink-soft);">Use saved folder / choose month instead</summary>
+          <div id="monthlyFolderOptions" style="padding-top:12px;"></div>
+        </details>
+      </div>
+    </div>
+  </div>
   <div id="reportArea" class="mode-view active"></div>
   <div id="reconcileArea" class="mode-view"></div>
   <div id="summaryArea" class="mode-view"></div>
   <div id="hostawayArea" class="mode-view"></div>
 </div>
 
-<!-- ============ SETTINGS DRAWER (Step 1, Step 2, field mapping) ============ -->
-<div id="drawerOverlay" class="drawer-overlay"></div>
-<aside id="settingsDrawer" class="drawer" aria-hidden="true">
-  <div class="drawer-head">
-    <span>Folders, months &amp; field mapping</span>
-    <button id="drawerCloseBtn" class="drawer-close" type="button" aria-label="Close">✕</button>
-  </div>
+<!-- ============ OPTIONAL FOLDER CONTROLS FOR MONTHLY REPORT ============ -->
+<section id="settingsDrawer" class="monthly-setup-content">
   <div class="drawer-body">
 
     <div class="panel">
       <div class="panel-head">
-        <div><span class="eyebrow">Step 1</span>DTCM base folder</div>
+        <div><span class="eyebrow">Step 1</span>Select report folder</div>
       </div>
       <div class="panel-body">
         <div id="browserWarning" class="banner warn" style="display:none;">
@@ -1169,15 +1342,16 @@ tr.group-header-row td{
 
     <div class="panel">
       <div class="panel-head">
-        <div><span class="eyebrow">Step 2</span>Select month folders</div>
+        <div><span class="eyebrow">Step 2</span>Check required files</div>
       </div>
       <div class="panel-body tight">
-        <div id="monthList" class="month-list"></div>
+        <div id="monthlySimpleStatus" class="monthly-simple-status">Choose your DTCM folder to check the required files.</div>
+        <details id="monthlyAdvanced"><summary>Other months / change file selection</summary><div id="monthList" class="month-list"></div></details>
       </div>
       <div class="panel-body" style="padding-top:0;">
         <div id="selectedCount" class="hint" style="margin-top:0;margin-bottom:8px;">No month folders selected</div>
-        <button id="generateBtn" class="btn brass full" disabled>Generate Report</button>
-        <p class="hint">Pick one or more months. If files haven't changed since last time, the report loads from cache instantly instead of re-reading the workbooks.</p>
+        <button id="generateBtn" class="btn brass full" disabled>Start Monthly Report</button>
+        <p class="hint">The newest complete month is selected automatically. Open “Other months” only when needed.</p>
       </div>
     </div>
 
@@ -1210,7 +1384,7 @@ tr.group-header-row td{
     </div>
 
   </div>
-</aside>
+</section>
 
 <script>
 /*! xlsx.js (C) 2013-present SheetJS -- http://sheetjs.com */
@@ -1788,6 +1962,7 @@ function forgetBaseFolder(){
   idbDelete(STORE_CACHE, REPORT_STATE_KEY);
   renderFolderStatus("disconnected", "No folder connected yet.");
   renderMonthList();
+  renderMonthlySimpleStatus();
   renderReportArea();
 }
 
@@ -1820,9 +1995,13 @@ async function scanMonthFolders(){
     state.monthFolders.push(folderRecord);
   }
 
-  // restore previous selection from config, intersected with what currently exists
-  const existingNames = new Set(state.monthFolders.map(f=>f.name));
-  state.selectedMonths = new Set((config.selectedMonthFolders||[]).filter(n=>existingNames.has(n)));
+  // Monthly default: prefer the newest folder containing both required files.
+  // Preserve a deliberate multi-month selection during this browser session only.
+  const valid = state.monthFolders.filter(f=>f.detected.accountHistory && f.detected.unitTable);
+  const current = [...state.selectedMonths].filter(n=>valid.some(f=>f.name===n));
+  state.selectedMonths = new Set(current.length ? current : valid.length ? [valid[0].name] : []);
+  config.selectedMonthFolders = [...state.selectedMonths];
+  saveConfig();
 
   renderMonthList();
   renderReportArea();
@@ -2465,7 +2644,7 @@ async function handleReportAreaDrop(fileList){
   }
   const reuseRoster = !ut ? latestUnitRoster() : null;
   if(!ut && !reuseRoster.length){
-    alert(`Got the Account History file (${ah.name}), but there's no UnitTable available yet — drop the matching UnitTable file too, or connect a folder via ⚙ Setup first.`);
+    alert(`Got the Account History file (${ah.name}), but there's no UnitTable available yet — drop the matching UnitTable file too, or use the saved folder options under Monthly Report.`);
     return;
   }
   const summary = ut
@@ -2555,16 +2734,8 @@ function showFatalBrowserWarning(){
   $("#browserWarning").style.display = "block";
 }
 
-function openDrawer(){
-  $("#settingsDrawer").classList.add("open");
-  $("#settingsDrawer").setAttribute("aria-hidden", "false");
-  $("#drawerOverlay").classList.add("open");
-}
-function closeDrawer(){
-  $("#settingsDrawer").classList.remove("open");
-  $("#settingsDrawer").setAttribute("aria-hidden", "true");
-  $("#drawerOverlay").classList.remove("open");
-}
+function openDrawer(){ setActiveMode("report"); document.querySelector("#monthlyFolderOptions")?.closest("details")?.setAttribute("open", ""); }
+function closeDrawer(){ setActiveMode("report"); }
 
 function renderFieldMapNote(){
   const versionNote = $("#appVersionNote");
@@ -2643,6 +2814,7 @@ function renderMonthList(){
   });
   renderGenerateButtonState();
   renderContextBar();
+  renderMonthlySimpleStatus();
 }
 
 function buildFileChoiceControls(folder){
@@ -2661,6 +2833,28 @@ function buildFileChoiceControls(folder){
     wrap.appendChild(select);
   });
   return wrap;
+}
+
+function renderMonthlySimpleStatus(){
+  const target = document.getElementById('monthlySimpleStatus');
+  if(!target) return;
+  target.replaceChildren();
+  const add = (text, cls='') => {
+    const line=document.createElement('div'); line.className='monthly-check '+cls;
+    line.textContent=text; target.appendChild(line);
+  };
+  if(!state.baseHandle){add('Select your DTCM base folder above.');return;}
+  if(!state.monthFolders.length){add('No month subfolders found. Select the DTCM base folder containing your monthly folders.','bad');return;}
+  const selected=state.monthFolders.filter(f=>state.selectedMonths.has(f.name));
+  if(!selected.length){add('No complete month found. See Other months for missing files.','bad');return;}
+  selected.forEach(f=>{
+    add('MONTH: '+f.name,'heading');
+    add((f.detected.accountHistory?'✓ ':'✕ ')+'Account History: '+(f.detected.accountHistory?.name||'MISSING'),f.detected.accountHistory?'good':'bad');
+    add((f.detected.unitTable?'✓ ':'✕ ')+'UNITTABLE: '+(f.detected.unitTable?.name||'MISSING'),f.detected.unitTable?'good':'bad');
+    if(f.detected.accountHistoryCount>1 || f.detected.unitTableCount>1)
+      add('Multiple matching files found. Latest file is selected; review under Other months.','warn');
+  });
+  add('Ready to generate the monthly report.','good');
 }
 
 function renderGenerateButtonState(){
@@ -3337,7 +3531,8 @@ function dtcmExtractExcelMeta(rows, headerRowIndex, txRows){
   meta.dedLicNo = extractAfter("DED Lic No");
   meta.fromDateStr = extractAfter("From");
   meta.toDateStr = extractAfter("To");
-  const period = fullText.match(new RegExp("Period:\\s*(.+?)\\s+to\\s+(.+?)(?=\\s*" + labels + ":|$)", "i"));
+  // Read only the two dates: the export adds a pipe and Registration ID after the period.
+  const period = fullText.match(/\bPeriod\s*:\s*(\d{1,2}[\/-]\d{1,2}[\/-]\d{4})\s+to\s+(\d{1,2}[\/-]\d{1,2}[\/-]\d{4})/i);
   if(period){ meta.fromDateStr = period[1].trim(); meta.toDateStr = period[2].trim(); }
   if(!meta.companyName){
     const firstRowCells = (rows[0] || []).map(dtcmExcelCellText).filter(Boolean);
@@ -3352,6 +3547,10 @@ function dtcmExtractExcelMeta(rows, headerRowIndex, txRows){
     }
   }
   return meta;
+}
+function dtcmExcelHasExplicitPeriod(rows, headerRowIndex){
+  const prefix = rows.slice(0, headerRowIndex).map(row=>(row||[]).map(dtcmExcelCellText).join(" ")).join(" ");
+  return /\b(?:period|from)\s*:/i.test(prefix) && /\b(?:to|period)\s*:/i.test(prefix);
 }
 async function parseDtcmExcelFile(file){
   const buf = await file.arrayBuffer();
@@ -3386,11 +3585,12 @@ async function parseDtcmExcelFile(file){
       fees,
     });
   }
+  const periodInferred = !dtcmExcelHasExplicitPeriod(chosen.rows, rowIndex);
   const meta = dtcmExtractExcelMeta(chosen.rows, rowIndex, rows);
   if(rows.length === 0){
     return { rows: [], footerTotal: null, meta, sourceType:"excel", error: "The Excel file opened, but no transaction rows were found under the DTCM header." };
   }
-  return { rows, footerTotal: rows.reduce((s,r)=>s+(r.fees||0),0), meta, sourceType:"excel", error: null };
+  return { rows, footerTotal: rows.reduce((s,r)=>s+(r.fees||0),0), meta, sourceType:"excel", periodInferred, error: null };
 }
 
 // ---------------- Hostaway export parser ----------------
@@ -3600,10 +3800,13 @@ function setMainStageExpanded(value){
 }
 function setActiveMode(mode){
   state.activeMode = mode;
+  document.body.classList.toggle("dtcm-reconcile-mode", mode === "reconcile");
+  document.querySelector(".main-stage")?.classList.toggle("recon-wide", mode === "reconcile");
   $("#modeTabReport").classList.toggle("active", mode==="report");
   $("#modeTabReconcile").classList.toggle("active", mode==="reconcile");
   $("#modeTabSummary").classList.toggle("active", mode==="summary");
   $("#modeTabHostaway").classList.toggle("active", mode==="hostaway");
+  $("#monthlyReportControls").classList.toggle("active", mode==="report");
   $("#reportArea").classList.toggle("active", mode==="report");
   $("#reconcileArea").classList.toggle("active", mode==="reconcile");
   $("#summaryArea").classList.toggle("active", mode==="summary");
@@ -3814,9 +4017,22 @@ function renderReconcileArea(){
     el("button", {class:"btn brass small", onclick: finalizeReconArchive}, ["Finalize & Archive"]),
     el("button", {class:"btn secondary small replace-btn", onclick: confirmResetDtcmUpload}, ["Replace file"]),
   ]);
-  area.appendChild(banner);
+
+  const dtcmReplacementInput = el("input", {type:"file", accept:".pdf,.xlsx,.xls", style:"display:none;"});
+  dtcmReplacementInput.addEventListener("change", ()=>{
+    if(dtcmReplacementInput.files[0] && confirm("Replace the current DTCM file? Existing reconciliation review for this file will be reset.")) handleDtcmFile(dtcmReplacementInput.files[0]);
+  });
+  const uploadActions = el("div", {class:"actions-row", style:"margin:0;"}, [
+    el("button", {class:"btn secondary small", onclick:()=>dtcmReplacementInput.click()}, ["Upload DTCM File…"]),
+    dtcmReplacementInput
+  ]);
+  const commandBar = el("div", {class:"recon-commandbar"}, [banner, el("span", {class:"recon-command-spacer"}), uploadActions]);
+  area.appendChild(commandBar);
   const archive = buildReconWorkspaceArchive();
-  if(archive) area.appendChild(archive);
+  if(archive){
+    const archiveDetails = el("details", {class:"recon-archive-details"}, [el("summary", {}, ["Saved reconciliation archive — click to open"]), archive]);
+    area.appendChild(archiveDetails);
+  }
 
   if(rc.parsed.error){
     area.appendChild(el("div", {class:"banner warn"}, [rc.parsed.error]));
@@ -3825,7 +4041,7 @@ function renderReconcileArea(){
 
   const sumFees = rc.parsed.rows.reduce((s,r)=>s+(r.fees||0),0);
   const footerOk = rc.parsed.footerTotal == null || Math.abs(sumFees - rc.parsed.footerTotal) < 0.01;
-  area.appendChild(el("div", {class:"banner " + (footerOk ? "info" : "warn"), style:"margin-bottom:8px;"}, [
+  area.appendChild(el("div", {class:"banner recon-parse-message " + (footerOk ? "info" : "warn"), style:"margin-bottom:8px;"}, [
     `Parsed ${rc.parsed.rows.length} transactions, summing to AED ${fmtMoney(sumFees)}.`,
     rc.parsed.footerTotal!=null
       ? (footerOk ? ` This matches the report's own stated total (AED ${fmtMoney(rc.parsed.footerTotal)}).`
@@ -3834,13 +4050,31 @@ function renderReconcileArea(){
   ]));
 
   const fromDate = parseAnyDate(meta.fromDateStr), toDate = parseAnyDate(meta.toDateStr);
-  const internalRows = dtcmGetInternalRowsForPeriod(fromDate, toDate).map(reconWithEffectiveAmount);
+  let internalRows = dtcmGetInternalRowsForPeriod(fromDate, toDate).map(reconWithEffectiveAmount);
+  // Excel exports sometimes omit the report period. The Excel parser then derives
+  // dates from guest check-ins, which are NOT necessarily the transaction period.
+  // If that inferred period misses all loaded monthly data, use the loaded
+  // monthly rows rather than hiding the reconciliation workflow.
+  const excelPeriodFallback = rc.parsed.sourceType === "excel" &&
+    rc.parsed.periodInferred === true && internalRows.length === 0 &&
+    state.monthGroups.some(g=>g.rows && g.rows.length);
+  if(excelPeriodFallback){
+    internalRows = state.monthGroups.flatMap(g=>(g.rows||[]).map(r=>
+      reconWithEffectiveAmount(Object.assign({},r,{_monthKey:g.key}))));
+    area.appendChild(el("div", {class:"banner warn"}, [
+      "The Excel export did not specify a reporting period. Its check-in dates did not overlap the loaded monthly report, so reconciliation is using all currently loaded monthly transactions. Verify the reporting month before finalizing."
+    ]));
+  }
 
   if(internalRows.length === 0){
     area.appendChild(el("div", {class:"banner warn"}, [
-      "No internal report covers this period yet. Generate the monthly report for ",
-      el("b",{},[fromDate ? monthLabel(monthKey(fromDate)) : "the matching month"]),
-      " (via ", el("b",{},["⚙ Setup"]), ") and this page will reconcile automatically.",
+      "Monthly ledger data is not loaded for the DTCM period ",
+      el("b",{},[`${meta.fromDateStr||"?"} – ${meta.toDateStr||"?"}`]),
+      ". Upload and process the matching Account History and UNITTABLE Excel files below. PDF and Excel DTCM uploads use the same reconciliation controls once the monthly ledger is available."
+    ]));
+    area.appendChild(el("div", {class:"actions-row", style:"margin:0 0 12px;"}, [
+      el("button", {class:"btn brass", type:"button", onclick:()=>$("#monthlyFileInput").click()}, ["Upload Monthly Report Files…"]),
+      el("button", {class:"btn secondary", type:"button", onclick:()=>setActiveMode("report")}, ["Open Monthly Report Tab"])
     ]));
     area.appendChild(el("div", {class:"recon-export-row", style:"margin:0 0 10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;"}, [
       buildReconGuestFilterInput(),
@@ -3873,7 +4107,44 @@ function renderReconcileArea(){
   const layout = el("div", {class:"recon-layout"});
   const leftPanel = el("div", {class:"recon-left-panel"}, [statGrid, filterBar, buildManualMatchTray()]);
   const rightPanel = el("div", {class:"recon-right-panel"}, [buildReconTable(filteredResults)]);
-  layout.append(leftPanel, rightPanel);
+  // The finance sidebar starts narrow; drag the divider to resize it.
+  // Width persists between monthly sessions and across reconciliation re-renders.
+  const widthKey = "dtcm_recon_sidebar_width_v1";
+  const savedWidth = Math.max(180, Math.min(500, Number(localStorage.getItem(widthKey)) || 220));
+  layout.style.setProperty("--recon-sidebar-width", `${savedWidth}px`);
+  const divider = el("div", {class:"recon-pane-resizer", title:"Drag to resize the left panel", role:"separator", tabindex:"0", "aria-label":"Resize reconciliation sidebar"});
+  function setSidebarWidth(value){
+    const maxWidth = Math.min(500, Math.max(180, layout.clientWidth - 450));
+    const width = Math.max(180, Math.min(maxWidth, value));
+    layout.style.setProperty("--recon-sidebar-width", `${width}px`);
+    return width;
+  }
+  divider.addEventListener("pointerdown", event=>{
+    if(window.matchMedia("(max-width: 980px)").matches) return;
+    event.preventDefault();
+    divider.setPointerCapture(event.pointerId);
+    divider.classList.add("dragging");
+    layout.classList.add("resizing");
+    const startX = event.clientX;
+    const startWidth = leftPanel.getBoundingClientRect().width;
+    const move = e=>setSidebarWidth(startWidth + e.clientX - startX);
+    const end = ()=>{
+      divider.removeEventListener("pointermove", move);
+      divider.classList.remove("dragging");
+      layout.classList.remove("resizing");
+      localStorage.setItem(widthKey, String(Math.round(leftPanel.getBoundingClientRect().width)));
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", end, {once:true});
+    divider.addEventListener("pointercancel", end, {once:true});
+  });
+  divider.addEventListener("keydown", event=>{
+    if(event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const width = setSidebarWidth(leftPanel.getBoundingClientRect().width + (event.key === "ArrowRight" ? 20 : -20));
+    localStorage.setItem(widthKey, String(Math.round(width)));
+  });
+  layout.append(leftPanel, divider, rightPanel);
   area.appendChild(layout);
   leftPanel.scrollTop = state.reconLeftPanelScrollTop || 0;
 }
@@ -4032,7 +4303,7 @@ function buildDtcmUploadZone(){
     el("div", {class:"uz-sub"}, ["Click to browse, or drag a PDF/XLSX/XLS file here from the Dubai DET portal"]),
     input,
   ]);
-  zone.addEventListener("click", ()=> input.click());
+  zone.addEventListener("click", (e)=>{ if(e.target !== input) input.click(); });
   zone.addEventListener("dragover", (e)=>{ e.preventDefault(); zone.classList.add("dragover"); });
   zone.addEventListener("dragleave", ()=> zone.classList.remove("dragover"));
   zone.addEventListener("drop", (e)=>{
@@ -4062,6 +4333,12 @@ async function handleDtcmFile(file){
     const parsed = isExcel ? await parseDtcmExcelFile(file) : await parseDtcmPdfFile(file);
     state.dtcmReconcile = { parsed, error:null, loading:false, review:{}, manualPairs:[], sortColumn:"source", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
     state.reconWorkspaceId = reconWorkspaceInfo(parsed).id;
+    // Both PDF and Excel imports must use the same loaded monthly ledger.
+    // A restored reconciliation can be visible even when its associated
+    // Monthly Report data has not yet been restored into memory.
+    if(!state.monthGroups.some(g=>Array.isArray(g.rows) && g.rows.length)){
+      await restoreReportState();
+    }
   }catch(e){
     console.error(e);
     state.dtcmReconcile = { parsed:null, error: "Couldn't read that DTCM file: " + e.message, loading:false, review:{}, manualPairs:[], sortColumn:"source", sortDirection:"asc", statusFilter:["all"], guestFilter:"", amountOverrides:{}, remarks:{} };
@@ -4419,7 +4696,9 @@ function buildReconStatusFilter(results, filteredCount, opts){
       el("span", {class:"recon-filter-total"}, ["Checked visible: DTCM ", el("b",{},[fmtMoney(checkedTotals.dtcm)]), " AED · Internal ", el("b",{},[fmtMoney(checkedTotals.internal)]), " AED"]),
     ]),
   ]);
-  return el("div", {class:"recon-filter-bar"}, [topRow, checkedRow, bottomRow]);
+  // Keep export/search beside the status totals rather than on a mostly empty row.
+  bottomRow.appendChild(topRow);
+  return el("div", {class:"recon-filter-bar"}, [checkedRow, bottomRow]);
 }
 function draftLabel(kind){
   const item = state.reconManualDraft && state.reconManualDraft[kind];
@@ -5708,7 +5987,7 @@ function buildHostawayUploadZone(){
     el("div", {class:"uz-sub"}, ["Click to browse, or drag the XLSX/CSV file exported from Hostaway here"]),
     input,
   ]);
-  zone.addEventListener("click", ()=> input.click());
+  zone.addEventListener("click", (e)=>{ if(e.target !== input) input.click(); });
   zone.addEventListener("dragover", (e)=>{ e.preventDefault(); zone.classList.add("dragover"); });
   zone.addEventListener("dragleave", ()=> zone.classList.remove("dragover"));
   zone.addEventListener("drop", (e)=>{
@@ -5829,16 +6108,22 @@ function init(){
   });
   $("#generateBtn").addEventListener("click", ()=>generateReport(false));
 
-  $("#gearBtn").addEventListener("click", openDrawer);
-  $("#manageBtn").addEventListener("click", openDrawer);
+  $("#monthlyFolderOptions").appendChild($("#settingsDrawer"));
+  $("#monthlyUploadBtn").addEventListener("click", ()=>$("#monthlyFileInput").click());
+  $("#monthlyFileInput").addEventListener("change", async (e)=>{
+    const files = Array.from(e.target.files || []);
+    if(!files.length) return;
+    $("#monthlyUploadStatus").textContent = files.map(f=>f.name).join(" + ");
+    try { await handleReportAreaDrop(files); }
+    catch(err){ console.error(err); $("#monthlyUploadStatus").textContent = "Upload failed: " + err.message; }
+    e.target.value = "";
+  });
   $("#modeTabReport").addEventListener("click", ()=> setActiveMode("report"));
   $("#modeTabReconcile").addEventListener("click", ()=> setActiveMode("reconcile"));
   $("#modeTabSummary").addEventListener("click", ()=> setActiveMode("summary"));
   $("#modeTabHostaway").addEventListener("click", ()=> setActiveMode("hostaway"));
   setupReportDropZone();
-  $("#drawerCloseBtn").addEventListener("click", closeDrawer);
-  $("#drawerOverlay").addEventListener("click", closeDrawer);
-  document.addEventListener("keydown", (e)=>{ if(e.key === "Escape") closeDrawer(); });
+
   document.addEventListener("keydown", handleReviewKeyNavigation);
   document.addEventListener("keydown", handleReconKeyNavigation);
 
@@ -5852,7 +6137,6 @@ function init(){
 
   if(!window.showDirectoryPicker){
     showFatalBrowserWarning();
-    openDrawer();
   } else {
     restoreReportState();
     loadReconArchiveIndex();

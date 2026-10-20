@@ -60,15 +60,17 @@ function getRoleColor(role) {
 function AttachmentPreview({ path, name, onClose }) {
   const [url, setUrl]         = useState(null)
   const [loading, setLoading] = useState(true)
+  const [accessError, setAccessError] = useState('')
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
   const isPDF   = /\.pdf$/i.test(name || '')
 
   useEffect(() => {
     let active = true
     supabase.storage.from('attachments').createSignedUrl(path, 3600)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
         if (active) {
           setUrl(data?.signedUrl || null)
+          setAccessError(error?.message || '')
           setLoading(false)
         }
       })
@@ -113,7 +115,9 @@ function AttachmentPreview({ path, name, onClose }) {
               </a>
             </div>
           )}
-          {!loading && !url && <div style={{ textAlign:'center', color:'#991b1b', padding:'40px' }}>Could not open this attachment.</div>}
+          {!loading && !url && <div style={{ textAlign:'center', color:'#991b1b', padding:'40px' }}>
+            Could not open this attachment.{accessError && <div style={{marginTop:'8px',fontSize:'12px',color:'#6b7280'}}>{accessError}</div>}
+          </div>}
         </div>
         <div style={{ padding:'8px 18px', background:'#f9fafb', borderTop:'1px solid #e5e7eb', flexShrink:0 }}>
           <p style={{ fontSize:'11px', color:'#9ca3af' }}>Click outside or press Escape to close</p>
@@ -340,11 +344,11 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 2: Payment Reason — full width */}
+          {/* Row 2: Category — full width */}
           <tr>
             <td style={s.lc}>
               付款事由
-              <span style={s.sub}>Payment<br/>Reason</span>
+              <span style={s.sub}>Category</span>
             </td>
             <td style={{ ...s.vc, textAlign:'left' }} colSpan={3}>
               {toProperCase(app.payment_reason)}
@@ -428,11 +432,11 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
             </td>
           </tr>
 
-          {/* Row 10: Remarks */}
+          {/* Row 10: Payment Reason / Remarks */}
           <tr>
             <td style={{ ...s.lc, verticalAlign:'top', paddingTop:'10px' }}>
               备注说明
-              <span style={s.sub}>Remarks</span>
+              <span style={s.sub}>Payment Reason<br/>/ Remarks</span>
             </td>
             <td style={{ ...s.vc, textAlign:'left', minHeight:'60px', whiteSpace:'pre-wrap', verticalAlign:'top' }} colSpan={3}>
               {app.remarks || '—'}
@@ -1774,7 +1778,7 @@ export default function ApplicationDetail() {
     (isSuperAdmin && ['pending','mgr_approved','fin_approved','escalated'].includes(app.status))
   const isOwner = app.submitted_by === user?.id
   const canEdit = (isOwner && ['draft','returned'].includes(app.status)) ||
-    (['finance','superadmin'].includes(profile?.role) && app.status === 'returned')
+    ['finance','superadmin'].includes(profile?.role)
   // Supporting evidence must remain available to the submitting user after
   // approval; it does not alter the application or its workflow status.
   const canAddSupportingAttachment = isOwner
@@ -1876,7 +1880,7 @@ export default function ApplicationDetail() {
                 {['staff','supervisor'].includes(profile?.role) ? 'Make Payment Voucher' : 'Create Payment Voucher'}
               </button>
             )}
-            {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}${isOwner ? '' : '&financeEdit=1'}`)}>✎ Edit</button>}
+            {canEdit && <button className="btn btn-primary btn-sm" onClick={() => navigate(`/new-application?edit=${id}${['finance','superadmin'].includes(profile?.role) ? '&financeEdit=1' : ''}`)}>✎ Edit</button>}
             <button className="btn btn-outline btn-sm" onClick={() => setShowDuplicate(true)}>⧉ Duplicate</button>
             {isSuperAdmin && !app.deleted_at && (
               <button className="btn btn-danger btn-sm" onClick={() => setShowDelete(true)}>🗑</button>
@@ -1912,7 +1916,7 @@ export default function ApplicationDetail() {
             )}
 
             {/* Manager actions */}
-            {(canActManager || isSuperAdmin) && app.status === 'pending' && !showReturnInline && !showRejectInline && (
+            {(canActManager || (isSuperAdmin && app.status === 'pending')) && app.status === 'pending' && !showReturnInline && !showRejectInline && (
               <>
                 <button className="btn btn-success btn-sm" disabled={actionLoading}
                   onClick={() => doAction('mgr_approve')}>✓ Approve → Finance</button>
@@ -1924,7 +1928,7 @@ export default function ApplicationDetail() {
             )}
 
             {/* Finance actions */}
-            {(canActFinance || isSuperAdmin) && ['pending','mgr_approved'].includes(app.status) && !showReturnInline && !showRejectInline && (
+            {(canActFinance || (isSuperAdmin && app.status === 'mgr_approved')) && ['pending','mgr_approved'].includes(app.status) && !showReturnInline && !showRejectInline && (
               <>
                 <button className="btn btn-success btn-sm" disabled={actionLoading}
                   onClick={() => doAction('fin_approve')}>✓ Approve → CFO</button>
