@@ -19,6 +19,7 @@ import DtcmReport from './pages/DtcmReport'
 import ImprestFundManagement from './pages/ImprestFundManagement'
 import LedgerTrackerWorkspace from './pages/LedgerTrackerWorkspace'
 import ApplicationClasses from './pages/ApplicationClasses'
+import CategoryManagement from './pages/CategoryManagement'
 import CommissionSheets from './pages/CommissionSheets'
 
 function PrivateRoute({ children, allowedRoles }) {
@@ -115,6 +116,7 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="application-classes" element={<PrivateRoute allowedRoles={['finance','superadmin']}><ApplicationClasses /></PrivateRoute>} />
+        <Route path="categories" element={<PrivateRoute allowedRoles={['finance','superadmin']}><CategoryManagement /></PrivateRoute>} />
         <Route path="profile" element={<PrivateRoute><MyProfile /></PrivateRoute>} />
         <Route path="qbo-settings" element={
           <PrivateRoute allowedRoles={['finance','ceo','cfo','superadmin']}>

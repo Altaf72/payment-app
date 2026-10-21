@@ -347,7 +347,7 @@ function PrintView({ app, companyColor, auditLog = [], attachmentCounts, qrDataU
           {/* Row 2: Category — full width */}
           <tr>
             <td style={s.lc}>
-              付款事由
+              类别
               <span style={s.sub}>Category</span>
             </td>
             <td style={{ ...s.vc, textAlign:'left' }} colSpan={3}>
@@ -2336,7 +2336,7 @@ export default function ApplicationDetail() {
                 <div><div className="form-label">Applicant</div><div>{toProperCase(app.submitted_by_name)}</div></div>
               </div>
               <hr className="divider" />
-              <div className="form-group"><div className="form-label">Payment Reason</div><div>{toProperCase(app.payment_reason)}</div></div>
+              <div className="form-group"><div className="form-label">Category</div><div>{toProperCase(app.payment_reason)}</div></div>
               <div className="form-row">
                 <div><div className="form-label">Payment Method</div><div>{toProperCase(app.payment_method_name) || '—'}</div></div>
                 <div><div className="form-label">Amount</div><div style={{ fontWeight:600, fontSize:'17px' }}>AED {formatCurrency(app.amount)}</div></div>

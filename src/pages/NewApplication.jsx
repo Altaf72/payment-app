@@ -6,7 +6,7 @@ import { amountToWords, formatDate } from '../lib/utils'
 import { buildPfsFieldsForCreation } from '../lib/pfs'
 
 // ── Keyboard-navigable combobox ──────────────────────────────
-function Combobox({ options, value, onChange, placeholder, allowNew }) {
+function Combobox({ options, value, onChange, placeholder, allowNew, maxLength }) {
   const [input, setInput]       = useState('')
   const [open, setOpen]         = useState(false)
   const [cursor, setCursor]     = useState(-1)
@@ -21,9 +21,10 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
     else if (!value) setInput('')
   }, [value, options])
 
+  const availableOptions = maxLength ? options.filter(o => o.name.length <= maxLength) : options
   const filtered = input
-    ? options.filter(o => o.name.toLowerCase().includes(input.toLowerCase()))
-    : options
+    ? availableOptions.filter(o => o.name.toLowerCase().includes(input.toLowerCase()))
+    : availableOptions
 
   const totalItems = filtered.length + (allowNew ? 1 : 0)
 
@@ -100,6 +101,7 @@ function Combobox({ options, value, onChange, placeholder, allowNew }) {
         ref={inputRef}
         className="form-control"
         placeholder={placeholder}
+        maxLength={maxLength}
         value={input}
         autoComplete="off"
         onChange={e => { setInput(e.target.value); setOpen(true); setCursor(-1); onChange('', e.target.value) }}
@@ -232,6 +234,7 @@ export default function NewApplication() {
   const duplicateId        = searchParams.get('duplicate')
   const isEditing          = !!editId
   const isFinanceEdit = searchParams.get('financeEdit') === '1' && ['finance','superadmin'].includes(profile?.role)
+  const categoryMaxLength = ['finance','superadmin'].includes(profile?.role) ? undefined : 25
   const submittingRef      = useRef(false)
   const attachmentsRef     = useRef([])
 
@@ -583,6 +586,9 @@ export default function NewApplication() {
   async function submit(asDraft = false) {
     if (submittingRef.current) return
     setError('')
+    if (categoryMaxLength && form.payment_reason_text.length > categoryMaxLength) {
+      return setError(`Category must be ${categoryMaxLength} characters or fewer. Please choose or enter a shorter category.`)
+    }
     if (!asDraft) {
       if (!form.company_id)               return setError('Please select a company')
       if (!form.payment_reason_text.trim()) return setError('Category is required')
@@ -711,11 +717,12 @@ export default function NewApplication() {
 
           {/* Category */}
           <div className="form-group">
-            <label className="form-label">付款事由 <span className="cn">Category</span><span className="required">*</span></label>
+            <label className="form-label">类别 <span className="cn">Category</span><span className="required">*</span></label>
             <Combobox
               options={paymentReasons}
               value={form.payment_reason_id}
               placeholder="Type or select category… (↑↓ to navigate, Enter to select)"
+              maxLength={categoryMaxLength}
               allowNew
               onChange={async (id, name) => {
                 if (id === '__new__') {
@@ -723,9 +730,10 @@ export default function NewApplication() {
                   setForm(f => ({ ...f, payment_reason_id: newId || '', payment_reason_text: name }))
                   return newId
                 }
-                setForm(f => ({ ...f, payment_reason_id: id, payment_reason_text: name || f.payment_reason_text }))
+                setForm(f => ({ ...f, payment_reason_id: id, payment_reason_text: name ?? '' }))
               }}
             />
+            {categoryMaxLength && <p className="form-hint">Category is limited to 25 characters. Longer categories can be entered by Finance or a System Administrator.</p>}
           </div>
 
           <div className="form-group">

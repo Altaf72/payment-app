@@ -12,6 +12,10 @@ export default function LoginPage() {
   const [password,   setPassword]   = useState('')
   const [showPw,     setShowPw]     = useState(false)
   const [error,      setError]      = useState('')
+  const [idleNotice] = useState(() => {
+    const expired = sessionStorage.getItem('payment_app_idle_notice') === '1'
+    return expired
+  })
   const [loading,    setLoading]    = useState(false)
   const [mode,       setMode]       = useState('login')  // 'login' | 'forgot'
   const [resetEmail, setResetEmail] = useState('')
@@ -84,6 +88,7 @@ export default function LoginPage() {
               </p>
 
               {error && <div className="alert alert-error">{error}</div>}
+              {idleNotice && <div className="alert alert-info">You were signed out after two hours of inactivity. Please sign in again.</div>}
 
               <form onSubmit={handleLogin}>
                 <div className="form-group">

@@ -267,10 +267,13 @@ export default function Layout() {
         </>}
 
         {['finance','superadmin'].includes(profile?.role) && (
-          <button className={`sidebar-link ${isActive('/application-classes') ? 'active' : ''}`}
+          <><button className={`sidebar-link ${isActive('/application-classes') ? 'active' : ''}`}
             onClick={() => go('/application-classes')}>
             <span className="icon">C</span> Application Classes
-          </button>
+          </button><button className={`sidebar-link ${isActive('/categories') ? 'active' : ''}`}
+            onClick={() => go('/categories')}>
+            <span className="icon">C</span> Categories
+          </button></>
         )}
 
         {isSuperAdmin && (

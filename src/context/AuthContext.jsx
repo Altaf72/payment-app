@@ -2,6 +2,9 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
+const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
+const IDLE_NOTICE_KEY = 'payment_app_idle_notice'
+const idleActivityKey = userId => `payment_app_last_activity:${userId}`
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
@@ -93,6 +96,87 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
+  useEffect(() => {
+    if (!user?.id) return
+    const activityKey = idleActivityKey(user.id)
+    let timer
+    let activityFlushTimer
+    let signingOut = false
+    const readActivity = () => Number(localStorage.getItem(activityKey)) || 0
+
+    function scheduleCheck() {
+      clearTimeout(timer)
+      const lastActivity = readActivity()
+      const remaining = Math.max(0, IDLE_TIMEOUT_MS - (Date.now() - lastActivity))
+      timer = setTimeout(checkIdle, remaining)
+    }
+
+    async function checkIdle() {
+      if (signingOut) return
+      const lastActivity = readActivity()
+      if (lastActivity && Date.now() - lastActivity < IDLE_TIMEOUT_MS) {
+        scheduleCheck()
+        return
+      }
+      signingOut = true
+      sessionStorage.setItem(IDLE_NOTICE_KEY, '1')
+      localStorage.setItem(IDLE_NOTICE_KEY, `${user.id}:${Date.now()}`)
+      await supabase.auth.signOut({ scope: 'local' })
+    }
+
+    function recordActivity() {
+      if (signingOut) return
+      const lastActivity = readActivity()
+      const now = Date.now()
+      if (lastActivity && now - lastActivity >= IDLE_TIMEOUT_MS) {
+        checkIdle()
+        return
+      }
+      // Limit writes during continuous mouse movement while sharing activity
+      // across all tabs signed in as this user in this browser.
+      if (!lastActivity || now - lastActivity >= 10000) {
+        clearTimeout(activityFlushTimer)
+        localStorage.setItem(activityKey, String(now))
+        scheduleCheck()
+      } else {
+        // Preserve the final activity time even when it falls inside the
+        // write-throttling window.
+        clearTimeout(activityFlushTimer)
+        activityFlushTimer = setTimeout(() => {
+          if (!signingOut && now > readActivity()) {
+            localStorage.setItem(activityKey, String(now))
+            scheduleCheck()
+          }
+        }, 1000)
+      }
+    }
+
+    function onStorage(event) {
+      if (event.key === activityKey && event.newValue) scheduleCheck()
+      if (event.key === IDLE_NOTICE_KEY && event.newValue?.startsWith(`${user.id}:`)) {
+        sessionStorage.setItem(IDLE_NOTICE_KEY, '1')
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible') checkIdle()
+    }
+
+    if (!readActivity()) localStorage.setItem(activityKey, String(Date.now()))
+    scheduleCheck()
+    const activityEvents = ['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'wheel']
+    activityEvents.forEach(event => window.addEventListener(event, recordActivity, { passive:true }))
+    window.addEventListener('storage', onStorage)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      clearTimeout(timer)
+      clearTimeout(activityFlushTimer)
+      activityEvents.forEach(event => window.removeEventListener(event, recordActivity))
+      window.removeEventListener('storage', onStorage)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [user?.id])
+
   async function signIn(email, password) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
@@ -110,10 +194,14 @@ export function AuthProvider({ children }) {
       await supabase.auth.signOut()
       throw new Error('This account has been merged. Please log in with your new account credentials.')
     }
+    localStorage.setItem(idleActivityKey(data.user.id), String(Date.now()))
+    sessionStorage.removeItem(IDLE_NOTICE_KEY)
     return data
   }
 
   async function signOut() {
+    if (user?.id) localStorage.removeItem(idleActivityKey(user.id))
+    sessionStorage.removeItem(IDLE_NOTICE_KEY)
     await supabase.auth.signOut()
   }
 

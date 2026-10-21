@@ -160,8 +160,32 @@ function CopyApplicationSummaryButton({ app }) {
     description,
   ].map(value => String(value || '').trim()).join(' | ')
 
+  async function copySummary(event) {
+    event.stopPropagation()
+    const batchFields = []
+    let batchError = null
+    if (app.batch_id || app.batch_number) {
+      let query = supabase.from('payment_batches')
+        .select('batch_number,transfer_ref,transfer_date,total_amount,application_count,note')
+      query = app.batch_id ? query.eq('id', app.batch_id) : query.eq('batch_number', app.batch_number)
+      const { data: batch, error } = await query.maybeSingle()
+      if (error || !batch) batchError = error?.message || 'Batch details were not found.'
+      const number = batch?.batch_number || app.batch_number
+      if (number) batchFields.push(`Batch: ${number}`)
+      if (batch?.transfer_ref) batchFields.push(`Transfer reference: ${batch.transfer_ref}`)
+      if (batch?.transfer_date) batchFields.push(`Transfer date: ${batch.transfer_date}`)
+      if (batch?.total_amount != null) batchFields.push(`Batch total: AED ${formatCurrency(batch.total_amount)}`)
+      if (batch?.application_count != null) batchFields.push(`Batch applications: ${batch.application_count}`)
+      if (batch?.note) batchFields.push(`Batch note: ${batch.note}`)
+    }
+    await copyToClipboard([text, ...batchFields].join(' | '))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+    if (batchError) window.alert(`Transaction copied, but full batch details could not be loaded: ${batchError}`)
+  }
+
   return <button type="button" title="Copy all transaction fields" aria-label="Copy all transaction fields"
-    onClick={async event => { event.stopPropagation(); await copyToClipboard(text); setCopied(true); setTimeout(() => setCopied(false), 1200) }}
+    onClick={copySummary}
     style={{background:'none',border:'1px solid var(--border)',borderRadius:'3px',padding:'1px 4px',cursor:'pointer',fontSize:'10px',color:copied ? 'var(--status-approved)' : 'var(--ink-3)',lineHeight:1,flexShrink:0}}>
     {copied ? '✓' : 'ALL'}
   </button>
@@ -197,8 +221,7 @@ function OwnerWillPayHint() {
   }}>✓ Owner Will Pay</span>
 }
 
-// Lets finance staff move through values with Tab and copy the focused value
-// straight into another application with Ctrl/Cmd+C.
+// Lets dashboard users copy the focused value with Enter or Ctrl/Cmd+C.
 function CopyableField({ children, copyText, label, title, style, onCopy }) {
   const copy = async () => {
     const text = String(copyText ?? '')
@@ -208,8 +231,13 @@ function CopyableField({ children, copyText, label, title, style, onCopy }) {
 
   return <div className="dashboard-copy-field" tabIndex={0} role="textbox"
     aria-label={label || `Copy ${copyText || 'field'}`} title={title} style={style}
+    onClick={event => {
+      if (!event.target.closest('button, input, a, select, textarea, [role="button"]')) event.currentTarget.focus()
+    }}
     onKeyDown={event => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+      if (event.target !== event.currentTarget) return
+      if ((event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) ||
+          ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c')) {
         event.preventDefault()
         copy()
       }
@@ -329,7 +357,9 @@ export default function FinanceDashboard() {
 
     event.preventDefault()
     const nextRow = rows[rowIndex]
-    cells[columnIndex]?.focus()
+    const targetCell = cells[columnIndex]
+    const targetField = targetCell?.querySelector('.dashboard-copy-field')
+    ;(targetField || targetCell)?.focus()
   }
 
   // Reset to page 1 when filters change (but not on page/size changes themselves)
@@ -966,7 +996,7 @@ export default function FinanceDashboard() {
     const properties = app.class_names?.length ? app.class_names : (app.class_name ? app.class_name.split(',').map(item => item.trim()).filter(Boolean) : [])
     const fields = [
       ['Reference', app.ref_number], ['Date', formatDate(app.created_at)], ['Applicant', app.submitted_by_name],
-      ['Company', app.company_name], ['Payment Reason', app.payment_reason], ['Apartment / Property', properties.join(', ') || '—'],
+      ['Company', app.company_name], ['Category', app.payment_reason], ['Apartment / Property', properties.join(', ') || '—'],
       ['Payee', app.payee_name], ['Amount', `AED ${formatCurrency(app.amount)}`], ['Remarks', app.remarks || '—'], ['Status', app.status],
     ]
     const win = window.open('', '_blank', 'width=800,height=650')
