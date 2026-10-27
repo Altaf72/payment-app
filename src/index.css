@@ -778,6 +778,9 @@ tbody tr:last-child { border-bottom: none; }
 .voucher-pdf-exporting .voucher-signatures span { display: block; font-size: 9px; color: #6b7280; text-transform: uppercase; }
 .voucher-pdf-exporting .voucher-signatures strong { display: block; min-height: 12mm; padding-top: 2mm; font-size: 10px; }
 .voucher-pdf-exporting .voucher-signatures i { display: block; border-top: 1px solid #111827; padding-top: 2mm; font-size: 8px; font-style: normal; color: #6b7280; }
+.voucher-pdf-exporting .voucher-signature-image { display: block; max-width: 100%; width: auto; height: 12mm; object-fit: contain; margin: 0 auto; }
+.voucher-pdf-exporting .voucher-signature-slot { height: 12mm; display: flex; align-items: center; justify-content: center; }
+.voucher-pdf-exporting .voucher-signature-slot .voucher-signature-image { max-height: 12mm; }
 .voucher-pdf-exporting footer { margin-top: 8mm; border-top: 1px solid #e5e7eb; padding-top: 2mm; text-align: center; font-size: 8px; color: #9ca3af; }
 
 /* DTCM management archive */
@@ -1179,5 +1182,8 @@ tbody tr:last-child { border-bottom: none; }
   .voucher-signatures span { display: block; font-size: 9px; color: #6b7280; text-transform: uppercase; }
   .voucher-signatures strong { display: block; min-height: 12mm; padding-top: 2mm; font-size: 10px; }
   .voucher-signatures i { display: block; border-top: 1px solid #111827; padding-top: 2mm; font-size: 8px; font-style: normal; color: #6b7280; }
+  .voucher-signature-image { display: block; max-width: 100%; width: auto; height: 12mm; object-fit: contain; margin: 0 auto; }
+  .voucher-signature-slot { height: 12mm; display: flex; align-items: center; justify-content: center; }
+  .voucher-signature-slot .voucher-signature-image { max-height: 12mm; }
   .voucher-print footer { margin-top: 8mm; border-top: 1px solid #e5e7eb; padding-top: 2mm; text-align: center; font-size: 8px; color: #9ca3af; }
 }

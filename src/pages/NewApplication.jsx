@@ -4,9 +4,10 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { amountToWords, formatDate } from '../lib/utils'
 import { buildPfsFieldsForCreation } from '../lib/pfs'
+import { readBrowserCache, writeBrowserCache } from '../lib/browserCache'
 
 // ── Keyboard-navigable combobox ──────────────────────────────
-function Combobox({ options, value, onChange, placeholder, allowNew, maxLength }) {
+function Combobox({ options, value, textValue, onChange, placeholder, allowNew, maxLength }) {
   const [input, setInput]       = useState('')
   const [open, setOpen]         = useState(false)
   const [cursor, setCursor]     = useState(-1)
@@ -16,10 +17,11 @@ function Combobox({ options, value, onChange, placeholder, allowNew, maxLength }
 
   // Sync display when value changes externally
   useEffect(() => {
+    if (textValue !== undefined) { setInput(textValue || ''); return }
     const sel = options.find(o => o.id === value)
     if (sel) setInput(sel.name)
     else if (!value) setInput('')
-  }, [value, options])
+  }, [value, options, textValue])
 
   const availableOptions = maxLength ? options.filter(o => o.name.length <= maxLength) : options
   const filtered = input
@@ -265,6 +267,8 @@ export default function NewApplication() {
   const [error, setError]             = useState('')
   const [outcomeNote, setOutcomeNote] = useState('')
   const [editingStatus, setEditingStatus] = useState('')
+  const [originalApplicant, setOriginalApplicant] = useState('')
+  const [applicationLoadFailed, setApplicationLoadFailed] = useState(false)
 
   // Persist form to sessionStorage so back-navigation restores it
   useEffect(() => {
@@ -292,24 +296,75 @@ export default function NewApplication() {
 
   async function loadAll() {
     setPageLoading(true)
-    const [{ data: co }, { data: pm }, { data: pr }, { data: py }, { data: bk }, { data: classes }, appResult] =
-      await Promise.all([
-        supabase.from('companies').select('*').eq('active', true).order('name'),
-        supabase.from('payment_methods').select('*').eq('active', true).order('name'),
-        supabase.from('payment_reasons').select('*').eq('active', true).order('name'),
-        supabase.from('payees').select('*').order('last_used_at', { ascending: false }),
-        supabase.from('banks').select('*').eq('active', true).order('name'),
-        supabase.from('application_classes').select('*').eq('active', true).order('name'),
-        (editId || duplicateId)
-          ? supabase.from('applications_full').select('*').eq('id', editId || duplicateId).single()
-          : Promise.resolve({ data: null }),
-      ])
+    const cacheKey = `new-application:${user.id}`
+    const cached = readBrowserCache(cacheKey)
+    const lists = [
+      ['companies', 'companies', 'id,name,active', query => query.eq('active', true).order('name')],
+      ['methods', 'payment_methods', 'id,name,active', query => query.eq('active', true).order('name')],
+      ['reasons', 'payment_reasons', 'id,name,active', query => query.eq('active', true).order('name')],
+      ['payees', 'payees', 'id,company_name,bank_name,bank_account,last_used_at', query => query.order('last_used_at', { ascending: false })],
+      ['banks', 'banks', 'id,name,active', query => query.eq('active', true).order('name')],
+      ['classes', 'application_classes', 'id,name,active', query => query.eq('active', true).order('name')],
+    ]
+    const fetchFirstBatch = async ([key, table, columns, configure]) => {
+      const { data } = await configure(supabase.from(table).select(columns)).range(0, 99)
+      return [key, data || []]
+    }
+    let config
+    if (cached) {
+      config = cached
+      // Refresh and progressively fill the cache without delaying the form.
+      void Promise.all(lists.map(async definition => {
+        const [key, table, columns, configure] = definition
+        const collected = []
+        for (let start = 0; ; start += 100) {
+          const { data, error } = await configure(supabase.from(table).select(columns)).range(start, start + 99)
+          if (error || !data?.length) break
+          collected.push(...data)
+          if (data.length < 100) break
+        }
+        if (!collected.length) return
+        config = { ...config, [key]: collected }
+        writeBrowserCache(cacheKey, config)
+        // Company access is user-specific; it is filtered below before display.
+        if (key === 'methods') setPaymentMethods(collected)
+        if (key === 'reasons') setPaymentReasons(collected)
+        if (key === 'payees') setPayees(collected)
+        if (key === 'banks') setBanks(collected)
+        if (key === 'classes') setApplicationClasses(collected)
+      }))
+    } else {
+      const firstBatch = await Promise.all(lists.map(fetchFirstBatch))
+      config = Object.fromEntries(firstBatch)
+      writeBrowserCache(cacheKey, config)
+      // Remaining suggestions arrive in the background, in small pages.
+      void Promise.all(lists.map(async definition => {
+        const [key, table, columns, configure] = definition
+        const collected = [...(config[key] || [])]
+        for (let start = 100; ; start += 100) {
+          const { data, error } = await configure(supabase.from(table).select(columns)).range(start, start + 99)
+          if (error || !data?.length) break
+          collected.push(...data)
+          if (data.length < 100) break
+        }
+        if (collected.length === (config[key] || []).length) return
+        const next = { ...config, [key]: collected }
+        writeBrowserCache(cacheKey, next)
+        // Company access is user-specific; it is filtered below before display.
+        if (key === 'methods') setPaymentMethods(collected)
+        if (key === 'reasons') setPaymentReasons(collected)
+        if (key === 'payees') setPayees(collected)
+        if (key === 'banks') setBanks(collected)
+        if (key === 'classes') setApplicationClasses(collected)
+      }))
+    }
+    const [{ data: myCompanyIds }, appResult] = await Promise.all([
+      supabase.from('user_companies').select('company_id').eq('user_id', user.id),
+      (editId || duplicateId) ? supabase.from('applications_full').select('*').eq('id', editId || duplicateId).single() : Promise.resolve({ data: null }),
+    ])
+    const co = config.companies || [], pm = config.methods || [], pr = config.reasons || [], py = config.payees || [], bk = config.banks || [], classes = config.classes || []
 
     // Filter companies to only ones assigned to this user
-    const { data: myCompanyIds } = await supabase
-      .from('user_companies')
-      .select('company_id')
-      .eq('user_id', user.id)
     const allowed = new Set((myCompanyIds || []).map(r => r.company_id))
     const filteredCo = isFinanceEdit ? (co || []) : (co || []).filter(c => allowed.has(c.id))
 
@@ -345,8 +400,15 @@ export default function NewApplication() {
     }
 
     const app = appResult?.data
+    if ((editId || duplicateId) && !app) {
+      setApplicationLoadFailed(true)
+      setError(`Could not load the application: ${appResult?.error?.message || 'record not found'}`)
+      setPageLoading(false)
+      return
+    }
     if (app) {
       setEditingStatus(app.status || '')
+      if (editId) setOriginalApplicant(app.submitted_by_name || '')
       // applications_full may be an explicit legacy view without class_name.
       const { data: applicationClass } = await supabase
         .from('applications')
@@ -583,6 +645,25 @@ export default function NewApplication() {
     return uploaded
   }
 
+  function patchCachedFinanceDashboardRow(applicationId, patch) {
+    const prefix = `finance_dashboard_page:${user?.id || 'anonymous'}:`
+    for (let index = 0; index < sessionStorage.length; index += 1) {
+      const key = sessionStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      try {
+        const cached = JSON.parse(sessionStorage.getItem(key) || 'null')
+        if (!Array.isArray(cached?.applications)) continue
+        let changed = false
+        const applications = cached.applications.map(row => {
+          if (row.id !== applicationId) return row
+          changed = true
+          return { ...row, ...patch }
+        })
+        if (changed) sessionStorage.setItem(key, JSON.stringify({ ...cached, applications }))
+      } catch {}
+    }
+  }
+
   async function submit(asDraft = false) {
     if (submittingRef.current) return
     setError('')
@@ -650,6 +731,24 @@ export default function NewApplication() {
         action:  isEditing ? 'submitted' : (asDraft ? 'created' : 'submitted'),
         note:    isEditing && !asDraft ? (isFinanceEdit ? (editingStatus === 'returned' ? 'Resubmitted by Finance after returned corrections' : 'Edited by Finance') : 'Resubmitted after corrections') : asDraft ? 'Saved as draft' : 'Application submitted',
       })
+      if (isEditing) {
+        patchCachedFinanceDashboardRow(appId, {
+          company_id: payload.company_id,
+          company_name: companies.find(company => company.id === payload.company_id)?.name || '',
+          payment_reason: payload.payment_reason,
+          amount: payload.amount,
+          payment_method_name: paymentMethods.find(method => method.id === payload.payment_method_id)?.name || form.payment_method_text,
+          payee_name: form.payee_name,
+          bank_name: payload.bank_name,
+          bank_account: payload.bank_account,
+          class_name: payload.class_name,
+          class_names: payload.class_names,
+          remarks: payload.remarks,
+          owner_will_pay: payload.owner_will_pay,
+          status: payload.status,
+          outcome_note: payload.outcome_note,
+        })
+      }
       // Clear session storage on success
       sessionStorage.removeItem(`pa_form_${editId||'new'}`)
       navigate(isFinanceEdit ? '/dashboard' : '/my-applications')
@@ -662,6 +761,7 @@ export default function NewApplication() {
   }
 
   if (pageLoading) return <div className="empty-state"><p>Loading…</p></div>
+  if (applicationLoadFailed) return <div className="empty-state"><p>{error}</p><button className="btn btn-outline" onClick={() => navigate(isFinanceEdit ? '/dashboard' : '/my-applications')}>Back</button></div>
 
   const today = formatDate(new Date().toISOString())
 
@@ -711,7 +811,7 @@ export default function NewApplication() {
             </div>
             <div className="form-group">
               <label className="form-label">申请人 <span className="cn">Applicant</span></label>
-              <input className="form-control" value={profile?.full_name || ''} readOnly />
+              <input className="form-control" value={isEditing ? originalApplicant : (profile?.full_name || '')} readOnly />
             </div>
           </div>
 
@@ -721,6 +821,7 @@ export default function NewApplication() {
             <Combobox
               options={paymentReasons}
               value={form.payment_reason_id}
+              textValue={form.payment_reason_text}
               placeholder="Type or select category… (↑↓ to navigate, Enter to select)"
               maxLength={categoryMaxLength}
               allowNew
@@ -759,6 +860,7 @@ export default function NewApplication() {
             <Combobox
               options={paymentMethods}
               value={form.payment_method_id}
+              textValue={form.payment_method_text}
               placeholder="Type or select method… (↑↓ to navigate)"
               allowNew
               onChange={async (id, name) => {
@@ -767,7 +869,7 @@ export default function NewApplication() {
                   setForm(f => ({ ...f, payment_method_id: newId || '', payment_method_text: name }))
                   return newId
                 }
-                setForm(f => ({ ...f, payment_method_id: id, payment_method_text: name || f.payment_method_text }))
+                setForm(f => ({ ...f, payment_method_id: id, payment_method_text: name ?? '' }))
               }}
             />
             <p className="form-hint">💡 Pre-selected based on your most-used method</p>
@@ -815,6 +917,7 @@ export default function NewApplication() {
               <Combobox
                 options={banks}
                 value={form.bank_id}
+                textValue={form.bank_name}
                 placeholder="Type or select bank…"
                 allowNew
                 onChange={async (id, name) => {
@@ -920,7 +1023,7 @@ export default function NewApplication() {
           <hr className="divider" />
 
           <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
-            <button className="btn btn-outline" onClick={() => { sessionStorage.removeItem(`pa_form_${editId||'new'}`); navigate('/my-applications') }}>
+            <button className="btn btn-outline" onClick={() => { sessionStorage.removeItem(`pa_form_${editId||'new'}`); navigate(isFinanceEdit ? '/dashboard' : '/my-applications') }}>
               Cancel
             </button>
             {!isEditing && (

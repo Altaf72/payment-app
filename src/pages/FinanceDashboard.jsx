@@ -68,6 +68,36 @@ function formatFileSize(bytes) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
+function attachmentDownloadName({ reference, classNames, name }) {
+  const extension = String(name || '').match(/(\.[a-z0-9]{1,12})$/i)?.[1] || ''
+  const clean = value => String(value || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const classLabel = (classNames || []).filter(Boolean).map(clean).filter(Boolean).join(', ')
+  return [clean(reference), classLabel].filter(Boolean).join(' - ') + extension || clean(name) || 'attachment'
+}
+
+function AttachmentDownloadButton({ path, name, app }) {
+  const [downloading, setDownloading] = useState(false)
+  async function download(event) {
+    event.preventDefault(); event.stopPropagation()
+    if (downloading) return
+    setDownloading(true)
+    try {
+      const { data, error } = await supabase.storage.from('attachments').download(path)
+      if (error) throw error
+      const url = URL.createObjectURL(data)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = attachmentDownloadName({ reference: app.ref_number, classNames: app.class_names?.length ? app.class_names : (app.class_name ? [app.class_name] : []), name })
+      document.body.appendChild(link); link.click(); link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      window.alert(`Download failed: ${error.message || 'Could not retrieve the attachment'}`)
+    } finally { setDownloading(false) }
+  }
+  return <button type="button" onClick={download} disabled={downloading} title={`Download ${name || 'attachment'}`} aria-label={`Download ${name || 'attachment'}`}
+    style={{border:'1px solid #bfdbfe',background:'#fff',color:'#1d4ed8',borderRadius:'4px',padding:'2px 5px',cursor:downloading ? 'wait' : 'pointer',fontSize:'11px',lineHeight:1}}>{downloading ? '…' : '↓'}</button>
+}
+
 function AttachmentPill({ path, name, size, tabIndex }) {
   const [show, setShow] = useState(false)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
@@ -162,26 +192,9 @@ function CopyApplicationSummaryButton({ app }) {
 
   async function copySummary(event) {
     event.stopPropagation()
-    const batchFields = []
-    let batchError = null
-    if (app.batch_id || app.batch_number) {
-      let query = supabase.from('payment_batches')
-        .select('batch_number,transfer_ref,transfer_date,total_amount,application_count,note')
-      query = app.batch_id ? query.eq('id', app.batch_id) : query.eq('batch_number', app.batch_number)
-      const { data: batch, error } = await query.maybeSingle()
-      if (error || !batch) batchError = error?.message || 'Batch details were not found.'
-      const number = batch?.batch_number || app.batch_number
-      if (number) batchFields.push(`Batch: ${number}`)
-      if (batch?.transfer_ref) batchFields.push(`Transfer reference: ${batch.transfer_ref}`)
-      if (batch?.transfer_date) batchFields.push(`Transfer date: ${batch.transfer_date}`)
-      if (batch?.total_amount != null) batchFields.push(`Batch total: AED ${formatCurrency(batch.total_amount)}`)
-      if (batch?.application_count != null) batchFields.push(`Batch applications: ${batch.application_count}`)
-      if (batch?.note) batchFields.push(`Batch note: ${batch.note}`)
-    }
-    await copyToClipboard([text, ...batchFields].join(' | '))
+    await copyToClipboard([text, app.batch_number ? `Batch: ${app.batch_number}` : null].filter(Boolean).join(' | '))
     setCopied(true)
     setTimeout(() => setCopied(false), 1200)
-    if (batchError) window.alert(`Transaction copied, but full batch details could not be loaded: ${batchError}`)
   }
 
   return <button type="button" title="Copy all transaction fields" aria-label="Copy all transaction fields"
@@ -253,6 +266,7 @@ export default function FinanceDashboard() {
   const [applications, setApplications]       = useState([])
   const [total, setTotal]                     = useState(0)
   const [loading, setLoading]                 = useState(true)
+  const [searchInProgress, setSearchInProgress] = useState(false)
   const [loadError, setLoadError]             = useState('')
   const [companies, setCompanies]             = useState([])
   const [companiesSorted, setCompaniesSorted] = useState([])
@@ -271,6 +285,7 @@ export default function FinanceDashboard() {
   const [reviewedIds, setReviewedIds] = useState(() => new Set())
   const [showUncheckedOnly, setShowUncheckedOnly] = useState(false)
   const [activeRowId, setActiveRowId] = useState(() => sessionStorage.getItem('finance_dashboard_active_row') || null)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(null)
   const loadRequestRef = useRef(0)
   const dashboardTableRef = useRef(null)
 
@@ -290,6 +305,7 @@ export default function FinanceDashboard() {
 
   // Filters — restored from session
   const [search,           setSearch]           = useState(saved.search           || '')
+  const [searchRequest,    setSearchRequest]    = useState(saved.search           || '')
   const [amountSearch,     setAmountSearch]     = useState(saved.amountSearch     || '')
   const [filterStatus,     setFilterStatus]     = useState(saved.filterStatus     || (isManager ? 'pending' : ''))
   const [filterCompany,    setFilterCompany]    = useState(saved.filterCompany    || '')
@@ -309,6 +325,13 @@ export default function FinanceDashboard() {
     }))
   }, [search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, page, pageSize])
 
+  // Avoid an expensive database search on every keystroke.  The visible input
+  // updates immediately; the query starts only after typing has paused.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchRequest(search), 350)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
   useEffect(() => {
     if (activeRowId) sessionStorage.setItem('finance_dashboard_active_row', activeRowId)
     else sessionStorage.removeItem('finance_dashboard_active_row')
@@ -320,6 +343,10 @@ export default function FinanceDashboard() {
     dashboardTableRef.current?.querySelectorAll('tr[data-dashboard-row] > td')
       .forEach(cell => { cell.tabIndex = -1 })
   }, [applications, reviewedIds, showUncheckedOnly])
+
+  // A completed result (including zero rows) clears the temporary search
+  // message without leaving a permanent "searched" status on the dashboard.
+  useEffect(() => { setSearchInProgress(false) }, [applications, loadError])
 
   function handleDashboardGridKeyDown(event) {
     const isArrowKey = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)
@@ -367,11 +394,11 @@ export default function FinanceDashboard() {
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment])
+  }, [searchRequest, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment])
 
   useEffect(() => {
-    load()
-  }, [page, pageSize, search, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
+    load({ preferCache:true })
+  }, [page, pageSize, searchRequest, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
 
   useEffect(() => {
     let active = true
@@ -442,10 +469,40 @@ export default function FinanceDashboard() {
     })
   }
 
-  async function load() {
+  function dashboardCacheKey() {
+    return `finance_dashboard_page:${user?.id || 'anonymous'}:${profile?.role || 'unknown'}:${JSON.stringify({
+      page, pageSize, search: searchRequest, amountSearch, filterStatus, filterCompany, filterBatch,
+      batchTotalSearch, filterAttachment, allowedCompanyIds,
+    })}`
+  }
+
+  function restoreDashboardCache() {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(dashboardCacheKey()) || 'null')
+      if (!cached?.savedAt || !Array.isArray(cached.applications)) return false
+      setApplications(cached.applications)
+      setTotal(Number(cached.total || 0))
+      setLastRefreshedAt(cached.savedAt)
+      setLoadError('')
+      setLoading(false)
+      return true
+    } catch { return false }
+  }
+
+  function saveDashboardCache(rows, rowCount, savedAt = Date.now()) {
+    try {
+      sessionStorage.setItem(dashboardCacheKey(), JSON.stringify({ applications:rows, total:rowCount, savedAt }))
+    } catch {}
+    setLastRefreshedAt(savedAt)
+  }
+
+  async function load({ preferCache = false } = {}) {
     if (!scopeReady) return
+    if (preferCache && restoreDashboardCache()) return
     const requestId = ++loadRequestRef.current
-    setLoading(true)
+    // Keep existing rows visible while a revised search runs.  This prevents
+    // the table from flashing a full-screen Loading state between keystrokes.
+    if (applications.length === 0) setLoading(true)
     if (scopeError) {
       setApplications([])
       setTotal(0)
@@ -457,7 +514,8 @@ export default function FinanceDashboard() {
 
     // When searching/filtering: query ALL matching rows (no pagination limit)
     // When browsing: paginate to avoid loading unnecessary data
-    const isSearching = !!(search.trim() || amountSearch.trim() || batchTotalSearch.trim())
+    const isSearching = !!(searchRequest.trim() || amountSearch.trim() || batchTotalSearch.trim())
+    if (isSearching) setSearchInProgress(true)
     if (Array.isArray(allowedCompanyIds) && allowedCompanyIds.length === 0) {
       if (requestId !== loadRequestRef.current) return
       setApplications([])
@@ -466,7 +524,7 @@ export default function FinanceDashboard() {
       return
     }
 
-    const textTerm = search.trim().replace(/[,%()]/g, ' ').trim()
+    const textTerm = searchRequest.trim().replace(/[,%()]/g, ' ').trim()
     const batchTerm = filterBatch.trim().replace(/[,%()]/g, ' ').trim()
     const requestedBatchTotal = Number(batchTotalSearch)
     let batchTotalMatchNumbers = null
@@ -602,6 +660,20 @@ export default function FinanceDashboard() {
       return query
     }
 
+    function buildCountQuery() {
+      let query = supabase.from('applications_full')
+        .select('id', { count:'exact', head:true })
+        .is('deleted_at', null)
+      if (Array.isArray(allowedCompanyIds)) query = query.in('company_id', allowedCompanyIds)
+      if (filterStatus) query = query.eq('status', filterStatus)
+      if (filterCompany) query = query.eq('company_name', filterCompany)
+      if (batchTerm) query = query.ilike('batch_number', `%${batchTerm}%`)
+      if (Array.isArray(batchTotalMatchNumbers)) query = query.in('batch_number', batchTotalMatchNumbers)
+      if (filterAttachment === 'yes') query = query.not('attachment_path', 'is', null)
+      if (filterAttachment === 'no') query = query.is('attachment_path', null)
+      return query
+    }
+
     let data = []
     let count = 0
     let error = null
@@ -641,9 +713,8 @@ export default function FinanceDashboard() {
         .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     } else {
       const from = (page - 1) * pageSize
-      const result = await buildQuery(from, from + pageSize - 1, true)
+      const result = await buildQuery(from, from + pageSize - 1, false)
       data = result.data || []
-      count = result.count || 0
       error = result.error
     }
 
@@ -655,6 +726,17 @@ export default function FinanceDashboard() {
       setLoadError(`Could not load dashboard applications: ${error.message}`)
       setLoading(false)
       return
+    }
+
+    // Show the requested page immediately. Exact totals, class labels,
+    // comments and attachment metadata are secondary and may finish later.
+    if (!isSearching) {
+      setApplications(data)
+      setLoading(false)
+      const countResult = await buildCountQuery()
+      if (requestId !== loadRequestRef.current) return
+      if (countResult.error) console.error('Could not load exact dashboard count', countResult.error)
+      else count = countResult.count || 0
     }
 
     // Amount: server-side LIKE on cast — done client-side as postgres cant partial-match numerics
@@ -774,6 +856,7 @@ export default function FinanceDashboard() {
     // When searching, show actual result count not paginated count
     setTotal(isSearching ? rows.length : count)
     setLoading(false)
+    saveDashboardCache(rows, isSearching ? rows.length : count)
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -1208,9 +1291,12 @@ export default function FinanceDashboard() {
           </p>
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-          <button className="btn btn-outline" onClick={load} disabled={loading} title="Fetch the latest dashboard records">
+          <button className="btn btn-outline" onClick={() => load()} disabled={loading} title="Fetch the latest dashboard records">
             {loading ? 'Refreshing…' : '↻ Refresh'}
           </button>
+          {lastRefreshedAt && <span style={{fontSize:'11px',color:'var(--ink-3)',alignSelf:'center'}}>
+            Last refreshed {new Date(lastRefreshedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+          </span>}
           <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
         </div>
       </div>
@@ -1349,8 +1435,8 @@ export default function FinanceDashboard() {
         </div>
       )}
 
-      {/* Search mode banner */}
-      {isSearching && (
+      {/* Temporary search-progress notice */}
+      {searchInProgress && (
         <div style={{
           display:'flex', alignItems:'center', gap:'10px',
           padding:'10px 16px', marginBottom:'10px',
@@ -1359,13 +1445,10 @@ export default function FinanceDashboard() {
         }}>
           <span>🔍</span>
           <span>
-            Searching <strong>all {total} matching records</strong> across the entire database
+            Searching…
             {amountSearch && ` · Amount contains "${amountSearch}"`}
             {batchTotalSearch && ` · Batch total: AED ${batchTotalSearch}`}
             {search && ` · Text: "${search}"`}
-          </span>
-          <span style={{marginLeft:'auto',fontSize:'11px',color:'#b45309'}}>
-            Pagination hidden during search
           </span>
         </div>
       )}
@@ -1519,8 +1602,16 @@ export default function FinanceDashboard() {
                           {app.batch_number && (
                             <div style={{marginTop:'3px',display:'flex',alignItems:'center',gap:'4px',flexWrap:'wrap'}}>
                               <button type="button"
-                                title={`Show all transactions in ${app.batch_number}`}
+                                title={`Click to show transactions in ${app.batch_number}; press Enter or Ctrl+C to copy the batch number`}
                                 onClick={() => setFilterBatch(app.batch_number)}
+                                onKeyDown={event => {
+                                  if ((event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) ||
+                                      ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c')) {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                    copyToClipboard(app.batch_number)
+                                  }
+                                }}
                                 style={{
                                 fontSize:'9px',fontWeight:600,padding:'1px 6px',
                                 borderRadius:'20px',background:'#dbeafe',color:'#1e40af',
@@ -1625,16 +1716,16 @@ export default function FinanceDashboard() {
                           {(app.attachment_path || app.applicant_attachments?.length > 0 || app.finance_attachments?.length > 0) ? (
                             <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', maxWidth:'170px' }}>
                               {app.attachment_path && (
-                                <AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} />
+                                <div style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} /><AttachmentDownloadButton path={app.attachment_path} name={app.attachment_name} app={app} /></div>
                               )}
                               {(app.applicant_attachments || [])
                                 .filter(att => att.storage_path !== app.attachment_path)
                                 .map((att, index) => (
-                                  <AttachmentPill key={`${att.storage_path}-${index}`} path={att.storage_path}
-                                    name={att.file_name} size={att.file_size} tabIndex={-1} />
+                                  <div key={`${att.storage_path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.storage_path}
+                                    name={att.file_name} size={att.file_size} tabIndex={-1} /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} /></div>
                                 ))}
                               {(app.finance_attachments || []).map((att, index) => (
-                                <AttachmentPill key={`${att.path}-${index}`} path={att.path} name={att.name} size={att.size} tabIndex={-1} />
+                                <div key={`${att.path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.path} name={att.name} size={att.size} tabIndex={-1} /><AttachmentDownloadButton path={att.path} name={att.name} app={app} /></div>
                               ))}
                             </div>
                           ) : (

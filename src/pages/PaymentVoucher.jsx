@@ -160,7 +160,21 @@ async function withPrintableLogo(company) {
   }
 }
 
-function PaymentVoucherPrint({ application, company, form, cheques, profile, isReceipt, printRef, exportingPdf }) {
+async function loadVoucherSignature(userId, currentUserId) {
+  if (!userId) return null
+  try {
+    if (userId === currentUserId) {
+      const local = localStorage.getItem(`sig_${userId}`)
+      if (local) return local
+    }
+    const { data, error } = await supabase.storage.from('signatures').createSignedUrl(`${userId}/signature.png`, 300)
+    if (error || !data?.signedUrl) return null
+    const response = await fetch(data.signedUrl)
+    return response.ok ? await fileToDataUrl(await response.blob()) : null
+  } catch { return null }
+}
+
+function PaymentVoucherPrint({ application, company, form, cheques, profile, isReceipt, printRef, exportingPdf, signatures, includeSignatures }) {
   const chequeRows = form.payment_mode === 'Cheque' ? cheques : []
   const description = form.payment_reason?.trim()
   const narration = form.narration?.trim()
@@ -245,9 +259,9 @@ function PaymentVoucherPrint({ application, company, form, cheques, profile, isR
       )}
 
       <section className="voucher-signatures">
-        <div><span>Prepared By</span><strong>{form.prepared_by_name || profile?.full_name || ''}</strong><i>Signature</i></div>
-        <div><span>Approved By</span><strong>{form.approved_by_name || ''}</strong><i>Signature</i></div>
-        <div><span>Received By</span><strong>{form.received_by_name || form.paid_to || ''}</strong><i>Signature</i></div>
+        <div><span>Prepared By</span><strong>{includeSignatures && signatures.prepared ? (signatures.preparedName || '') : (form.prepared_by_name || profile?.full_name || '')}</strong><div className="voucher-signature-slot">{includeSignatures && signatures.prepared && <img src={signatures.prepared} alt="Preparer signature" className="voucher-signature-image" />}</div><i>Signature</i></div>
+        <div><span>Approved By</span><strong>{application ? (application.status === 'approved' ? application.cfo_approved_by_name || '' : '') : form.approved_by_name || ''}</strong><div className="voucher-signature-slot">{includeSignatures && signatures.approved && <img src={signatures.approved} alt="CFO signature" className="voucher-signature-image" />}</div><i>Signature</i></div>
+        <div><span>Received By</span><strong>{form.received_by_name || form.paid_to || ''}</strong><div className="voucher-signature-slot" /><i>Signature</i></div>
       </section>
 
       <footer>
@@ -291,6 +305,9 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   const [error, setError] = useState('')
   const [exportingPdf, setExportingPdf] = useState(false)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState('')
+  const [signatures, setSignatures] = useState({ prepared: null, approved: null })
+  const [signaturesLoading, setSignaturesLoading] = useState(true)
+  const [includeSignatures, setIncludeSignatures] = useState(true)
   const [form, setForm] = useState({
     voucher_number: '',
     installment_no: 1,
@@ -315,6 +332,23 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     load()
   }, [applicationId, voucherType, isStaff, user?.id])
 
+  useEffect(() => {
+    if (loading) return
+    if (!application || isStandalone) { setSignatures({ prepared: null, approved: null }); setSignaturesLoading(false); return }
+    let active = true
+    setSignaturesLoading(true)
+    setSignatures({ prepared: null, approved: null })
+    const preparerId = currentVoucherId ? currentVoucher?.created_by : user?.id
+    const approverId = application.status === 'approved' && application.cfo_approved_at ? application.cfo_approved_by : null
+    const preparerName = preparerId === user?.id ? Promise.resolve(profile?.full_name || '') :
+      supabase.from('users').select('full_name').eq('id', preparerId).maybeSingle().then(result => result.data?.full_name || '')
+    Promise.all([loadVoucherSignature(preparerId, user?.id), loadVoucherSignature(approverId, user?.id), preparerName])
+      .then(([prepared, approved, preparedName]) => { if (active) setSignatures({ prepared: preparedName ? prepared : null, approved, preparedName }) })
+      .catch(() => { if (active) setSignatures({ prepared: null, approved: null }) })
+      .finally(() => { if (active) setSignaturesLoading(false) })
+    return () => { active = false }
+  }, [loading, application, isStandalone, currentVoucherId, currentVoucher?.created_by, user?.id, profile?.full_name])
+
   useEffect(() => () => {
     if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl)
   }, [pdfPreviewUrl])
@@ -323,6 +357,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     const requestedVoucherId = searchParams.get('voucher')
     if (
       loading ||
+      signaturesLoading ||
       searchParams.get('download') !== '1' ||
       !currentVoucherId ||
       currentVoucherId !== requestedVoucherId ||
@@ -330,10 +365,11 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     ) return
     autoDownloadRef.current = requestedVoucherId
     handlePreviewPdf()
-  }, [loading, currentVoucherId, searchParams])
+  }, [loading, signaturesLoading, currentVoucherId, searchParams])
 
   async function load() {
     setLoading(true)
+    setSignaturesLoading(true)
     setError('')
 
     if (isStandalone) {
@@ -432,6 +468,9 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   function startNewVoucher(appData = application, companyData = company, vouchers = existingVouchers) {
     if (!appData) return
     const next = nextPaymentVoucherNumber(companyData?.prefix, appData.ref_number, vouchers)
+    const usedAmount = vouchers.filter(voucher => voucher.status !== 'cancelled')
+      .reduce((sum, voucher) => sum + Number(voucher.amount || 0), 0)
+    const balance = Math.round((Number(appData.amount || 0) - usedAmount) * 100) / 100
     setCurrentVoucherId(null)
     setCurrentVoucher(null)
     setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
@@ -440,12 +479,12 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
       installment_no: next.installmentNo,
       voucher_date: localDate(),
       paid_to: appData.payee_name || '',
-      amount: '',
+      amount: String(balance),
       currency: 'AED',
       receiving_company: appData.payee_name || '',
       payment_reason: appData.payment_reason || '',
       remarks: appData.remarks || '',
-      narration: appData.payment_reason || '',
+      narration: appData.remarks || '',
       payment_mode: 'Cheque',
       reference_no: appData.ref_number || '',
       prepared_by_name: profile?.full_name || '',
@@ -704,6 +743,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         receivedBy: form.received_by_name,
       }))
       const updatedVoucher = { ...voucher, status }
+      setCurrentVoucher(updatedVoucher)
       setForm(current => ({ ...current, status }))
       setExistingVouchers(current => {
         const found = current.some(item => item.id === updatedVoucher.id)
@@ -722,6 +762,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   }
 
   function handlePrint() {
+    if (signaturesLoading) { setError('Signatures are still loading. Please try again.'); return }
     const validationError = validate()
     if (validationError) {
       setError(validationError)
@@ -750,6 +791,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
   }
 
   async function buildPdfBlob() {
+    if (signaturesLoading) { setError('Signatures are still loading. Please try again.'); return null }
     const validationError = validate()
     if (validationError) {
       setError(validationError)
@@ -1095,6 +1137,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
             )}
 
             <hr className="divider" />
+            {!isStandalone && <div className="form-group"><label><input type="checkbox" checked={includeSignatures} onChange={event => setIncludeSignatures(event.target.checked)} /> Include saved signatures on print / PDF</label><div className="form-hint">Prepared By uses the voucher creator’s saved signature. Approved By uses the CFO’s saved signature only after CFO approval. Signatures saved only on another device cannot be shown here.</div>{signaturesLoading ? <div className="form-hint">Loading signatures…</div> : includeSignatures && <div className="form-hint">Prepared signature: {signatures.prepared ? 'available' : 'not available'} · CFO signature: {signatures.approved ? 'available' : 'not available'}</div>}</div>}
             <div className="form-row-3">
               <div className="form-group">
                 <label className="form-label">Prepared By</label>
@@ -1152,6 +1195,8 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         isReceipt={isReceipt}
         printRef={printRef}
         exportingPdf={exportingPdf}
+        signatures={signatures}
+        includeSignatures={includeSignatures}
       />
 
       {pdfPreviewUrl && (

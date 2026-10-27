@@ -139,6 +139,7 @@ export default function SettingsPage() {
   const [mergeSource, setMergeSource]     = useState(null)
   const [mergeTarget, setMergeTarget]     = useState('')
   const [mergingUser, setMergingUser]     = useState(false)
+  const [mergeNotice, setMergeNotice]     = useState('')
 
   // System health
   const [dbStats, setDbStats]           = useState(null)
@@ -347,15 +348,18 @@ export default function SettingsPage() {
     setMergingUser(true)
     try {
       // 1. Reassign all applications from source to target
-      await supabase.from('applications')
+      const { error: applicationError } = await supabase.from('applications')
         .update({ submitted_by: targetId })
         .eq('submitted_by', sourceId)
+      if (applicationError) throw applicationError
 
       // 2. Mark source as merged and deactivate
-      await supabase.from('users').update({
+      const { data: mergedUser, error: userError } = await supabase.from('users').update({
         merged_into: targetId,
         is_active: false,
-      }).eq('id', sourceId)
+      }).eq('id', sourceId).select('id,merged_into,is_active').single()
+      if (userError) throw userError
+      if (mergedUser.merged_into !== targetId || mergedUser.is_active) throw new Error('The source user was not marked as merged.')
 
       // 3. Log in audit
       await supabase.from('audit_log').insert({
@@ -365,14 +369,44 @@ export default function SettingsPage() {
         note: `User merged: ${sourceId} → ${targetId}. All applications reassigned.`,
       }).catch(() => {}) // audit log may fail due to FK — that's ok
 
-      flash('success', 'Users merged successfully. All applications reassigned.')
+      const source = users.find(item => item.id === sourceId)
+      const target = users.find(item => item.id === targetId)
+      const confirmation = `${source?.full_name || 'User'} was merged into ${target?.full_name || 'the selected account'}. Applications were reassigned.`
+      // Close first so the user immediately sees that the action completed.
       setMergeSource(null)
       setMergeTarget('')
-      load()
+      setMergeNotice(confirmation)
+      flash('success', confirmation)
+      void load()
     } catch (err) {
       flash('error', err.message || 'Merge failed')
     } finally {
       setMergingUser(false)
+    }
+  }
+
+  async function resetMergeInfo(mergedUser) {
+    if (!mergedUser?.merged_into) return
+    const confirmed = window.confirm(
+      `Reset merge information for ${mergedUser.full_name}?\n\nThis reactivates the account and removes its Merged status. Applications already reassigned to the surviving account will remain there.`
+    )
+    if (!confirmed) return
+    try {
+      const { data, error } = await supabase.rpc('reset_merged_user', { p_user_id: mergedUser.id })
+      if (error) throw error
+      if (!data?.id || data.merged_into || !data.is_active) {
+        throw new Error('The account could not be unmerged. No user record was changed.')
+      }
+      await supabase.from('audit_log').insert({
+        application_id: '00000000-0000-0000-0000-000000000000',
+        action_by: (await supabase.auth.getUser()).data.user?.id,
+        action: 'edited',
+        note: `Merge information reset for user ${mergedUser.id}. Account reactivated; reassigned applications were not moved.`,
+      }).catch(() => {})
+      flash('success', 'Merge information reset and account reactivated. Existing reassigned applications were not changed.')
+      load()
+    } catch (err) {
+      flash('error', `${err.message || 'Could not reset merge information'}. If this is a new deployment, run sql/reset_merged_user.sql in Supabase first.`)
     }
   }
 
@@ -633,6 +667,7 @@ export default function SettingsPage() {
             <div className="alert alert-info" style={{marginBottom:'16px'}}>
               Invite new users via <strong>Supabase → Authentication → Users → Invite</strong>. They appear here once they accept.
             </div>
+            {mergeNotice && <div className="alert alert-success" role="status" style={{marginBottom:'16px',display:'flex',justifyContent:'space-between',gap:'12px'}}><span>✓ {mergeNotice}</span><button type="button" className="btn btn-outline btn-sm" onClick={() => setMergeNotice('')}>Close</button></div>}
 
             {/* User cards */}
             {users.map(u => {
@@ -771,6 +806,14 @@ export default function SettingsPage() {
                             onClick={() => setMergeSource(u)}
                             style={{whiteSpace:'nowrap'}}>
                             ⇄ Merge into…
+                          </button>
+                        )}
+                        {isMerged && (
+                          <button className="btn btn-outline btn-sm"
+                            onClick={() => resetMergeInfo(u)}
+                            style={{whiteSpace:'nowrap'}}
+                            title="Reactivate this account and remove its Merged status. Reassigned applications remain unchanged.">
+                            ↺ Reset Merge Info
                           </button>
                         )}
                         <button className="btn btn-outline btn-sm"
