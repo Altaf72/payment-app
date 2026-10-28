@@ -21,20 +21,23 @@ import LedgerTrackerWorkspace from './pages/LedgerTrackerWorkspace'
 import ApplicationClasses from './pages/ApplicationClasses'
 import CategoryManagement from './pages/CategoryManagement'
 import CommissionSheets from './pages/CommissionSheets'
+import InventoryControl from './pages/InventoryControl'
 
 function PrivateRoute({ children, allowedRoles }) {
-  const { user, profile, loading } = useAuth()
+  const { user, profile, loading, authError } = useAuth()
   const location = useLocation()
   if (loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b6b8a'}}>Loading…</div>
   if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
-  if (allowedRoles && profile && !allowedRoles.includes(profile.role)) return <Navigate to="/" replace />
+  if (!profile) return <div role="alert" style={{padding:24}}>Unable to load your user profile: {authError || 'Please retry or contact your administrator.'}</div>
+  if (allowedRoles && !allowedRoles.includes(profile.role)) return <Navigate to="/" replace />
   return children
 }
 
 function ModuleRoute({ children, moduleKey }) {
   const { profile, loading, hasModule } = useAuth()
-  if (loading) return null
-  if (profile && !hasModule(moduleKey)) return <Navigate to="/" replace />
+  if (loading) return <div style={{padding:24}}>Loading permissions…</div>
+  if (!profile) return <div role="alert" style={{padding:24}}>User profile unavailable.</div>
+  if (!hasModule(moduleKey)) return <Navigate to="/" replace />
   return children
 }
 
@@ -49,14 +52,16 @@ function HomeRedirect() {
 }
 
 function LoginRoute() {
-  const { user } = useAuth()
+  const { user, profile, loading, authError } = useAuth()
   const location = useLocation()
   const requestedPath = location.state?.from
   const destination = typeof requestedPath === 'string' &&
     requestedPath.startsWith('/') && !requestedPath.startsWith('//')
     ? requestedPath
     : '/'
-  return !user ? <LoginPage /> : <Navigate to={destination} replace />
+  if (loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b6b8a'}}>Loading…</div>
+  if (user && !profile) return <div role="alert" style={{padding:24}}>Signed in, but unable to load your user profile: {authError || 'Please retry.'} <button onClick={() => window.location.reload()}>Retry</button></div>
+  return user && profile ? <Navigate to={destination} replace /> : <LoginPage />
 }
 
 export default function App() {
@@ -96,6 +101,7 @@ export default function App() {
           </PrivateRoute>
         } />
         <Route path="holiday-home-receipts" element={<ModuleRoute moduleKey="holiday_home_receipts"><HolidayHomeReceipts /></ModuleRoute>} />
+        <Route path="inventory-control" element={<ModuleRoute moduleKey="inventory_control"><InventoryControl /></ModuleRoute>} />
         <Route path="commission-sheets" element={<ModuleRoute moduleKey="commission_sheets"><CommissionSheets /></ModuleRoute>} />
         <Route path="payroll-integration" element={
           <PrivateRoute allowedRoles={['finance','cfo','superadmin']}>

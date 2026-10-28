@@ -1,0 +1,320 @@
+import { useEffect, useState } from 'react'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
+import appPackage from '../../package.json'
+
+const LANGUAGE_KEY = 'paymentapp.displayLanguage'
+
+const TEXT = {
+  en: {
+    menu: 'Menu',
+    close: 'Close',
+    paymentApplication: 'Payment Application',
+    paymentApplicationCaps: 'PAYMENT APPLICATION',
+    paymentApplicationCn: '付款申请单',
+    applications: 'Applications',
+    newApplication: 'New Application',
+    myApplications: 'My Applications',
+    dashboard: 'Dashboard',
+    finance: 'Finance',
+    vouchers: 'Vouchers',
+    payrollIntegration: 'Payroll Integration',
+    dtcmReport: 'DTCM Report',
+    imprestFunds: 'Imprest Fund Management',
+    chequeFlow: 'ChequeFlow',
+    commissionSheets: 'Commission Input Sheet',
+    localSettings: 'Local Settings',
+    admin: 'Admin',
+    settings: 'Settings',
+    account: 'Account',
+    mySignature: 'My Signature',
+    signOut: 'Sign out',
+    language: 'Language',
+    english: 'English',
+    chinese: 'Chinese',
+    roles: {
+      staff: 'Staff',
+      supervisor: 'Supervisor',
+      gro: 'GRO',
+      manager: 'Manager',
+      finance: 'Finance Officer',
+      ceo: 'CEO',
+      cfo: 'CFO',
+      superadmin: 'Super Admin',
+    },
+  },
+  zh: {
+    menu: '菜单',
+    close: '关闭',
+    paymentApplication: '付款申请',
+    paymentApplicationCaps: '付款申请',
+    paymentApplicationCn: '付款申请单',
+    applications: '申请',
+    newApplication: '新增申请',
+    myApplications: '我的申请',
+    dashboard: '仪表板',
+    finance: '财务',
+    vouchers: '凭证',
+    payrollIntegration: '工资整合',
+    dtcmReport: 'DTCM Report',
+    imprestFunds: 'Imprest Fund Management',
+    chequeFlow: 'ChequeFlow',
+    commissionSheets: '佣金输入表',
+    localSettings: '本地设置',
+    admin: '管理',
+    settings: '设置',
+    account: '账户',
+    mySignature: '我的签名',
+    signOut: '退出登录',
+    language: '显示语言',
+    english: 'English',
+    chinese: '中文',
+    roles: {
+      staff: '员工',
+      supervisor: '主管',
+      manager: '经理',
+      finance: '财务',
+      ceo: 'CEO',
+      cfo: 'CFO',
+      superadmin: '超级管理员',
+    },
+  },
+}
+
+function readDisplayLanguage() {
+  try {
+    const stored = localStorage.getItem(LANGUAGE_KEY)
+    return stored === 'zh' ? 'zh' : 'en'
+  } catch {
+    return 'en'
+  }
+}
+
+export default function Layout() {
+  const { profile, signOut, isFinanceOrAbove, isSuperAdmin, hasModule } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [displayLanguage, setDisplayLanguage] = useState(() => readDisplayLanguage())
+  const text = TEXT[displayLanguage]
+
+  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/')
+
+  useEffect(() => {
+    setMobileMenuOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LANGUAGE_KEY, displayLanguage)
+    } catch {
+      // Language preference is a convenience; ignore browser storage failures.
+    }
+    document.documentElement.lang = displayLanguage === 'zh' ? 'zh-CN' : 'en'
+    window.dispatchEvent(new CustomEvent('paymentapp:language-change', { detail: displayLanguage }))
+  }, [displayLanguage])
+
+  function go(path) {
+    navigate(path)
+    setMobileMenuOpen(false)
+  }
+
+  async function handleSignOut() {
+    await signOut()
+    navigate('/login')
+  }
+
+  const roleLabel = {
+    staff: text.roles.staff,
+    supervisor: text.roles.supervisor,
+    gro: text.roles.gro,
+    manager: text.roles.manager,
+    finance: text.roles.finance,
+    ceo: text.roles.ceo,
+    cfo: text.roles.cfo,
+    superadmin: text.roles.superadmin,
+  }[profile?.role] || ''
+
+  function renderLanguageSwitch() {
+    return (
+    <div className="language-switch" aria-label={text.language}>
+      <span>{text.language}</span>
+      <button type="button" className={displayLanguage === 'en' ? 'active' : ''}
+        onClick={() => setDisplayLanguage('en')}>
+        {text.english}
+      </button>
+      <button type="button" className={displayLanguage === 'zh' ? 'active' : ''}
+        onClick={() => setDisplayLanguage('zh')}>
+        {text.chinese}
+      </button>
+    </div>
+    )
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="mobile-header">
+        <button className="mobile-menu-button" type="button" aria-label="Open navigation"
+          onClick={() => setMobileMenuOpen(true)}>
+          {text.menu}
+        </button>
+        <div className="mobile-header-title">
+          <strong>{text.paymentApplication}</strong>
+          <span>{profile?.full_name}</span>
+        </div>
+        <div className="mobile-language-switch">
+          {renderLanguageSwitch()}
+        </div>
+      </header>
+
+      {mobileMenuOpen && <button className="mobile-sidebar-backdrop" aria-label="Close navigation"
+        onClick={() => setMobileMenuOpen(false)} />}
+
+      <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
+        <button className="mobile-sidebar-close" type="button" aria-label="Close navigation"
+          onClick={() => setMobileMenuOpen(false)}>
+          {text.close}
+        </button>
+        <div className="sidebar-logo">
+          <div className="cn">{text.paymentApplicationCn}</div>
+          <div className="en">{text.paymentApplicationCaps}</div>
+        </div>
+
+        {renderLanguageSwitch()}
+
+        {profile?.role === 'supervisor' && <button className={`sidebar-link ${isActive('/supervisor-dashboard') ? 'active' : ''}`}
+          onClick={() => go('/supervisor-dashboard')}>
+          <span className="icon">📊</span> Supervisor Dashboard
+        </button>}
+
+        {hasModule('payment_applications') && <>
+        <div className="sidebar-section">{text.applications}</div>
+
+        <button className={`sidebar-link ${isActive('/new-application') ? 'active' : ''}`}
+          onClick={() => go('/new-application')}>
+          <span className="icon">＋</span> {text.newApplication}
+        </button>
+
+        <button className={`sidebar-link ${isActive('/my-applications') ? 'active' : ''}`}
+          onClick={() => go('/my-applications')}>
+          <span className="icon">📋</span> {text.myApplications}
+        </button>
+
+        </>}
+
+        {isFinanceOrAbove && (
+          <button className={`sidebar-link ${isActive('/dashboard') ? 'active' : ''}`}
+            onClick={() => go('/dashboard')}>
+              <span className="icon">📊</span> {text.dashboard}
+          </button>
+        )}
+
+        {profile?.role === 'manager' && (
+          <>
+            <button className={`sidebar-link ${isActive('/dtcm-report') ? 'active' : ''}`} onClick={() => go('/dtcm-report')}>
+              <span className="icon">D</span> {text.dtcmReport}
+            </button>
+            <button className={`sidebar-link ${isActive('/imprest-funds') ? 'active' : ''}`} onClick={() => go('/imprest-funds')}>
+              <span className="icon">I</span> {text.imprestFunds}
+            </button>
+          </>
+        )}
+
+        {(hasModule('vouchers') || hasModule('holiday_home_receipts')) && (
+          <>
+            <div className="sidebar-section">{text.finance}</div>
+            {hasModule('vouchers') && <button className={`sidebar-link ${isActive('/vouchers') ? 'active' : ''}`}
+              onClick={() => go('/vouchers')}>
+              <span className="icon">V</span> {text.vouchers}
+            </button>}
+            {hasModule('holiday_home_receipts') && <button className={`sidebar-link ${isActive('/holiday-home-receipts') ? 'active' : ''}`} onClick={() => go('/holiday-home-receipts')}>
+              <span className="icon">R</span> Holiday Home Receipts
+            </button>}
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/payroll-integration') ? 'active' : ''}`}
+                onClick={() => go('/payroll-integration')}>
+                <span className="icon">P</span> {text.payrollIntegration}
+              </button>
+            )}
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/dtcm-report') ? 'active' : ''}`}
+                onClick={() => go('/dtcm-report')}>
+                <span className="icon">D</span> {text.dtcmReport}
+              </button>
+            )}
+            {['finance','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/imprest-funds') ? 'active' : ''}`} onClick={() => go('/imprest-funds')}>
+                <span className="icon">I</span> {text.imprestFunds}
+              </button>
+            )}
+            {['finance','manager','cfo','superadmin'].includes(profile?.role) && (
+              <button className={`sidebar-link ${isActive('/cheque-flow') ? 'active' : ''}`} onClick={() => go('/cheque-flow')}>
+                <span className="icon">C</span> {text.chequeFlow}
+              </button>
+            )}
+            <button className={`sidebar-link ${isActive('/qbo-settings') ? 'active' : ''}`}
+              onClick={() => go('/qbo-settings')}>
+              <span className="icon">L</span> {text.localSettings}
+            </button>
+          </>
+        )}
+
+        {hasModule('commission_sheets') && <>
+          <div className="sidebar-section">Commissions</div>
+          <button className={`sidebar-link ${isActive('/commission-sheets') ? 'active' : ''}`} onClick={() => go('/commission-sheets')}>
+            <span className="icon">C</span> {text.commissionSheets}
+          </button>
+        </>}
+
+        {['finance','superadmin'].includes(profile?.role) && (
+          <><button className={`sidebar-link ${isActive('/application-classes') ? 'active' : ''}`}
+            onClick={() => go('/application-classes')}>
+            <span className="icon">C</span> Application Classes
+          </button><button className={`sidebar-link ${isActive('/categories') ? 'active' : ''}`}
+            onClick={() => go('/categories')}>
+            <span className="icon">C</span> Categories
+          </button></>
+        )}
+
+        {isSuperAdmin && (
+          <>
+            <div className="sidebar-section">{text.admin}</div>
+            <button className={`sidebar-link ${isActive('/settings') ? 'active' : ''}`}
+              onClick={() => go('/settings')}>
+              <span className="icon">⚙</span> {text.settings}
+            </button>
+          </>
+        )}
+
+        {['manager','finance','cfo','ceo','superadmin'].includes(profile?.role) && (
+          <>
+            <div className="sidebar-section">{text.account}</div>
+            <button className={`sidebar-link ${isActive('/profile') ? 'active' : ''}`}
+              onClick={() => go('/profile')}>
+              <span className="icon">✍</span> {text.mySignature}
+            </button>
+          </>
+        )}
+
+        <div className="sidebar-bottom">
+          <div className="sidebar-user">
+            <strong>{profile?.full_name}</strong>
+            {roleLabel} · {profile?.email}
+          </div>
+          <button className="btn btn-outline w-full" style={{fontSize:'12px',justifyContent:'center'}} onClick={handleSignOut}>
+            {text.signOut}
+          </button>
+          <div style={{marginTop:'10px',textAlign:'center',fontSize:'10px',
+            color:'rgba(255,255,255,0.72)',letterSpacing:'.08em',fontWeight:600,
+            fontFamily:"'JetBrains Mono',monospace"}}>v{appPackage.version}</div>
+        </div>
+      </aside>
+
+      <main className="main-content">
+        <Outlet />
+      </main>
+    </div>
+  )
+}
+
+

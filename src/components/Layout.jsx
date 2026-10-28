@@ -23,6 +23,7 @@ const TEXT = {
     imprestFunds: 'Imprest Fund Management',
     chequeFlow: 'ChequeFlow',
     commissionSheets: 'Commission Input Sheet',
+    inventoryControl: 'Asset Inventory Control',
     localSettings: 'Local Settings',
     admin: 'Admin',
     settings: 'Settings',
@@ -60,6 +61,7 @@ const TEXT = {
     imprestFunds: 'Imprest Fund Management',
     chequeFlow: 'ChequeFlow',
     commissionSheets: '佣金输入表',
+    inventoryControl: '资产库存管理',
     localSettings: '本地设置',
     admin: '管理',
     settings: '设置',
@@ -258,6 +260,13 @@ export default function Layout() {
             </button>
           </>
         )}
+
+        {hasModule('inventory_control') && <>
+          <div className="sidebar-section">Inventory</div>
+          <button className={`sidebar-link ${isActive('/inventory-control') ? 'active' : ''}`} onClick={() => go('/inventory-control')}>
+            <span className="icon">📦</span> {text.inventoryControl}
+          </button>
+        </>}
 
         {hasModule('commission_sheets') && <>
           <div className="sidebar-section">Commissions</div>

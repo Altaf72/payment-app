@@ -10,6 +10,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
   const [moduleAccess, setModuleAccess] = useState([])
   const [moduleRoles, setModuleRoles] = useState([])
 
@@ -29,55 +30,53 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let active = true
-    let requestId = 0
-    let loadedUserId
+    let generation = 0
+    let pendingUserId = null
+    let loadedUserId = null
+    let initialized = false
 
     async function applySession(session) {
       if (!active) return
-      const currentRequest = ++requestId
       const nextUser = session?.user ?? null
       const nextUserId = nextUser?.id ?? null
-
-      // The same user may emit SIGNED_IN again when a browser window regains
-      // focus. Keep the existing app mounted once their profile is loaded.
-      if (loadedUserId === nextUserId) return
-
+      if ((nextUserId !== null && nextUserId === pendingUserId) ||
+          (initialized && nextUserId === loadedUserId && nextUserId !== null)) return
+      const currentGeneration = ++generation
+      pendingUserId = nextUserId
+      initialized = true
       setLoading(true)
-      setUser(nextUser)
-
+      setAuthError('')
       if (!nextUser) {
-        if (active && currentRequest === requestId) {
-          setProfile(null)
-          setModuleAccess([])
-          setModuleRoles([])
-          loadedUserId = null
-          setLoading(false)
-        }
+        loadedUserId = null
+        setUser(null)
+        setProfile(null)
+        setModuleAccess([])
+        setModuleRoles([])
+        pendingUserId = null
+        setLoading(false)
         return
       }
-
-      // Keep routes and the sidebar paused until both the role and the module
-      // permissions are known. Previously the session was marked ready first,
-      // which could leave staff users on a blank, non-interactive shell.
       try {
-        const nextAccess = await fetchProfile(nextUser.id)
-        if (active && currentRequest === requestId) {
-          setProfile(nextAccess.profile)
-          setModuleAccess(nextAccess.moduleAccess)
-          setModuleRoles(nextAccess.moduleRoles)
-          loadedUserId = nextUserId
-          setLoading(false)
-        }
+        const nextAccess = await fetchProfile(nextUserId)
+        if (!active || currentGeneration !== generation) return
+        if (!nextAccess.profile) throw new Error('User profile was not found')
+        setProfile(nextAccess.profile)
+        setModuleAccess(nextAccess.moduleAccess)
+        setModuleRoles(nextAccess.moduleRoles)
+        setUser(nextUser)
+        loadedUserId = nextUserId
       } catch (error) {
-        // Do not leave the whole application on an infinite loading screen if
-        // a temporary profile request fails. The next explicit auth event can
-        // retry, while the current signed-in session remains usable.
-        if (active && currentRequest === requestId) {
-          console.error('Could not load user profile', error)
-          setProfile(null)
-          setModuleAccess([])
-          setModuleRoles([])
-          loadedUserId = nextUserId
+        if (!active || currentGeneration !== generation) return
+        console.error('Could not load user profile', error)
+        setUser(nextUser)
+        setProfile(null)
+        setModuleAccess([])
+        setModuleRoles([])
+        setAuthError(error?.message || 'Unable to load account permissions')
+        loadedUserId = null
+      } finally {
+        if (active && currentGeneration === generation) {
+          pendingUserId = null
           setLoading(false)
         }
       }
@@ -85,13 +84,38 @@ export function AuthProvider({ children }) {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'TOKEN_REFRESHED') return
-      applySession(session)
+      // A sign-out must invalidate the previous user's deduplication state.
+      // Otherwise signing back in as the same user is ignored.
+      if (event === 'SIGNED_OUT') {
+        loadedUserId = null
+        pendingUserId = null
+        ++generation
+      }
+      // Supabase callbacks must not await queries that also use the auth client.
+      setTimeout(() => { if (active) applySession(session) }, 0)
     })
 
-    supabase.auth.getSession().then(({ data: { session } }) => applySession(session))
-
+    // Do not depend solely on INITIAL_SESSION. Some environments never deliver
+    // that event to the mounted provider, leaving /login stuck indefinitely.
+    const startupTimer = setTimeout(() => {
+      if (active && !initialized) {
+        setAuthError('Session initialization timed out. Please try signing in.')
+        setLoading(false)
+      }
+    }, 6000)
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active || initialized) return
+      if (error) throw error
+      applySession(data?.session ?? null)
+    }).catch(error => {
+      if (!active || initialized) return
+      setAuthError(error?.message || 'Could not restore session')
+      setLoading(false)
+    })
     return () => {
       active = false
+      clearTimeout(startupTimer)
+      ++generation
       subscription.unsubscribe()
     }
   }, [])
@@ -200,9 +224,18 @@ export function AuthProvider({ children }) {
   }
 
   async function signOut() {
+    // A local sign-out is sufficient for this browser and avoids a network
+    // request preventing the user from leaving the current session.
+    const { error } = await supabase.auth.signOut({ scope: 'local' })
+    if (error) throw error
     if (user?.id) localStorage.removeItem(idleActivityKey(user.id))
     sessionStorage.removeItem(IDLE_NOTICE_KEY)
-    await supabase.auth.signOut()
+    setUser(null)
+    setProfile(null)
+    setModuleAccess([])
+    setModuleRoles([])
+    setAuthError('')
+    setLoading(false)
   }
 
   const isFinanceOrAbove = profile?.role && ['finance','manager','ceo','cfo','superadmin'].includes(profile.role)
@@ -221,7 +254,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, profile, loading,
+      user, profile, loading, authError,
       signIn, signOut,
       isFinanceOrAbove, isSuperAdmin, isUpperManagement, moduleAccess, moduleRoles, hasModule, hasModuleRole
     }}>

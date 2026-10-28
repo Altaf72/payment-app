@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { COMPANY_PALETTE } from '../lib/companyColors'
+import { saveOrganizedDownload } from '../lib/organizedDownloads'
 
 // Attachment popup
 function AttachmentPreview({ path, name, onClose }) {
@@ -68,34 +69,103 @@ function formatFileSize(bytes) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
-function attachmentDownloadName({ reference, classNames, name }) {
-  const extension = String(name || '').match(/(\.[a-z0-9]{1,12})$/i)?.[1] || ''
+function downloadClasses(app) {
+  const values = Array.isArray(app.class_names) && app.class_names.length
+    ? app.class_names : [app.class_name || '']
+  return [...new Set(values.flatMap(value => String(value || '').split(','))
+    .map(value => value.trim()).filter(Boolean))]
+}
+
+function attachmentDownloadName({ reference, name }) {
   const clean = value => String(value || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim()
-  const classLabel = (classNames || []).filter(Boolean).map(clean).filter(Boolean).join(', ')
-  return [clean(reference), classLabel].filter(Boolean).join(' - ') + extension || clean(name) || 'attachment'
+  const original = clean(name) || 'attachment'
+  return [clean(reference), original].filter(Boolean).join(' - ')
 }
 
 function AttachmentDownloadButton({ path, name, app }) {
+  const downloadedKey = `payment_downloaded:${app.id}:${path}`
   const [downloading, setDownloading] = useState(false)
-  async function download(event) {
+  const [saved, setSaved] = useState(() => localStorage.getItem(downloadedKey) === '1')
+  const [savedPaths, setSavedPaths] = useState([])
+  const busyRef = useRef(false)
+  const [chooseClasses, setChooseClasses] = useState(false)
+  const [selectedClasses, setSelectedClasses] = useState([])
+  function beginDownload(event) {
     event.preventDefault(); event.stopPropagation()
-    if (downloading) return
+    if (busyRef.current) return
+    const classes = downloadClasses(app)
+    if (classes.length > 1) {
+      setSelectedClasses([])
+      setChooseClasses(true)
+    } else {
+      download(classes)
+    }
+  }
+  async function download(classes) {
+    if (busyRef.current) return
+    busyRef.current = true
     setDownloading(true)
     try {
       const { data, error } = await supabase.storage.from('attachments').download(path)
       if (error) throw error
+      if (!data) throw new Error('Attachment returned no data')
+      const downloadName = attachmentDownloadName({ reference: app.ref_number, name })
+      const organized = await saveOrganizedDownload({
+        blob:data, fileName:downloadName, date:app.created_at, classNames:classes,
+      })
+      if (organized.saved) {
+        localStorage.setItem(downloadedKey, '1')
+        setSaved(true)
+        setSavedPaths(organized.paths || (organized.path ? [organized.path] : []))
+        return
+      }
+      if (organized.paths?.length || organized.errors?.length) {
+        throw new Error(`Saved ${organized.paths?.length || 0} of ${classes.length || 1} class copies. ` +
+          (organized.errors || []).map(item => `${item.className}: ${item.message}`).join('; '))
+      }
+      // Fallback only when the browser does not support organized folder saving.
+      if (!organized.unsupported) throw new Error('Organized download did not complete')
       const url = URL.createObjectURL(data)
       const link = document.createElement('a')
       link.href = url
-      link.download = attachmentDownloadName({ reference: app.ref_number, classNames: app.class_names?.length ? app.class_names : (app.class_name ? [app.class_name] : []), name })
+      link.download = downloadName
       document.body.appendChild(link); link.click(); link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (error) {
       window.alert(`Download failed: ${error.message || 'Could not retrieve the attachment'}`)
-    } finally { setDownloading(false) }
+    } finally { busyRef.current = false; setDownloading(false) }
   }
-  return <button type="button" onClick={download} disabled={downloading} title={`Download ${name || 'attachment'}`} aria-label={`Download ${name || 'attachment'}`}
-    style={{border:'1px solid #bfdbfe',background:'#fff',color:'#1d4ed8',borderRadius:'4px',padding:'2px 5px',cursor:downloading ? 'wait' : 'pointer',fontSize:'11px',lineHeight:1}}>{downloading ? '…' : '↓'}</button>
+  const hint = savedPaths.length
+    ? `Saved ${savedPaths.length} copies:\n${savedPaths.join('\n')}`
+    : saved ? 'Previously saved (click to save another copy)' : `Download ${name || 'attachment'}`
+  return <>
+    <button type="button" onClick={beginDownload} disabled={downloading} title={hint} aria-label={`Download ${name || 'attachment'}`}
+      style={{border:'1px solid #bfdbfe',background:saved ? '#dcfce7' : '#fff',color:saved ? '#166534' : '#1d4ed8',borderRadius:'4px',padding:'2px 5px',cursor:downloading ? 'wait' : 'pointer',fontSize:'11px',lineHeight:1}}>{downloading ? '…' : saved ? '✓' : '↓'}</button>
+    {chooseClasses && <div role="presentation" onClick={event => { event.stopPropagation(); setChooseClasses(false) }}
+      style={{position:'fixed',inset:0,zIndex:3000,background:'rgba(0,0,0,.45)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div role="dialog" aria-modal="true" aria-label="Choose download classes" onClick={event => event.stopPropagation()}
+        style={{background:'#fff',borderRadius:10,padding:20,width:'100%',maxWidth:440,maxHeight:'85vh',overflowY:'auto',boxShadow:'0 12px 40px rgba(0,0,0,.2)'}}>
+        <h3 style={{margin:'0 0 8px',fontSize:17}}>Select class for download</h3>
+        <p style={{fontSize:12,color:'#475569',overflowWrap:'anywhere'}}>{name}</p>
+        <p style={{fontSize:12,color:'#475569'}}>Select one or more classes. The attachment will be saved in each selected class folder.</p>
+        <div style={{display:'flex',gap:12,marginBottom:10,fontSize:12}}>
+          <button type="button" onClick={() => setSelectedClasses(downloadClasses(app))}>Select all</button>
+          <button type="button" onClick={() => setSelectedClasses([])}>Clear</button>
+        </div>
+        {downloadClasses(app).map(className => <label key={className} style={{display:'flex',alignItems:'center',gap:9,padding:'8px 4px',fontSize:13}}>
+          <input type="checkbox" checked={selectedClasses.includes(className)} onChange={event => setSelectedClasses(previous => event.target.checked ? [...previous,className] : previous.filter(item => item !== className))} />
+          <span>{className}</span>
+        </label>)}
+        <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:18}}>
+          <button type="button" onClick={() => setChooseClasses(false)}>Cancel</button>
+          <button type="button" disabled={!selectedClasses.length} onClick={() => { const chosen = [...selectedClasses]; setChooseClasses(false); download(chosen) }}
+            style={{background:'#1d4ed8',color:'#fff',border:0,borderRadius:6,padding:'8px 14px',opacity:selectedClasses.length ? 1 : .5}}>
+            Download to {selectedClasses.length} class{selectedClasses.length === 1 ? '' : 'es'}
+          </button>
+        </div>
+      </div>
+    </div>}
+  </>
 }
 
 function AttachmentPill({ path, name, size, tabIndex }) {
