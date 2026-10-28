@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 
@@ -44,9 +44,14 @@ export default function InventoryControl() {
   const [message,setMessage] = useState('')
   const [transfer,setTransfer] = useState(null)
   const [history,setHistory] = useState(null)
-  const [newStore,setNewStore] = useState('')
+  const assetNameRef = useRef(null)
+  const transferQtyRef = useRef(null)
+  const dialogCloseRef = useRef(null)
+  const [historyCounts,setHistoryCounts] = useState({})
   const [imageUrls,setImageUrls] = useState({})
   const [photoViewer,setPhotoViewer] = useState(null)
+  const [activeTab,setActiveTab] = useState('register')
+  const [printMode,setPrintMode] = useState('combined')
   const [reportLocation,setReportLocation] = useState('all')
   const [reportStatus,setReportStatus] = useState('all')
   const [reportSearch,setReportSearch] = useState('')
@@ -60,6 +65,15 @@ export default function InventoryControl() {
     ])
     if (a.error || c.error || s.error || att.error) throw Error(a.error?.message || c.error?.message || s.error?.message || att.error?.message)
     setAssets(a.data||[]); setClasses(c.data||[]); setStores(s.data||[]); setAttachments(att.data||[])
+    // Fetch all movement identifiers in pages so history badges are accurate.
+    const counts = {}
+    for (let offset=0;;offset+=1000) {
+      const page=await supabase.from('inventory_movements').select('asset_id').range(offset,offset+999)
+      if(page.error) { setMessage(`History counts unavailable: ${page.error.message}`); break }
+      for(const item of page.data||[]) counts[item.asset_id]=(counts[item.asset_id]||0)+1
+      if((page.data||[]).length<1000) break
+    }
+    setHistoryCounts(counts)
     const paths = [...new Set([...(a.data||[]).map(x=>x.image_path),...(att.data||[]).map(x=>x.image_path)].filter(Boolean))]
     if (paths.length) {
       const signed = await supabase.storage.from('inventory-images').createSignedUrls(paths,3600)
@@ -87,11 +101,31 @@ export default function InventoryControl() {
   }
   function printVerification(){
     const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
-    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Inventory Physical Verification</title><style>@page{size:A4 landscape;margin:12mm}body{font:11px Arial,sans-serif;color:#111}h1{font-size:20px;margin:0 0 8px}.meta{margin-bottom:12px}.meta span{margin-right:24px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #777;padding:6px 5px;text-align:left;vertical-align:top}th{background:#eee}tr{break-inside:avoid}thead{display:table-header-group}.sign{margin-top:22px;display:flex;justify-content:space-between;gap:18px}.sign div{width:30%;border-top:1px solid #777;padding-top:6px}@media print{button{display:none}}</style></head><body><h1>Inventory Physical Verification Sheet</h1><div class="meta"><span>Generated: ${escapeHtml(todayLocal())}</span><span>Location: ${escapeHtml(reportLocation==='all'?'All locations':reportLocation.startsWith('apartment:')?className(reportLocation.slice(10)):storeName(reportLocation.slice(6)))}</span><span>Assets: ${reportAssets.length}</span><span>Recorded units: ${reportTotals.quantity}</span></div><table><thead><tr><th>#</th><th>Asset ID</th><th>Asset / Category</th><th>Location</th><th>Serial</th><th>System Qty</th><th>Physical Qty</th><th>Difference</th><th>Condition</th><th>Remarks</th></tr></thead><tbody>${reportAssets.map((x,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(x.asset_code)}</td><td>${escapeHtml(x.name)}<br>${escapeHtml(x.category)}</td><td>${escapeHtml(locationName(x))}</td><td>${escapeHtml(x.serial_number)}</td><td>${escapeHtml(x.quantity)}</td><td style="min-width:45px"></td><td style="min-width:45px"></td><td style="min-width:65px"></td><td style="min-width:90px"></td></tr>`).join('')}</tbody></table><div class="sign"><div>Checked by / Signature</div><div>Verification date</div><div>Reviewed by / Signature</div></div><p>Record discrepancies for review. This sheet does not change inventory quantities.</p></body></html>`
+    const sections=[]
+    if(printMode==='location'){
+      const grouped=new Map()
+      for(const asset of reportAssets){
+        const key=`${asset.location_type}:${asset.location_type==='apartment'?asset.class_id:asset.store_id}`
+        if(!grouped.has(key))grouped.set(key,{name:locationName(asset),rows:[]})
+        grouped.get(key).rows.push(asset)
+      }
+      sections.push(...[...grouped.values()].sort((a,b)=>a.name.localeCompare(b.name)))
+    }else{
+      sections.push({name:reportLocation==='all'?'All locations':reportLocation.startsWith('apartment:')?className(reportLocation.slice(10)):storeName(reportLocation.slice(6)),rows:reportAssets})
+    }
+    const pages=sections.map(section=>{
+      const qty=section.rows.reduce((sum,a)=>sum+Number(a.quantity||0),0)
+      return `<section class="location-sheet"><h1>Inventory Physical Verification Sheet</h1><div class="meta"><span>Generated: ${escapeHtml(todayLocal())}</span><span>Location: <strong>${escapeHtml(section.name)}</strong></span><span>Asset records: ${section.rows.length}</span><span>System units: ${qty}</span></div><table><thead><tr><th>#</th><th>Asset ID</th><th>Asset / Category</th><th>Location</th><th>Serial</th><th>System Qty</th><th>Physical Qty</th><th>Difference</th><th>Condition</th><th>Remarks</th></tr></thead><tbody>${section.rows.map((x,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(x.asset_code)}</td><td>${escapeHtml(x.name)}<br>${escapeHtml(x.category)}</td><td>${escapeHtml(locationName(x))}</td><td>${escapeHtml(x.serial_number)}</td><td>${escapeHtml(x.quantity)}</td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table><div class="sign"><div>Checked by / Signature</div><div>Verification date</div><div>Reviewed by / Signature</div></div><p>Discrepancies are for review only; this sheet does not adjust inventory balances.</p></section>`
+    }).join('')
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Inventory Physical Verification</title><style>@page{size:A4 landscape;margin:12mm}body{font:11px Arial,sans-serif;color:#111}h1{font-size:20px;margin:0 0 8px}.meta{margin-bottom:12px}.meta span{margin-right:24px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #777;padding:6px 5px;text-align:left;vertical-align:top}th{background:#eee}tr{break-inside:avoid}thead{display:table-header-group}.sign{margin-top:22px;display:flex;justify-content:space-between;gap:18px}.sign div{width:30%;border-top:1px solid #777;padding-top:6px}.location-sheet{break-after:page;page-break-after:always}.location-sheet:last-child{break-after:auto;page-break-after:auto}@media print{button{display:none}}</style></head><body>${pages}</body></html>`
     const win=window.open('','_blank','width=1200,height=850')
     if(!win){setMessage('Popup blocked. Allow popups for this site to print the verification sheet.');return}
     win.document.open();win.document.write(html);win.document.close();win.focus()
   }
+  function focusAssetName(){requestAnimationFrame(()=>{assetNameRef.current?.focus({preventScroll:true});assetNameRef.current?.scrollIntoView({behavior:'smooth',block:'center'})})}
+  useEffect(()=>{if(transfer)requestAnimationFrame(()=>transferQtyRef.current?.focus())},[transfer?.asset?.id])
+  useEffect(()=>{if(history||photoViewer)requestAnimationFrame(()=>dialogCloseRef.current?.focus())},[history?.asset?.id,photoViewer?.index])
+  useEffect(()=>{if(!transfer&&!history&&!photoViewer)return;const onKey=e=>{if(e.key==='Escape'){setTransfer(null);setHistory(null);setPhotoViewer(null)}};document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey)},[transfer,history,photoViewer])
   function openPhotos(paths,index=0){const available=[...new Set(paths.filter(path=>imageUrls[path]))];if(available.length)setPhotoViewer({urls:available.map(path=>imageUrls[path]),index:Math.max(0,Math.min(index,available.length-1))})}
   const set = (field,value) => setForm(f=>({...f,[field]:value}))
   function reset() {images.forEach(x=>URL.revokeObjectURL(x.url));setForm({...EMPTY,purchase_date:todayLocal()});setEditing(null);setImages([])}
@@ -111,7 +145,7 @@ export default function InventoryControl() {
         onBlur={()=>setSuggestOpen('')}
         onChange={e=>{set(field,e.target.value);setSuggestOpen(field)}}
         onKeyDown={e=>{if(e.key==='Escape')setSuggestOpen('');if(e.key==='Enter'&&suggestOpen===field&&options.length){e.preventDefault();set(field,options[0]);setSuggestOpen('')}}}
-        maxLength={180} required={field==='name'} placeholder={field==='category'?'TV / Fridge / Furniture':''}/>
+        ref={field==='name'?assetNameRef:undefined} maxLength={180} required={field==='name'} placeholder={field==='category'?'TV / Fridge / Furniture':''}/>
       {suggestOpen===field&&options.length>0&&<div role="listbox" aria-label={`${label} suggestions`} style={{position:'absolute',top:'100%',left:0,right:0,maxHeight:180,overflowY:'auto',background:'white',border:'1px solid #ccc',zIndex:30,boxShadow:'0 4px 10px #0002'}}>
         {options.map(v=><div key={v} role="option" aria-selected={form[field]===v} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 8px',gap:8}}>
           <button type="button" style={{flex:1,textAlign:'left',background:'none',border:0,cursor:'pointer'}}
@@ -132,7 +166,7 @@ export default function InventoryControl() {
     setBusy(true)
     try{const {error}=await supabase.rpc('inventory_soft_delete_asset',{p_asset_id:asset.id,p_reason:reason.trim()});if(error)throw error;setMessage('Asset deleted from active register; audit history preserved.');await load()}catch(e){setMessage(e.message)}finally{setBusy(false)}
   }
-  function editAsset(x) {setEditing(x.id);setImages([]);setForm({name:x.name||'',category:x.category||'',description:x.description||'',ownership:x.ownership,owner_name:x.owner_name||'',location_type:x.location_type,class_id:String(x.class_id||''),store_id:String(x.store_id||''),quantity:String(x.quantity),purchase_price:String(x.purchase_price),purchase_date:x.purchase_date||'',serial_number:x.serial_number||'',status:x.status});window.scrollTo({top:0,behavior:'smooth'})}
+  function editAsset(x) {setEditing(x.id);setImages([]);setForm({name:x.name||'',category:x.category||'',description:x.description||'',ownership:x.ownership,owner_name:x.owner_name||'',location_type:x.location_type,class_id:String(x.class_id||''),store_id:String(x.store_id||''),quantity:String(x.quantity),purchase_price:String(x.purchase_price),purchase_date:x.purchase_date||'',serial_number:x.serial_number||'',status:x.status});focusAssetName()}
 
   function duplicateAsset(x) {
     images.forEach(img=>URL.revokeObjectURL(img.url))
@@ -144,7 +178,7 @@ export default function InventoryControl() {
       quantity:String(x.quantity),purchase_price:String(x.purchase_price),purchase_date:todayLocal(),
       serial_number:'',status:'active'})
     setMessage(`New registration copied from ${x.asset_code}. Confirm the location, quantity and purchase details. Serial number and photographs are not copied.`)
-    window.scrollTo({top:0,behavior:'smooth'})
+    focusAssetName()
   }
 
   async function save(e) {
@@ -188,11 +222,6 @@ export default function InventoryControl() {
       setMessage(err.message)
     } finally {setBusy(false)}
   }
-  async function addStore(e) {
-    e.preventDefault();if (!newStore.trim()) return
-    setBusy(true)
-    try {const {error}=await supabase.from('inventory_stores').insert({name:newStore.trim()});if(error)throw Error(error.message);setNewStore('');await load();setMessage('Store created.')}catch(e){setMessage(e.message)}finally{setBusy(false)}
-  }
   async function moveAsset(e) {
     e.preventDefault();setBusy(true)
     try {
@@ -215,6 +244,11 @@ export default function InventoryControl() {
   return <div>
     <div className="page-header"><h1>Asset Inventory Control</h1><p>Apartment and warehouse assets · purchase cost · ownership · movements</p></div>
     {message&&<div className="alert alert-info" role="status">{message}</div>}
+    <div role="tablist" aria-label="Inventory sections" style={{display:'flex',gap:8,flexWrap:'wrap',borderBottom:'1px solid var(--border)',margin:'12px 0 18px'}}>
+      <button type="button" role="tab" aria-selected={activeTab==='register'} className={`btn ${activeTab==='register'?'btn-primary':'btn-outline'}`} onClick={()=>setActiveTab('register')}>Asset Inventory Control</button>
+      <button type="button" role="tab" aria-selected={activeTab==='report'} className={`btn ${activeTab==='report'?'btn-primary':'btn-outline'}`} onClick={()=>setActiveTab('report')}>Inventory Report &amp; On-site Verification</button>
+    </div>
+    {activeTab==='register'&&<>
     <div className="card"><div className="card-body"><h3>{editing?'Edit Asset':'Register Asset'}</h3>
       <form onSubmit={save}>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>
@@ -235,22 +269,23 @@ export default function InventoryControl() {
         <div style={{display:'flex',gap:8,marginTop:12}}><button className="btn btn-primary" disabled={busy}>{busy?'Saving…':editing?'Update Asset':'Save Asset'}</button>{editing&&<button className="btn btn-outline" type="button" onClick={reset}>Cancel Edit</button>}</div>
       </form>
     </div></div>
-    <div className="card" style={{marginTop:16}}><div className="card-body"><h3>Warehouse / Store Master</h3><form onSubmit={addStore} style={{display:'flex',gap:8,flexWrap:'wrap'}}><input className="form-control" style={{flex:'1 1 240px'}} placeholder="New store name" value={newStore} onChange={e=>setNewStore(e.target.value)}/><button className="btn btn-outline" disabled={busy||!newStore.trim()}>Add Store</button></form></div></div>
     <div className="card" style={{marginTop:16}}><div className="card-body"><h3>Asset Register ({filtered.length})</h3>
       <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}}><input className="form-control" style={{flex:'1 1 240px'}} placeholder="Search assets, serials, apartments" value={search} onChange={e=>setSearch(e.target.value)}/><select className="form-control" value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">All statuses</option>{['active','repair','damaged','disposed','lost'].map(x=><option key={x} value={x}>{x}</option>)}</select></div>
       <div className="table-wrap"><table><thead><tr><th>Image</th><th>Asset ID</th><th>Description</th><th>Location</th><th>Ownership</th><th>Qty</th><th>Unit price</th><th>Total cost</th><th>Status</th><th>Actions</th></tr></thead><tbody>
-        {filtered.map(x=><tr key={x.id}><td>{(()=>{const pics=[...attachments.filter(a=>a.asset_id===x.id).map(a=>a.image_path),x.image_path].filter(Boolean);return pics.length?<div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{pics.map(path=>imageUrls[path]?<button key={path} type="button" title="Enlarge image" onClick={()=>openPhotos(pics,pics.indexOf(path))} style={{padding:0,border:0,background:"none",cursor:"zoom-in"}}><img src={imageUrls[path]} alt={x.name} style={{width:45,height:42,objectFit:'cover',borderRadius:4}}/></button>:null)}</div>:'—'})()}</td><td>{x.asset_code}</td><td><strong>{x.name}</strong><div className="text-muted">{x.category}{x.serial_number?` · ${x.serial_number}`:''}</div></td><td>{locationName(x)}</td><td>{x.ownership==='company'?'Company':`Owner: ${x.owner_name}`}</td><td>{x.quantity}</td><td>{money(x.purchase_price)}</td><td>{money(x.purchase_price*x.quantity)}</td><td>{x.status}</td><td><div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-outline" onClick={()=>editAsset(x)}>Edit</button><button className="btn btn-outline" type="button" disabled={busy} onClick={()=>duplicateAsset(x)}>Duplicate</button><button className="btn btn-outline" disabled={x.status==='disposed'||x.status==='lost'} onClick={()=>setTransfer({asset:x,qty:String(x.quantity),location_type:'apartment',class_id:'',store_id:'',note:''})}>Transfer</button><button className="btn btn-outline" onClick={()=>showHistory(x)}>History</button>{['finance','superadmin'].includes(profile?.role)&&<button className="btn btn-danger" disabled={busy} onClick={()=>deleteAsset(x)}>Delete</button>}</div></td></tr>)}
+        {filtered.map(x=><tr key={x.id}><td>{(()=>{const pics=[...attachments.filter(a=>a.asset_id===x.id).map(a=>a.image_path),x.image_path].filter(Boolean);return pics.length?<div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{pics.map(path=>imageUrls[path]?<button key={path} type="button" title="Enlarge image" onClick={()=>openPhotos(pics,pics.indexOf(path))} style={{padding:0,border:0,background:"none",cursor:"zoom-in"}}><img src={imageUrls[path]} alt={x.name} style={{width:45,height:42,objectFit:'cover',borderRadius:4}}/></button>:null)}</div>:'—'})()}</td><td>{x.asset_code}</td><td><strong>{x.name}</strong><div className="text-muted">{x.category}{x.serial_number?` · ${x.serial_number}`:''}</div></td><td>{locationName(x)}</td><td>{x.ownership==='company'?'Company':`Owner: ${x.owner_name}`}</td><td>{x.quantity}</td><td>{money(x.purchase_price)}</td><td>{money(x.purchase_price*x.quantity)}</td><td>{x.status}</td><td><div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-outline" onClick={()=>editAsset(x)}>Edit</button><button className="btn btn-outline" type="button" disabled={busy} onClick={()=>duplicateAsset(x)}>Duplicate</button><button className="btn btn-outline" disabled={x.status==='disposed'||x.status==='lost'} onClick={()=>setTransfer({asset:x,qty:String(x.quantity),location_type:'apartment',class_id:'',store_id:'',note:''})}>Transfer</button><button className="btn btn-outline" onClick={()=>showHistory(x)}>History ({historyCounts[x.id]||0})</button>{['finance','superadmin'].includes(profile?.role)&&<button className="btn btn-danger" disabled={busy} onClick={()=>deleteAsset(x)}>Delete</button>}</div></td></tr>)}
         {!filtered.length&&<tr><td colSpan="10">No assets found.</td></tr>}
       </tbody></table></div>
       <p className="text-muted">Showing up to 2,000 most recently created records. Asset quantities and purchase prices are historical-cost tracking, not accounting depreciation.</p>
     </div></div>
-    <div className="card" style={{marginTop:16}}><div className="card-body">
+    </>}
+    {activeTab==='report'&&<div role="tabpanel" className="card" style={{marginTop:16}}><div className="card-body">
       <h3>Inventory Report &amp; On-site Verification</h3>
       <p className="text-muted">Filter the recorded assets, export a CSV for Excel, or print a count sheet for inventory staff. Physical counts and discrepancies are for review only and do not update the asset register.</p>
       <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'end',marginBottom:12}}>
         <label style={{flex:'1 1 210px'}}>Location<select className="form-control" value={reportLocation} onChange={e=>setReportLocation(e.target.value)}><option value="all">All locations</option><optgroup label="Apartments">{classes.map(x=><option key={x.id} value={`apartment:${x.id}`}>{x.name}</option>)}</optgroup><optgroup label="Warehouses">{stores.map(x=><option key={x.id} value={`store:${x.id}`}>{x.name}</option>)}</optgroup></select></label>
         <label style={{flex:'1 1 130px'}}>Status<select className="form-control" value={reportStatus} onChange={e=>setReportStatus(e.target.value)}><option value="all">All statuses</option>{['active','repair','damaged','disposed','lost'].map(x=><option key={x} value={x}>{x}</option>)}</select></label>
         <label style={{flex:'2 1 220px'}}>Search<input className="form-control" placeholder="Name, category, serial, owner" value={reportSearch} onChange={e=>setReportSearch(e.target.value)}/></label>
+        <label style={{flex:'1 1 210px'}}>Print arrangement<select className="form-control" value={printMode} onChange={e=>setPrintMode(e.target.value)}><option value="combined">Combined report</option><option value="location">Separate sheet per location</option></select></label>
         <button type="button" className="btn btn-outline" disabled={!reportAssets.length} onClick={exportReport}>Export CSV</button>
         <button type="button" className="btn btn-primary" disabled={!reportAssets.length} onClick={printVerification}>Print On-site Check Sheet</button>
       </div>
@@ -258,14 +293,31 @@ export default function InventoryControl() {
       <div className="table-wrap"><table><thead><tr><th>Asset ID</th><th>Asset</th><th>Category</th><th>Location</th><th>Ownership</th><th>Qty</th><th>Unit Cost</th><th>Total Cost</th><th>Status</th></tr></thead><tbody>{reportAssets.map(x=><tr key={x.id}><td>{x.asset_code}</td><td>{x.name}</td><td>{x.category}</td><td>{locationName(x)}</td><td>{x.ownership==='company'?'Company':x.owner_name||'Owner'}</td><td>{x.quantity}</td><td>{money(x.purchase_price)}</td><td>{money(Number(x.purchase_price)*Number(x.quantity))}</td><td>{x.status}</td></tr>)}{!reportAssets.length&&<tr><td colSpan="9">No assets match these filters.</td></tr>}</tbody></table></div>
       <p className="text-muted">Report uses the loaded register (up to 2,000 assets). For a complete audit of larger inventories, pagination will be required.</p>
     </div></div>
+    }
     {photoViewer&&<div role="dialog" aria-modal="true" aria-label="Asset photograph" onClick={()=>setPhotoViewer(null)} style={{position:'fixed',inset:0,zIndex:4000,background:'rgba(0,0,0,.85)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
       <div onClick={e=>e.stopPropagation()} style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12}}>
-        <div style={{display:'flex',alignItems:'center',gap:14,color:'white'}}><span>Photo {photoViewer.index+1} of {photoViewer.urls.length}</span><button type="button" className="btn btn-outline" onClick={()=>setPhotoViewer(null)}>Close ✕</button></div>
+        <div style={{display:'flex',alignItems:'center',gap:14,color:'white'}}><span>Photo {photoViewer.index+1} of {photoViewer.urls.length}</span><button type="button" className="btn btn-outline" ref={dialogCloseRef} onClick={()=>setPhotoViewer(null)}>Close ✕</button></div>
         <img src={photoViewer.urls[photoViewer.index]} alt="Enlarged asset photograph" style={{maxWidth:'95vw',maxHeight:'78vh',objectFit:'contain',borderRadius:6}}/>
         {photoViewer.urls.length>1&&<div style={{display:'flex',gap:12}}><button type="button" className="btn btn-outline" onClick={()=>setPhotoViewer(v=>({...v,index:(v.index+v.urls.length-1)%v.urls.length}))}>← Previous</button><button type="button" className="btn btn-outline" onClick={()=>setPhotoViewer(v=>({...v,index:(v.index+1)%v.urls.length}))}>Next →</button></div>}
       </div>
     </div>}
-    {transfer&&<div className="card" style={{marginTop:16}}><div className="card-body"><h3>Transfer — {transfer.asset.name}</h3><form onSubmit={moveAsset}><p>From: {locationName(transfer.asset)} · Available: {transfer.asset.quantity}</p><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}><label>Quantity<input className="form-control" type="number" min="1" max={transfer.asset.quantity} required value={transfer.qty} onChange={e=>setTransfer({...transfer,qty:e.target.value})}/></label>{locationInputs(transfer,setTransfer)}</div><label>Transfer notes<input className="form-control" value={transfer.note} onChange={e=>setTransfer({...transfer,note:e.target.value})}/></label><div style={{display:'flex',gap:8,marginTop:12}}><button className="btn btn-primary" disabled={busy}>Confirm Transfer</button><button className="btn btn-outline" type="button" onClick={()=>setTransfer(null)}>Cancel</button></div></form></div></div>}
-    {history&&<div className="card" style={{marginTop:16}}><div className="card-body"><div style={{display:'flex',justifyContent:'space-between'}}><h3>Movement History — {history.asset.name}</h3><button className="btn btn-outline" onClick={()=>setHistory(null)}>Close</button></div>{history.loading?'Loading…':history.error?<div className="alert alert-info">{history.error}</div>:<div className="table-wrap"><table><thead><tr><th>Date</th><th>Movement</th><th>Qty</th><th>From</th><th>To</th><th>Notes</th></tr></thead><tbody>{history.rows.map(x=><tr key={x.id}><td>{new Date(x.created_at).toLocaleString()}</td><td>{x.movement_type}</td><td>{x.quantity}</td><td>{x.from_location_type==='apartment'?className(x.from_class_id):x.from_location_type==='store'?storeName(x.from_store_id):'—'}</td><td>{x.to_location_type==='apartment'?className(x.to_class_id):x.to_location_type==='store'?storeName(x.to_store_id):'—'}</td><td>{x.note}</td></tr>)}{!history.rows.length&&<tr><td colSpan="6">No movements recorded.</td></tr>}</tbody></table></div>}</div></div>}
+    {transfer&&<div role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setTransfer(null)}} style={{position:'fixed',inset:0,zIndex:3900,background:'rgba(0,0,0,.65)',display:'flex',alignItems:'center',justifyContent:'center',padding:18}}>
+      <div role="dialog" aria-modal="true" aria-label={`Transfer ${transfer.asset.name}`} className="card" style={{width:'100%',maxWidth:680,maxHeight:'90vh',overflowY:'auto',background:'white',boxShadow:'0 18px 55px #0005'}}>
+        <div className="card-body"><div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}><h3>Transfer — {transfer.asset.name}</h3><button type="button" className="btn btn-outline" onClick={()=>setTransfer(null)}>Close ✕</button></div>
+          <form onSubmit={moveAsset}><p>From: {locationName(transfer.asset)} · Available: {transfer.asset.quantity}</p>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}><label>Quantity<input ref={transferQtyRef} className="form-control" type="number" min="1" max={transfer.asset.quantity} required value={transfer.qty} onChange={e=>setTransfer({...transfer,qty:e.target.value})}/></label>{locationInputs(transfer,setTransfer)}</div>
+            <label>Transfer notes<input className="form-control" value={transfer.note} onChange={e=>setTransfer({...transfer,note:e.target.value})}/></label>
+            <div style={{display:'flex',gap:8,marginTop:12}}><button className="btn btn-primary" disabled={busy}>Confirm Transfer</button><button className="btn btn-outline" type="button" onClick={()=>setTransfer(null)}>Cancel</button></div>
+          </form>
+        </div>
+      </div>
+    </div>}
+    {history&&<div role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setHistory(null)}} style={{position:'fixed',inset:0,zIndex:3900,background:'rgba(0,0,0,.65)',display:'flex',alignItems:'center',justifyContent:'center',padding:18}}>
+      <div role="dialog" aria-modal="true" aria-label={`Movement history for ${history.asset.name}`} className="card" style={{width:'100%',maxWidth:1000,maxHeight:'90vh',overflowY:'auto',background:'white',boxShadow:'0 18px 55px #0005'}}>
+        <div className="card-body"><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12}}><h3>Movement History — {history.asset.name} ({historyCounts[history.asset.id]||0})</h3><button ref={dialogCloseRef} className="btn btn-outline" onClick={()=>setHistory(null)}>Close ✕</button></div>
+          {history.loading?'Loading…':history.error?<div className="alert alert-info">{history.error}</div>:<div className="table-wrap"><table><thead><tr><th>Date</th><th>Movement</th><th>Qty</th><th>From</th><th>To</th><th>Notes</th></tr></thead><tbody>{history.rows.map(x=><tr key={x.id}><td>{new Date(x.created_at).toLocaleString()}</td><td>{x.movement_type}</td><td>{x.quantity}</td><td>{x.from_location_type==='apartment'?className(x.from_class_id):x.from_location_type==='store'?storeName(x.from_store_id):'—'}</td><td>{x.to_location_type==='apartment'?className(x.to_class_id):x.to_location_type==='store'?storeName(x.to_store_id):'—'}</td><td>{x.note}</td></tr>)}{!history.rows.length&&<tr><td colSpan="6">No movements recorded.</td></tr>}</tbody></table>{(historyCounts[history.asset.id]||0)>history.rows.length&&<p className="text-muted">Showing the most recent {history.rows.length} of {historyCounts[history.asset.id]} records.</p>}</div>}
+        </div>
+      </div>
+    </div>}
   </div>
 }
