@@ -876,7 +876,22 @@ export default function FinanceDashboard() {
       const ids = rows.map(a => a.id)
       const idChunks = []
       for (let index = 0; index < ids.length; index += 200) idChunks.push(ids.slice(index, index + 200))
-      const batchIds = [...new Set(rows.map(app => app.batch_id).filter(Boolean))]
+      // applications_full has historically exposed batch_number before batch_id
+      // in some deployments. Resolve IDs from the displayed batch number so a
+      // shared confirmation appears on every linked dashboard row either way.
+      const batchNumbers = [...new Set(rows.map(app => app.batch_number).filter(Boolean))]
+      let batchRows = []
+      let batchLookupError = null
+      if (batchNumbers.length) {
+        const result = await supabase.from('payment_batches').select('id,batch_number').in('batch_number', batchNumbers)
+        batchRows = result.data || []
+        batchLookupError = result.error
+      }
+      const batchIdByNumber = Object.fromEntries(batchRows.map(batch => [batch.batch_number, batch.id]))
+      const batchIds = [...new Set([
+        ...rows.map(app => app.batch_id).filter(Boolean),
+        ...batchRows.map(batch => batch.id),
+      ])]
       const [logResults, applicantAttachmentResults, batchAttachmentResult] = await Promise.all([
         Promise.all(idChunks.map(chunk => supabase
         .from('audit_log')
@@ -898,7 +913,7 @@ export default function FinanceDashboard() {
       const batchAttachmentError = batchAttachmentResult.error
       const financeLogs = logResults.flatMap(result => result.data || [])
 
-      if (batchAttachmentError) console.info('Shared batch confirmations are not available yet', batchAttachmentError)
+      if (batchLookupError || batchAttachmentError) console.info('Shared batch confirmations are not available yet', batchLookupError || batchAttachmentError)
       if (logError || applicantAttachmentError) {
         console.error(logError || applicantAttachmentError)
       } else {
@@ -936,7 +951,7 @@ export default function FinanceDashboard() {
           ...app,
           applicant_attachments: applicantAttachmentsByApp[app.id] || [],
           finance_attachments: (byApp[app.id] || []).filter(att => !deletedByApp[app.id]?.has(att.path)),
-          batch_attachments: batchAttachmentsByBatch[app.batch_id] || [],
+          batch_attachments: batchAttachmentsByBatch[app.batch_id || batchIdByNumber[app.batch_number]] || [],
           finance_comments: commentsByApp[app.id] || [],
         }))
       }
