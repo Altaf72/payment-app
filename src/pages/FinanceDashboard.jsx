@@ -209,6 +209,19 @@ function parseDeletedFinanceAttachment(note) {
   return null
 }
 
+const BATCH_ATTACH_MAX_FILES = 10
+const BATCH_ATTACH_MAX_BYTES  = 10 * 1024 * 1024
+const BATCH_ATTACH_EXT = ['jpg','jpeg','png','webp','gif','pdf','csv','xls','xlsx','doc','docx','txt']
+const BATCH_ATTACH_ACCEPT = BATCH_ATTACH_EXT.map(e => '.' + e).join(',')
+
+function batchAttachExt(name) {
+  return (String(name || '').split('.').pop() || '').toLowerCase()
+}
+
+function sanitizeStorageName(name) {
+  return String(name || 'file').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '').slice(-120) || 'file'
+}
+
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const USED_REFS_KEY = 'finance_dashboard_used_refs'
 const QUERY_PAGE_SIZE = 1000
@@ -354,6 +367,9 @@ export default function FinanceDashboard() {
   const [batchForm, setBatchForm]       = useState({ transfer_ref:'', transfer_date:'', note:'' })
   const [creatingBatch, setCreatingBatch] = useState(false)
   const [batchMsg, setBatchMsg]         = useState('')
+  const [batchFiles, setBatchFiles]     = useState([])   // { id, file, previewUrl }
+  const [batchDragOver, setBatchDragOver] = useState(false)
+  const batchFileInputRef = useRef(null)
   const [quickActionLoading, setQuickActionLoading] = useState(null)
   const [undoBatchLoading, setUndoBatchLoading] = useState(null)
   const [usedRefs, setUsedRefs] = useState(loadUsedRefs)
@@ -1297,6 +1313,105 @@ export default function FinanceDashboard() {
     }
   }
 
+  function addBatchFiles(fileList) {
+    const incoming = Array.from(fileList || [])
+    if (!incoming.length) return
+    const errors = []
+    setBatchFiles(prev => {
+      const next = [...prev]
+      incoming.forEach(file => {
+        const name = file.name || `screenshot-${Date.now()}.png`
+        if (!BATCH_ATTACH_EXT.includes(batchAttachExt(name))) {
+          errors.push(`${name}: unsupported file type`)
+        } else if (file.size > BATCH_ATTACH_MAX_BYTES) {
+          errors.push(`${name}: larger than ${formatFileSize(BATCH_ATTACH_MAX_BYTES)}`)
+        } else if (file.size === 0) {
+          errors.push(`${name}: file is empty`)
+        } else if (next.some(item => item.file.name === name && item.file.size === file.size)) {
+          // duplicate, ignore silently
+        } else if (next.length >= BATCH_ATTACH_MAX_FILES) {
+          errors.push(`Maximum ${BATCH_ATTACH_MAX_FILES} files per batch`)
+        } else {
+          next.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            file,
+            previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+          })
+        }
+      })
+      return next
+    })
+    setBatchMsg(errors.length ? [...new Set(errors)].join(' · ') : '')
+  }
+
+  function removeBatchFile(id) {
+    setBatchFiles(prev => {
+      const item = prev.find(f => f.id === id)
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      return prev.filter(f => f.id !== id)
+    })
+  }
+
+  function clearBatchFiles() {
+    setBatchFiles(prev => {
+      prev.forEach(f => f.previewUrl && URL.revokeObjectURL(f.previewUrl))
+      return []
+    })
+  }
+
+  function closeBatchModal() {
+    setShowBatchModal(false)
+    setBatchMsg('')
+    setBatchDragOver(false)
+    clearBatchFiles()
+  }
+
+  // Allow pasting screenshots (Ctrl/Cmd+V) while the batch modal is open
+  useEffect(() => {
+    if (!showBatchModal) return
+    function onPaste(e) {
+      const files = Array.from(e.clipboardData?.items || [])
+        .filter(item => item.kind === 'file')
+        .map(item => item.getAsFile())
+        .filter(Boolean)
+        .map((file, i) => file.name && file.name !== 'image.png'
+          ? file
+          : new File([file], `screenshot-${new Date().toISOString().replace(/[:.]/g,'-')}-${i + 1}.${(file.type.split('/')[1] || 'png').replace('jpeg','jpg')}`, { type: file.type }))
+      if (files.length) {
+        e.preventDefault()
+        addBatchFiles(files)
+      }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [showBatchModal])
+
+  async function uploadBatchFiles(batchId, userId) {
+    const failed = []
+    let uploaded = 0
+    for (const { file } of batchFiles) {
+      const path = `${userId}/batch/${batchId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${sanitizeStorageName(file.name)}`
+      const { error: upErr } = await supabase.storage.from('attachments')
+        .upload(path, file, { contentType: file.type || undefined, upsert: false })
+      if (upErr) { failed.push(`${file.name}: ${upErr.message}`); continue }
+      const { error: rowErr } = await supabase.from('payment_batch_attachments').insert({
+        batch_id:     batchId,
+        storage_path: path,
+        file_name:    file.name,
+        file_size:    file.size,
+        mime_type:    file.type || null,
+        uploaded_by:  userId,
+      })
+      if (rowErr) {
+        await supabase.storage.from('attachments').remove([path])
+        failed.push(`${file.name}: ${rowErr.message}`)
+        continue
+      }
+      uploaded++
+    }
+    return { uploaded, failed }
+  }
+
   async function createBatch() {
     if (!batchForm.transfer_ref.trim()) return setBatchMsg('Transfer reference is required')
     if (!batchForm.transfer_date)       return setBatchMsg('Transfer date is required')
@@ -1306,6 +1421,7 @@ export default function FinanceDashboard() {
       const { data: batchNum, error: rpcErr } = await supabase.rpc('generate_batch_number')
       if (rpcErr) throw new Error('Could not generate batch number: ' + rpcErr.message)
       const ids = selectedApps.map(a => a.id)
+      const userId = (await supabase.auth.getUser()).data.user?.id
       const { data: batch, error: bErr } = await supabase
         .from('payment_batches')
         .insert({
@@ -1316,7 +1432,7 @@ export default function FinanceDashboard() {
           force_reason:      null,
           total_amount:      batchTotal,
           application_count: ids.length,
-          created_by:        (await supabase.auth.getUser()).data.user?.id,
+          created_by:        userId,
         })
         .select().single()
       if (bErr) throw new Error('Batch insert failed: ' + bErr.message)
@@ -1325,10 +1441,20 @@ export default function FinanceDashboard() {
         .update({ batch_id: batch.id })
         .in('id', ids)
       if (lErr) throw new Error('Linking applications failed: ' + lErr.message)
-      setShowBatchModal(false)
+      let uploadFailures = []
+      if (batchFiles.length) {
+        const result = await uploadBatchFiles(batch.id, userId)
+        uploadFailures = result.failed
+        if (result.uploaded) window.dispatchEvent(new Event('payment-batch-confirmation-saved'))
+      }
       setBatchForm({ transfer_ref:'', transfer_date:'', note:'' })
+      clearBatchFiles()
+      setShowBatchModal(false)
       await load()
       clearSelection()
+      if (uploadFailures.length) {
+        alert(`Batch ${batchNum} was created, but ${uploadFailures.length} attachment${uploadFailures.length > 1 ? 's' : ''} could not be uploaded:\n\n${uploadFailures.join('\n')}`)
+      }
     } catch (err) {
       setBatchMsg(err.message || 'Failed to create batch')
     } finally {
@@ -2020,12 +2146,12 @@ export default function FinanceDashboard() {
         <div style={{position:'fixed',inset:0,zIndex:3000,background:'rgba(10,10,20,0.7)',
           display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
           <div style={{background:'#fff',borderRadius:'12px',width:'100%',maxWidth:'520px',
-            boxShadow:'0 24px 64px rgba(0,0,0,0.3)',overflow:'hidden'}}>
+            boxShadow:'0 24px 64px rgba(0,0,0,0.3)',overflow:'hidden',maxHeight:'92vh',display:'flex',flexDirection:'column'}}>
             <div style={{background:'var(--ink)',padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px'}}>
               <span style={{fontSize:'18px'}}>⧉</span>
               <h3 style={{color:'#fff',fontSize:'16px',fontWeight:600}}>Create Payment Batch</h3>
             </div>
-            <div style={{padding:'24px'}}>
+            <div style={{padding:'24px',overflowY:'auto'}}>
               {/* Summary */}
               <div style={{background:'var(--cream-2)',borderRadius:'8px',padding:'12px',marginBottom:'16px'}}>
                 <div style={{fontSize:'12px',fontWeight:600,color:'var(--ink-3)',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'.05em'}}>
@@ -2070,14 +2196,61 @@ export default function FinanceDashboard() {
                   value={batchForm.note}
                   onChange={e => setBatchForm(f => ({...f,note:e.target.value}))} />
               </div>
+              {/* Supporting documents */}
+              <div className="form-group">
+                <label className="form-label">
+                  Supporting Documents <span style={{color:'var(--ink-3)',fontWeight:400}}>(optional)</span>
+                </label>
+                <div
+                  role="button" tabIndex={0}
+                  onClick={() => batchFileInputRef.current?.click()}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); batchFileInputRef.current?.click() } }}
+                  onDragOver={e => { e.preventDefault(); setBatchDragOver(true) }}
+                  onDragLeave={() => setBatchDragOver(false)}
+                  onDrop={e => { e.preventDefault(); setBatchDragOver(false); addBatchFiles(e.dataTransfer.files) }}
+                  style={{
+                    border:`2px dashed ${batchDragOver ? '#7c3aed' : 'var(--border-2, #d1d5db)'}`,
+                    background: batchDragOver ? '#f5f3ff' : 'var(--cream-2)',
+                    borderRadius:'8px',padding:'14px',textAlign:'center',cursor:'pointer',fontSize:'12px',color:'var(--ink-3)',
+                  }}>
+                  <div style={{fontSize:'20px',marginBottom:'2px'}}>📎</div>
+                  <div><strong style={{color:'var(--ink-2)'}}>Click to browse</strong>, drag &amp; drop, or paste a screenshot (Ctrl/Cmd+V)</div>
+                  <div style={{marginTop:'2px',fontSize:'11px'}}>
+                    Images, PDF, Excel, Word, CSV · up to {formatFileSize(BATCH_ATTACH_MAX_BYTES)} each · max {BATCH_ATTACH_MAX_FILES} files
+                  </div>
+                </div>
+                <input ref={batchFileInputRef} type="file" multiple accept={BATCH_ATTACH_ACCEPT} style={{display:'none'}}
+                  onChange={e => { addBatchFiles(e.target.files); e.target.value = '' }} />
+                {batchFiles.length > 0 && (
+                  <div style={{marginTop:'8px',display:'flex',flexDirection:'column',gap:'6px',maxHeight:'170px',overflowY:'auto'}}>
+                    {batchFiles.map(({ id, file, previewUrl }) => (
+                      <div key={id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'6px 8px',
+                        border:'1px solid var(--border-2, #e5e7eb)',borderRadius:'8px',background:'#fff'}}>
+                        {previewUrl
+                          ? <img src={previewUrl} alt="" style={{width:'36px',height:'36px',objectFit:'cover',borderRadius:'4px',flexShrink:0}} />
+                          : <span style={{width:'36px',height:'36px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',background:'var(--cream-2)',borderRadius:'4px',flexShrink:0}}>
+                              {/\.pdf$/i.test(file.name) ? '📄' : '📎'}
+                            </span>}
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:'12px',fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={file.name}>{file.name}</div>
+                          <div style={{fontSize:'11px',color:'var(--ink-3)'}}>{formatFileSize(file.size)}</div>
+                        </div>
+                        <button type="button" onClick={() => removeBatchFile(id)} disabled={creatingBatch}
+                          title="Remove" aria-label={`Remove ${file.name}`}
+                          style={{border:'none',background:'transparent',cursor:'pointer',fontSize:'16px',color:'#dc2626',padding:'2px 6px'}}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               {batchMsg && <div className="alert alert-error" style={{marginBottom:'12px'}}>{batchMsg}</div>}
               <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
-                <button className="btn btn-outline" onClick={() => {setShowBatchModal(false);setBatchMsg('')}}>Cancel</button>
+                <button className="btn btn-outline" disabled={creatingBatch} onClick={closeBatchModal}>Cancel</button>
                 <button className="btn btn-outline" onClick={() => printBatchReport()}>
                   Print Report
                 </button>
                 <button className="btn btn-primary" disabled={creatingBatch} onClick={createBatch}>
-                  {creatingBatch ? 'Creating…' : '⧉ Create Batch'}
+                  {creatingBatch ? (batchFiles.length ? 'Creating & uploading…' : 'Creating…') : '⧉ Create Batch'}
                 </button>
               </div>
             </div>
