@@ -100,7 +100,7 @@ export default function HolidayHomeReceipts() {
   const isFinance = profile?.role === 'finance'
   const isSuperAdmin = normalizedRole === 'superadmin'
   // Single-line, plain-text summary of a receipt row, for pasting into descriptions elsewhere.
-  // Format: Receipt | Date | Guest | Property | [Nights] | Amount | Prepared By (nights only when > 0)
+  // Format: Receipt | Date | Guest | Property | [Nights] | Amount | Prepared By | [Description] (nights/description only when present)
   const receiptCopyText = receipt => {
     const amount = Number(receipt.rental_payment || 0) + Number(receipt.security_deposit || 0) + Number(receipt.admin_fee || 0) + Number(receipt.additional_service || 0)
     const property = receipt.property_display || properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key || ''
@@ -113,6 +113,7 @@ export default function HolidayHomeReceipts() {
       nightCount > 0 ? `${nightCount} night${nightCount === 1 ? '' : 's'}` : '',
       `AED ${formatCurrency(amount)}`,
       usersById[receipt.created_by] || '',
+      String(receipt.description || '').replace(/\s+/g, ' ').trim(),
     ].filter(Boolean).join(' | ')
   }
   const copyReceiptText = async receipt => {
