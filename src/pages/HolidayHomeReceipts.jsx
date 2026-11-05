@@ -172,8 +172,6 @@ export default function HolidayHomeReceipts() {
     next.received_by_name = profile?.full_name || ''
     if (createCompanies.length === 1) {
       next.company_id = createCompanies[0].id
-      const { data } = await supabase.rpc('next_holiday_home_receipt_number', { p_company_id:createCompanies[0].id })
-      next.receipt_number = data || ''
     }
     setForm(next); setEditingId(null); setNightInput(''); setPropertyDisplay(''); setQuick(''); setError(''); setOpen(true)
   }
@@ -186,8 +184,6 @@ export default function HolidayHomeReceipts() {
   }
   const chooseCompany = async id => {
     set('company_id', id); set('property_key', ''); setPropertyDisplay('')
-    const { data } = await supabase.rpc('next_holiday_home_receipt_number', { p_company_id:id })
-    set('receipt_number', data || '')
   }
   const setNights = value => {
     setNightInput(value)
@@ -226,6 +222,7 @@ export default function HolidayHomeReceipts() {
     if (!form.company_id || !form.received_from || !form.property_key || !form.check_in_date || !form.check_out_date || nights < 0) return setError('Enter company, guest, property, check-in and check-out.')
     const selectedProperty = properties.find(item => item.property_key === form.property_key)
     const payload = { ...form, property_display:selectedProperty?.property_unit || propertyDisplay || form.property_key, nights, rental_payment:Number(form.rental_payment || 0), security_deposit:Number(form.security_deposit || 0), admin_fee:Number(form.admin_fee || 0), additional_service:Number(form.additional_service || 0), updated_by:user.id }
+    delete payload.receipt_number
     const query = editingId
       ? supabase.from('holiday_home_receipts').update(payload).eq('id', editingId)
       : supabase.from('holiday_home_receipts').insert({ ...payload, created_by:user.id })
@@ -275,7 +272,7 @@ export default function HolidayHomeReceipts() {
     {error && <div className="alert alert-error">{error}</div>}
     {open && <form className="card" onSubmit={save}><div className="card-header"><h2>Holiday Home Receipt</h2></div><div className="card-body">
       <label className="form-group"><span className="form-label">Quick stay entry</span><div style={{display:'flex',gap:8}}><input className="form-control" value={quick} onChange={event => setQuick(event.target.value)} placeholder="Emel C, Imperial Ave 3405 (2026-07-21 15:00 - 2026-07-24 11:00)"/><button className="btn btn-outline" type="button" onClick={autofill}>Auto fill</button></div></label>
-      <div className="form-row-3"><label className="form-group">Company<select className="form-control" required value={form.company_id} onChange={event => chooseCompany(event.target.value)}><option value="">Select company</option>{createCompanies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Receipt No.<input className="form-control" readOnly value={form.receipt_number}/></label><label className="form-group">Date<input className="form-control" type="date" value={form.receipt_date} onChange={event => set('receipt_date', event.target.value)}/></label></div>
+      <div className="form-row-3"><label className="form-group">Company<select className="form-control" required value={form.company_id} onChange={event => chooseCompany(event.target.value)}><option value="">Select company</option>{createCompanies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="form-group">Receipt No.<input className="form-control" readOnly value={form.receipt_number || 'Assigned when saved'}/></label><label className="form-group">Date<input className="form-control" type="date" value={form.receipt_date} onChange={event => set('receipt_date', event.target.value)}/></label></div>
       <div className="form-row"><label className="form-group">Received From<input className="form-control" required list="received-from-list" value={form.received_from} onChange={event => chooseGuest(event.target.value)}/><datalist id="received-from-list">{guests.map(item => <option key={item.name} value={item.name}/>)}</datalist></label><label className="form-group">ID / Passport<input className="form-control" value={form.id_passport} onChange={event => set('id_passport', event.target.value)}/></label></div>
       <div className="form-row-3"><label className="form-group">Apartment / Property (Class)<select className="form-control" required value={propertyDisplay} onChange={event => chooseProperty(event.target.value)}><option value="">Select apartment / property</option>{applicationClasses.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select><span className="form-hint">Uses the Application Classes list.</span></label><label className="form-group">Check-in<input className="form-control" type="date" value={form.check_in_date} onChange={event => set('check_in_date', event.target.value)}/></label><label className="form-group">Check-out / Nights<input className="form-control" type="date" value={form.check_out_date} onChange={event => set('check_out_date', event.target.value)}/><input className="form-control" type="number" min="0" placeholder="Number of nights" value={nightInput} onChange={event => setNights(event.target.value)}/><span className="form-hint">{nights} night(s)</span></label></div>
       <div className="form-row-3">{[['Rental Payment','rental_payment'],['Security Deposit','security_deposit'],['Admin Fee','admin_fee'],['Additional Service','additional_service']].map(([label, key]) => <label className="form-group" key={key}>{label}<input className="form-control" type="number" step="0.01" value={form[key]} onChange={event => set(key, event.target.value)}/></label>)}<div className="form-group"><span className="form-label">Total</span><div className="form-control">AED {formatCurrency(total)}</div></div></div>

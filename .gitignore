@@ -1,4 +1,10 @@
-node_modules
-dist
-.env.local
+node_modules/
+dist/
+
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+
+# Vercel
+.vercel/

@@ -168,18 +168,19 @@ function AttachmentDownloadButton({ path, name, app }) {
   </>
 }
 
-function AttachmentPill({ path, name, size, tabIndex }) {
+function AttachmentPill({ path, name, size, tabIndex, finance = false }) {
   const [show, setShow] = useState(false)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
   const isPDF   = /\.pdf$/i.test(name || '')
   const displayName = size ? `${name} (${formatFileSize(size)})` : name
   return (
     <>
-      <button onClick={() => setShow(true)} title={`Preview: ${displayName}`} tabIndex={tabIndex}
+      <button onClick={() => setShow(true)} title={`${finance ? 'Finance document · ' : ''}Preview: ${displayName}`} tabIndex={tabIndex}
         style={{ display:'inline-flex',alignItems:'center',gap:'4px',padding:'3px 8px',
-          borderRadius:'20px',cursor:'pointer',background:'#eff6ff',border:'1px solid #bfdbfe',
-          color:'#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
+          borderRadius:'20px',cursor:'pointer',background:finance ? '#ecfdf5' : '#eff6ff',border:`1px solid ${finance ? '#86efac' : '#bfdbfe'}`,
+          color:finance ? '#166534' : '#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
         {isPDF ? '📄' : isImage ? '🖼' : '📎'}
+        {finance && <span style={{fontSize:'9px',fontWeight:800,letterSpacing:'.3px'}}>FIN</span>}
         <span style={{ overflow:'hidden',textOverflow:'ellipsis',maxWidth:'60px',fontSize:'11px' }}>
           {displayName && displayName.length > 9 ? displayName.slice(0,8)+'…' : displayName}
         </span>
@@ -469,6 +470,25 @@ export default function FinanceDashboard() {
   useEffect(() => {
     load({ preferCache:true })
   }, [page, pageSize, searchRequest, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, scopeReady, scopeError, allowedCompanyIds])
+
+  useEffect(() => {
+    if (!user?.id || !scopeReady) return undefined
+    let refreshTimer
+    const refresh = () => {
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => load({ preferCache:false }), 120)
+    }
+    window.addEventListener('payment-application-saved', refresh)
+    const channel = supabase
+      .channel(`finance-dashboard-live-${user.id}`)
+      .on('postgres_changes', { event:'*', schema:'public', table:'applications' }, refresh)
+      .subscribe()
+    return () => {
+      window.removeEventListener('payment-application-saved', refresh)
+      window.clearTimeout(refreshTimer)
+      supabase.removeChannel(channel)
+    }
+  }, [page, pageSize, searchRequest, amountSearch, filterStatus, filterCompany, filterBatch, batchTotalSearch, filterAttachment, scopeReady, scopeError, allowedCompanyIds, user?.id])
 
   useEffect(() => {
     let active = true
@@ -1795,7 +1815,7 @@ export default function FinanceDashboard() {
                                     name={att.file_name} size={att.file_size} tabIndex={-1} /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} /></div>
                                 ))}
                               {(app.finance_attachments || []).map((att, index) => (
-                                <div key={`${att.path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.path} name={att.name} size={att.size} tabIndex={-1} /><AttachmentDownloadButton path={att.path} name={att.name} app={app} /></div>
+                                <div key={`${att.path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.path} name={att.name} size={att.size} tabIndex={-1} finance /><AttachmentDownloadButton path={att.path} name={att.name} app={app} /></div>
                               ))}
                             </div>
                           ) : (

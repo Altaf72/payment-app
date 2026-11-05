@@ -68,37 +68,12 @@ const DIST_TYPE_OPTIONS = [
   ["residual", "Commission"],
 ];
 const distTypeLabel = (kind) => (isKickback(kind) ? "Kickback" : "Commission");
-const GOOGLE_CLIENT_ID =
-  "70086088232-f0c97ls3nljbber210frbugmdam03bo0.apps.googleusercontent.com";
-// drive.file: needed so this app can create/upload new files.
-// drive.readonly: needed so a user can VIEW files someone else uploaded —
-// without this, a viewer's token can only see files their own account created.
-const DRIVE_SCOPE =
-  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly";
-// Fixed folder in homesvipakram@gmail.com's Drive, shared with all staff/finance.
-// Everyone uses this same folder — nobody's own "My Drive" is used anymore.
+// Google OAuth authorization-code redirect is handled by Vercel server functions.
+// Never expose GOOGLE_CLIENT_SECRET in browser code.
+const DRIVE_SESSION_KEY = "commission_google_drive_session_v1";
+const DRIVE_RETURN_KEY = "commission_google_drive_return_v1";
+const DRIVE_RESULT_KEY = "commission_google_drive_result_v1";
 const DRIVE_ROOT_FOLDER_ID = "1miwKoM8rLRhNwpE5qmEOucS83R3PzFYc";
-const loadGoogleIdentity = () =>
-  new Promise((resolve, reject) => {
-    if (window.google?.accounts?.oauth2) return resolve();
-    const existing = document.querySelector("script[data-gis]");
-    if (existing) {
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", () =>
-        reject(new Error("Failed to load Google Identity Services")),
-      );
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.dataset.gis = "true";
-    script.onload = () => resolve();
-    script.onerror = () =>
-      reject(new Error("Failed to load Google Identity Services"));
-    document.head.appendChild(script);
-  });
 const today = () => /* @__PURE__ */ new Date().toISOString().slice(0, 10),
   id = () => crypto.randomUUID();
 const shiftDate = (value, days) => {
@@ -408,7 +383,7 @@ function DateInput({ value, onChange, required = false }) {
     </div>
   );
 }
-function GoogleDriveConnectPrompt({ onConnect, onDismiss }) {
+function GoogleDriveConnectPrompt({ onConnect, onDismiss, connectionError, connectionStatus, connectionSteps }) {
   return (
     <div
       style={{
@@ -430,12 +405,24 @@ function GoogleDriveConnectPrompt({ onConnect, onDismiss }) {
           boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
         }}
       >
-        <h3 style={{ marginTop: 0 }}>Google Drive needs to be connected</h3>
+        <h3 style={{ marginTop: 0 }}>Google Drive authorization required</h3>
         <p className="form-hint">
-          Attachments are saved to your Google Drive. Connect your Google
-          account to save or open attachments — this stays connected for
-          about an hour at a time, then you'll be asked again.
+          Attachments remain in the shared Google Drive folder. Connecting
+          opens Google's authorization page and returns here after approval.
         </p>
+        <p role="status" aria-live="polite" style={{fontWeight: 600}}>
+          Status: {connectionStatus || "Not connected"}
+        </p>
+        {connectionSteps?.length > 0 && (
+          <ol style={{ maxHeight: 150, overflowY: "auto", fontSize: 12, paddingLeft: 22 }}>
+            {connectionSteps.map((step, i) => <li key={i}>{step}</li>)}
+          </ol>
+        )}
+        {connectionError && (
+          <p role="alert" style={{ color: "#b91c1c", fontWeight: 600, whiteSpace: "pre-wrap" }}>
+            {connectionError}
+          </p>
+        )}
         <div
           className="cis-inline-actions"
           style={{ marginTop: 16, display: "flex", gap: 8 }}
@@ -726,7 +713,14 @@ function CommissionSheets() {
     [driveConnectDismissed, setDriveConnectDismissed] = useState(false),
     [viewer, setViewer] = useState(null),
     [letterhead, setLetterhead] = useState(null);
-  const tokenClientRef = useRef(null);
+  const [driveConnectionError, setDriveConnectionError] = useState("");
+  const [driveConnectionStatus, setDriveConnectionStatus] = useState("Not connected");
+  const [driveConnectionSteps, setDriveConnectionSteps] = useState([]);
+  function logDriveStep(message) {
+    setDriveConnectionStatus(message);
+    setDriveConnectionSteps((old) => [...old.slice(-11), `${new Date().toLocaleTimeString()} — ${message}`]);
+    console.info("[Commission Drive OAuth]", message);
+  }
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState(""),
     [deal, setDeal] = useState(""),
@@ -852,30 +846,59 @@ function CommissionSheets() {
   useEffect(() => {
     if (user?.id) load();
   }, [user?.id]);
+  // Restore only a token obtained during this browser-tab session. The
+  // server callback writes the result into sessionStorage on this origin.
   useEffect(() => {
-    loadGoogleIdentity().catch((driveLoadError) =>
-      console.warn("Google Identity Services unavailable:", driveLoadError),
-    );
+    let saved = null;
+    try {
+      const result = sessionStorage.getItem(DRIVE_RESULT_KEY);
+      if (result) {
+        sessionStorage.removeItem(DRIVE_RESULT_KEY);
+        const payload = JSON.parse(result);
+        if (payload.error) {
+          setDriveConnectionError(payload.error);
+          logDriveStep(`Authorization failed: ${payload.error}`);
+        } else {
+          logDriveStep("Authorization returned; verifying Google Drive account…");
+        }
+      }
+      const raw = sessionStorage.getItem(DRIVE_SESSION_KEY);
+      saved = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      setDriveConnectionError(`Could not restore Google authorization: ${e.message}`);
+    }
+    if (!saved?.access_token || !Number.isFinite(saved.expiry) || Date.now() >= saved.expiry) {
+      try { sessionStorage.removeItem(DRIVE_SESSION_KEY); } catch {}
+      return;
+    }
+    let cancelled = false;
+    fetch("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)", {
+      headers: { Authorization: `Bearer ${saved.access_token}` },
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Google Drive HTTP ${r.status}`);
+      return r.json();
+    }).then((info) => {
+      if (cancelled) return;
+      const email = info.user?.emailAddress || "Email unavailable";
+      setDriveToken(saved.access_token);
+      setDriveTokenExpiry(saved.expiry);
+      setDriveGrantedScope(saved.scope || "");
+      setDriveEmail(email);
+      setDriveConnectDismissed(false);
+      setDriveConnectionError("");
+      logDriveStep(`Connected and verified: ${email}`);
+      setNotice(`Google Drive connected and verified: ${email}`);
+    }).catch((e) => {
+      if (cancelled) return;
+      try { sessionStorage.removeItem(DRIVE_SESSION_KEY); } catch {}
+      setDriveToken(null);
+      setDriveTokenExpiry(0);
+      setNotice("");
+      setDriveConnectionError(`Google Drive verification failed: ${e.message}`);
+      logDriveStep(`Verification failed: ${e.message}`);
+    });
+    return () => { cancelled = true; };
   }, []);
-  useEffect(() => {
-    if (!driveTokenExpiry || !tokenClientRef.current) return;
-    // Google's access tokens are capped at ~1hr by Google itself — that
-    // window can't be extended. Instead, renew silently a few minutes
-    // before it runs out, with no popup or click, so the connection just
-    // keeps working through a normal work day. This only succeeds while
-    // the tab stays open and the browser still has an active Google
-    // session; otherwise it fails quietly and the person sees the usual
-    // "Reconnect" state next time they try to open a file.
-    const refreshBufferMs = 5 * 60 * 1000,
-      delay = Math.max(
-        driveTokenExpiry - Date.now() - refreshBufferMs,
-        5000,
-      ),
-      timer = setTimeout(() => {
-        tokenClientRef.current?.requestAccessToken({ prompt: "" });
-      }, delay);
-    return () => clearTimeout(timer);
-  }, [driveTokenExpiry]);
   useEffect(() => {
     if (!form.deal_type) return;
     const source = activeDocs.length
@@ -1201,44 +1224,25 @@ function CommissionSheets() {
   function driveTokenValid() {
     return !!driveToken && Date.now() < driveTokenExpiry;
   }
-  async function connectGoogleDrive() {
+  function connectGoogleDrive() {
+    // Reconnect must always request a fresh Google account selection.
+    setDriveToken(null);
+    setDriveTokenExpiry(0);
+    setDriveEmail("");
+    setDriveGrantedScope("");
+    setNotice("");
+    setError("");
+    setDriveConnectionError("");
+    setDriveConnectionSteps([]);
     try {
-      await loadGoogleIdentity();
-      if (!tokenClientRef.current) {
-        tokenClientRef.current = window.google.accounts.oauth2.initTokenClient(
-          {
-            client_id: GOOGLE_CLIENT_ID,
-            scope: DRIVE_SCOPE,
-            callback: async (response) => {
-              if (response.error) {
-                setError(`Google Drive connection failed: ${response.error}`);
-                return;
-              }
-              setDriveToken(response.access_token);
-              setDriveTokenExpiry(
-                Date.now() + (Number(response.expires_in) || 3600) * 1000 -
-                  60000,
-              );
-              setDriveGrantedScope(response.scope || "");
-              setDriveConnectDismissed(false);
-              setNotice("Google Drive connected.");
-              try {
-                const info = await fetch(
-                  `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${response.access_token}`,
-                ).then((r) => r.json());
-                setDriveEmail(info.email || "");
-              } catch {
-                setDriveEmail("");
-              }
-            },
-          },
-        );
-      }
-      tokenClientRef.current.requestAccessToken({
-        prompt: driveToken ? "" : "consent",
-      });
+      sessionStorage.removeItem(DRIVE_SESSION_KEY);
+      sessionStorage.removeItem(DRIVE_RESULT_KEY);
+      sessionStorage.setItem(DRIVE_RETURN_KEY, window.location.pathname + window.location.search + window.location.hash);
+      logDriveStep("Step 1/4: Redirecting to Google's secure sign-in page…");
+      window.location.assign("/api/google/start");
     } catch (e) {
-      setError(e.message);
+      logDriveStep(`Unable to start redirect: ${e.message}`);
+      setDriveConnectionError(`Google Drive connection could not start: ${e.message}`);
     }
   }
   async function driveFetch(url, options = {}) {
@@ -2295,6 +2299,9 @@ function CommissionSheets() {
   const driveConnectPrompt = showDriveConnectPrompt ? (
     <GoogleDriveConnectPrompt
       onConnect={connectGoogleDrive}
+      connectionError={driveConnectionError}
+      connectionStatus={driveConnectionStatus}
+      connectionSteps={driveConnectionSteps}
       onDismiss={() => setDriveConnectDismissed(true)}
     />
   ) : null;
@@ -2337,6 +2344,9 @@ function CommissionSheets() {
               user,
               load,
               driveEmail,
+              driveConnectionStatus,
+              driveConnectionSteps,
+              driveConnectionError,
               driveTokenValid: driveTokenValid(),
               driveTokenExpiry,
               driveGrantedScope,
@@ -4736,6 +4746,13 @@ function Setup(p) {
             ? "Connected. Attachments are stored in the shared team Drive folder."
             : "Not connected."}
         </p>
+        <p role="status" className="form-hint"><b>Connection status:</b> {p.driveConnectionStatus}</p>
+        {p.driveConnectionSteps?.length > 0 && (
+          <ol style={{ maxHeight: 180, overflowY: "auto", fontSize: 12, paddingLeft: 22 }}>
+            {p.driveConnectionSteps.map((step, i) => <li key={i}>{step}</li>)}
+          </ol>
+        )}
+        {p.driveConnectionError && <p role="alert" style={{ color: "#b91c1c" }}>{p.driveConnectionError}</p>}
         <div className="cis-inline-actions">
           <button className="btn primary" onClick={p.connectGoogleDrive}>
             {p.driveTokenValid ? "Reconnect" : "Connect Google Drive"}
@@ -4754,7 +4771,7 @@ function Setup(p) {
           >
             <div>
               <b>Signed in as:</b>{" "}
-              {p.driveEmail || "Unknown (older connection — click Reconnect to detect)"}
+              {p.driveEmail || "Email unavailable — click Reconnect to choose account"}
             </div>
             <div>
               <b>Files stored in:</b>{" "}
@@ -4781,7 +4798,7 @@ function Setup(p) {
                           : s,
                     )
                     .join(" · ")
-                : "Unknown (older connection — click Reconnect to detect)"}
+                : "Email unavailable — click Reconnect to choose account"}
             </div>
             <div>
               <b>Current token renews at:</b>{" "}

@@ -27,9 +27,31 @@ async function optimizeImage(file) {
   } finally { bitmap.close?.() }
 }
 
+function DashboardAttachmentPreview({ attachment, onClose }) {
+  const [url,setUrl] = useState('')
+  const [error,setError] = useState('')
+  useEffect(()=>{
+    let active=true
+    supabase.storage.from('attachments').createSignedUrl(attachment.path,3600).then(({data,error})=>{
+      if(active){setUrl(data?.signedUrl||'');setError(error?.message||(!data?.signedUrl?'Attachment unavailable or access denied.':''))}
+    })
+    return ()=>{active=false}
+  },[attachment.path])
+  const image=/\.(png|jpe?g|webp|gif|bmp)$/i.test(attachment.name||attachment.path)
+  const pdf=/\.pdf$/i.test(attachment.name||attachment.path)
+  return <div role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}} style={{position:'fixed',inset:0,zIndex:6000,background:'rgba(15,23,42,.75)',display:'flex',justifyContent:'center',alignItems:'center',padding:18}}>
+    <div role="dialog" aria-modal="true" aria-label="Dashboard attachment preview" onKeyDown={e=>{if(e.key==='Escape')onClose()}} style={{background:'white',width:'min(950px,96vw)',height:'min(760px,90vh)',borderRadius:10,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:12,gap:8,borderBottom:'1px solid #ddd'}}><strong style={{overflow:'hidden',textOverflow:'ellipsis'}}>{attachment.name}</strong><div style={{display:'flex',gap:8}}>{url&&<a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-outline">Open</a>}<button type="button" autoFocus className="btn btn-outline" onClick={onClose}>Close ×</button></div></div>
+      <div style={{flex:1,minHeight:0,display:'flex',alignItems:'center',justifyContent:'center',overflow:'auto',padding:10}}>{error?<p role="alert">{error}</p>:!url?'Loading attachment…':image?<img src={url} alt={attachment.name} style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain'}}/>:pdf?<iframe src={url} title={attachment.name} style={{width:'100%',height:'100%',border:0}}/>:<p>Preview is unavailable for this file type. Use Open to view the original Dashboard attachment.</p>}</div>
+    </div>
+  </div>
+}
+
 export default function InventoryControl() {
   const { profile } = useAuth()
   const [assets,setAssets] = useState([])
+  const [registerLoaded,setRegisterLoaded] = useState(false)
+  const [registerLoading,setRegisterLoading] = useState(false)
   const [classes,setClasses] = useState([])
   const [stores,setStores] = useState([])
   const [form,setForm] = useState(EMPTY)
@@ -55,16 +77,24 @@ export default function InventoryControl() {
   const [reportLocation,setReportLocation] = useState('all')
   const [reportStatus,setReportStatus] = useState('all')
   const [reportSearch,setReportSearch] = useState('')
+  const [referenceOpen,setReferenceOpen] = useState(false)
+  const [referenceSearch,setReferenceSearch] = useState('')
+  const [referenceRows,setReferenceRows] = useState([])
+  const [referenceBusy,setReferenceBusy] = useState(false)
+  const [referenceError,setReferenceError] = useState('')
+  const [selectedReference,setSelectedReference] = useState(null)
+  const [referenceAttachments,setReferenceAttachments] = useState([])
+  const [referenceAttachmentPreview,setReferenceAttachmentPreview] = useState(null)
 
   async function load() {
-    const [a,c,s,att] = await Promise.all([
+    setRegisterLoading(true)
+    try {
+    const [a,att] = await Promise.all([
       supabase.from('inventory_assets').select('*').order('created_at',{ascending:false}).limit(2000),
-      supabase.from('application_classes').select('id,name,active').order('name'),
-      supabase.from('inventory_stores').select('*').order('name'),
       supabase.from('inventory_asset_images').select('id,asset_id,image_path,created_at').order('created_at',{ascending:true}).limit(5000)
     ])
-    if (a.error || c.error || s.error || att.error) throw Error(a.error?.message || c.error?.message || s.error?.message || att.error?.message)
-    setAssets(a.data||[]); setClasses(c.data||[]); setStores(s.data||[]); setAttachments(att.data||[])
+    if (a.error || att.error) throw Error(a.error?.message || att.error?.message)
+    setAssets(a.data||[]); setAttachments(att.data||[])
     // Fetch all movement identifiers in pages so history badges are accurate.
     const counts = {}
     for (let offset=0;;offset+=1000) {
@@ -79,8 +109,17 @@ export default function InventoryControl() {
       const signed = await supabase.storage.from('inventory-images').createSignedUrls(paths,3600)
       if (!signed.error) setImageUrls(Object.fromEntries((signed.data||[]).filter(x=>x.signedUrl).map(x=>[x.path,x.signedUrl])))
     } else setImageUrls({})
+    setRegisterLoaded(true)
+    } finally { setRegisterLoading(false) }
   }
-  useEffect(()=>{ load().catch(e=>setMessage(e.message)) },[])
+  useEffect(()=>{
+    let cancelled=false
+    Promise.all([
+      supabase.from('application_classes').select('id,name,active').order('name'),
+      supabase.from('inventory_stores').select('*').order('name')
+    ]).then(([c,s])=>{if(cancelled)return;if(c.error||s.error)throw Error(c.error?.message||s.error?.message);setClasses(c.data||[]);setStores(s.data||[])}).catch(e=>{if(!cancelled)setMessage(e.message)})
+    return ()=>{cancelled=true}
+  },[])
   const className = id => classes.find(x=>String(x.id)===String(id))?.name || 'Unknown apartment'
   const storeName = id => stores.find(x=>String(x.id)===String(id))?.name || 'Unknown store'
   const locationName = x => x.location_type==='apartment' ? className(x.class_id) : storeName(x.store_id)
@@ -128,7 +167,7 @@ export default function InventoryControl() {
   useEffect(()=>{if(!transfer&&!history&&!photoViewer)return;const onKey=e=>{if(e.key==='Escape'){setTransfer(null);setHistory(null);setPhotoViewer(null)}};document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey)},[transfer,history,photoViewer])
   function openPhotos(paths,index=0){const available=[...new Set(paths.filter(path=>imageUrls[path]))];if(available.length)setPhotoViewer({urls:available.map(path=>imageUrls[path]),index:Math.max(0,Math.min(index,available.length-1))})}
   const set = (field,value) => setForm(f=>({...f,[field]:value}))
-  function reset() {images.forEach(x=>URL.revokeObjectURL(x.url));setForm({...EMPTY,purchase_date:todayLocal()});setEditing(null);setImages([])}
+  function reset() {setSelectedReference(null);setReferenceAttachments([]);images.forEach(x=>URL.revokeObjectURL(x.url));setForm({...EMPTY,purchase_date:todayLocal()});setEditing(null);setImages([])}
   function addImages(files) {
     const accepted=Array.from(files||[]).filter(f=>f.type.startsWith('image/'))
     setImages(prev=>[...prev,...accepted.map(file=>({id:crypto.randomUUID(),file,url:URL.createObjectURL(file)}))])
@@ -164,11 +203,12 @@ export default function InventoryControl() {
     if(reason===null)return
     if(!reason.trim())return setMessage('Deletion cancelled: a reason is required.')
     setBusy(true)
-    try{const {error}=await supabase.rpc('inventory_soft_delete_asset',{p_asset_id:asset.id,p_reason:reason.trim()});if(error)throw error;setMessage('Asset deleted from active register; audit history preserved.');await load()}catch(e){setMessage(e.message)}finally{setBusy(false)}
+    try{const {error}=await supabase.rpc('inventory_soft_delete_asset',{p_asset_id:asset.id,p_reason:reason.trim()});if(error)throw error;setMessage('Asset deleted from active register; audit history preserved.');if(registerLoaded) await load()}catch(e){setMessage(e.message)}finally{setBusy(false)}
   }
-  function editAsset(x) {setEditing(x.id);setImages([]);setForm({name:x.name||'',category:x.category||'',description:x.description||'',ownership:x.ownership,owner_name:x.owner_name||'',location_type:x.location_type,class_id:String(x.class_id||''),store_id:String(x.store_id||''),quantity:String(x.quantity),purchase_price:String(x.purchase_price),purchase_date:x.purchase_date||'',serial_number:x.serial_number||'',status:x.status});focusAssetName()}
+  function editAsset(x) {setSelectedReference(null);setReferenceAttachments([]);setEditing(x.id);setImages([]);setForm({name:x.name||'',category:x.category||'',description:x.description||'',ownership:x.ownership,owner_name:x.owner_name||'',location_type:x.location_type,class_id:String(x.class_id||''),store_id:String(x.store_id||''),quantity:String(x.quantity),purchase_price:String(x.purchase_price),purchase_date:x.purchase_date||'',serial_number:x.serial_number||'',status:x.status});focusAssetName()}
 
   function duplicateAsset(x) {
+    setSelectedReference(null);setReferenceAttachments([])
     images.forEach(img=>URL.revokeObjectURL(img.url))
     setImages([])
     setEditing(null)
@@ -181,6 +221,71 @@ export default function InventoryControl() {
     focusAssetName()
   }
 
+  // Finance Dashboard uses applications_full.payment_reason as Category,
+  // applications_full.amount as Amount and applications.class_name(s) for location.
+  async function searchReferences() {
+    setReferenceBusy(true); setReferenceError('')
+    try {
+      const term=referenceSearch.trim()
+      if(!term) { setReferenceRows([]); setReferenceError('Enter a reference number, category, or description to search.'); return }
+      // Restrict to rows the current user may read through existing Dashboard RLS.
+      const escaped=term.replace(/[%,()]/g,' ').trim()
+      const q=await supabase.from('applications_full')
+        .select('id,ref_number,payment_reason,amount,created_at,remarks,attachment_path,attachment_name,deleted_at')
+        .is('deleted_at',null)
+        .or(`ref_number.ilike.%${escaped}%,payment_reason.ilike.%${escaped}%,remarks.ilike.%${escaped}%`)
+        .order('created_at',{ascending:false}).limit(100)
+      if(q.error) throw q.error
+      const ids=(q.data||[]).map(x=>x.id)
+      let details=[]
+      if(ids.length){
+        let r=await supabase.from('applications').select('id,class_name,class_names').in('id',ids)
+        if(r.error) r=await supabase.from('applications').select('id,class_name').in('id',ids)
+        if(r.error) throw r.error
+        details=r.data||[]
+      }
+      const lookup=new Map(details.map(x=>[x.id,x]))
+      setReferenceRows((q.data||[]).map(x=>({...x,...(lookup.get(x.id)||{})})))
+    }catch(err){setReferenceError(err.message||String(err));setReferenceRows([])}
+    finally{setReferenceBusy(false)}
+  }
+  async function loadReferenceAttachments(ref) {
+    const found=[]
+    const add=(path,name)=>{if(path&&!found.some(x=>x.path===path))found.push({path,name:name||path.split('/').pop()||'Attachment',hidden:false})}
+    add(ref.attachment_path,ref.attachment_name)
+    const [applicant,logs]=await Promise.all([
+      supabase.from('application_attachments').select('storage_path,file_name').eq('application_id',ref.id),
+      supabase.from('audit_log').select('action,note').eq('application_id',ref.id).in('action',['attachment_added','attachment_deleted','edited']).order('created_at',{ascending:true})
+    ])
+    if(applicant.error||logs.error){
+      setMessage(`Reference imported. Some Dashboard attachments could not be listed: ${applicant.error?.message||logs.error?.message}`)
+    }
+    for(const x of applicant.data||[])add(x.storage_path,x.file_name)
+    const deleted=new Set()
+    const finance=[]
+    for(const x of logs.data||[]){
+      try{const note=JSON.parse(x.note||'');if(note.type==='finance_attachment_deleted'&&note.path)deleted.add(note.path);if(note.type==='finance_attachment'&&note.path)finance.push(note)}catch{}
+    }
+    for(const x of finance)if(!deleted.has(x.path))add(x.path,x.name)
+    setReferenceAttachments(found)
+  }
+  function pullReference(ref, chosenClass='') {
+    const names=[...(Array.isArray(ref.class_names)?ref.class_names:[]),...(ref.class_name?ref.class_name.split(','):[])].map(x=>x.trim()).filter(Boolean)
+    const target=chosenClass||names[0]||''
+    const matching=classes.find(x=>x.name.trim().toLowerCase()===target.toLowerCase())
+    setEditing(null)
+    setImages(prev=>{prev.forEach(img=>URL.revokeObjectURL(img.url));return []})
+    setForm({...EMPTY, name:'',category:ref.payment_reason||'',
+      purchase_price:ref.amount==null?'':String(ref.amount),purchase_date:todayLocal(),
+      location_type:'apartment',class_id:matching?.id||'',
+      description:[`Dashboard reference: ${ref.ref_number||'—'}`,ref.remarks||''].filter(Boolean).join(' | ')})
+    setSelectedReference({id:ref.id,number:ref.ref_number,category:ref.payment_reason,amount:ref.amount,location:target})
+    setReferenceAttachments([])
+    loadReferenceAttachments(ref).catch(e=>setMessage(`Reference imported; attachment lookup failed: ${e.message}`))
+    setReferenceOpen(false);setActiveTab('register');setSuggestOpen('')
+    setMessage(matching?`Prefilled from ${ref.ref_number}. Review and edit all details before saving.`:`Prefilled from ${ref.ref_number}. Apartment "${target||'not provided'}" could not be matched to the Inventory apartment master; select it manually.`)
+    focusAssetName()
+  }
   async function save(e) {
     e.preventDefault();setMessage('')
     if (!form.name.trim()) return setMessage('Asset name is required.')
@@ -217,7 +322,7 @@ export default function InventoryControl() {
       const used=new Set(registered.map(x=>x.image_path))
       const orphans=uploadedPaths.filter(x=>!used.has(x))
       if(orphans.length)await supabase.storage.from('inventory-images').remove(orphans)
-      setMessage((editing?'Asset updated.':'Asset registered.')+(imageErrors.length?` Some images failed: ${imageErrors.join('; ')}`:''));reset();await load()
+      setMessage((editing?'Asset updated.':'Asset registered.')+(imageErrors.length?` Some images failed: ${imageErrors.join('; ')}`:''));reset();if(registerLoaded) await load()
     } catch(err) {
       setMessage(err.message)
     } finally {setBusy(false)}
@@ -229,7 +334,7 @@ export default function InventoryControl() {
       if (!Number.isInteger(qty)||qty<1||qty>transfer.asset.quantity) throw Error('Invalid transfer quantity.')
       const {error}=await supabase.rpc('inventory_transfer_asset',{p_asset_id:transfer.asset.id,p_quantity:qty,p_location_type:transfer.location_type,p_class_id:transfer.location_type==='apartment'?transfer.class_id||null:null,p_store_id:transfer.location_type==='store'?transfer.store_id||null:null,p_note:transfer.note||''})
       if(error)throw Error(error.message)
-      setTransfer(null);setMessage('Transfer completed.');await load()
+      setTransfer(null);setMessage('Transfer completed.');if(registerLoaded) await load()
     }catch(e){setMessage(e.message)}finally{setBusy(false)}
   }
   async function showHistory(asset) {
@@ -249,7 +354,13 @@ export default function InventoryControl() {
       <button type="button" role="tab" aria-selected={activeTab==='report'} className={`btn ${activeTab==='report'?'btn-primary':'btn-outline'}`} onClick={()=>setActiveTab('report')}>Inventory Report &amp; On-site Verification</button>
     </div>
     {activeTab==='register'&&<>
-    <div className="card"><div className="card-body"><h3>{editing?'Edit Asset':'Register Asset'}</h3>
+    <div className="card"><div className="card-body"><div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}><h3>{editing?'Edit Asset':'Register Asset'}</h3><button type="button" className="btn btn-outline" onClick={()=>{setReferenceOpen(true);setReferenceError('');setReferenceRows([]);setReferenceSearch('')}}>Pull from Dashboard Reference</button></div>
+      {selectedReference&&<div style={{padding:10,background:'#eef6ff',border:'1px solid #bfdbfe',borderRadius:6,marginBottom:12}}>Source: <strong>{selectedReference.number}</strong> · {selectedReference.category} · {money(selectedReference.amount)} · {selectedReference.location||'Location not specified'}. Fields are editable. <button type="button" className="btn btn-outline btn-sm" onClick={()=>{setSelectedReference(null);setReferenceAttachments([])}}>Clear source label</button></div>}
+      {selectedReference&&<div style={{border:'1px solid #cbd5e1',borderRadius:8,padding:12,marginBottom:12,background:'#f8fafc'}}>
+        <strong>Dashboard attachments (reference only)</strong>
+        <p className="text-muted" style={{fontSize:12,margin:'5px 0 9px'}}>These files remain linked to the original Dashboard record. Remove only hides an attachment from this registration form; it does not delete or move the original file.</p>
+        {referenceAttachments.filter(x=>!x.hidden).length?<div style={{display:'flex',flexWrap:'wrap',gap:8}}>{referenceAttachments.filter(x=>!x.hidden).map(att=><div key={att.path} style={{display:'flex',alignItems:'center',gap:7,padding:7,border:'1px solid #ddd',borderRadius:6,background:'white'}}><button type="button" className="btn btn-outline btn-sm" onClick={()=>setReferenceAttachmentPreview(att)}>View · {att.name}</button><button type="button" className="btn btn-outline btn-sm" title="Hide from this form only; original Dashboard attachment is not deleted" onClick={()=>setReferenceAttachments(old=>old.map(x=>x.path===att.path?{...x,hidden:true}:x))}>Remove ×</button></div>)}</div>:<span className="text-muted">No Dashboard attachments displayed.</span>}
+      </div>}
       <form onSubmit={save}>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>
           {nameField('name','Asset name *')}
@@ -269,17 +380,20 @@ export default function InventoryControl() {
         <div style={{display:'flex',gap:8,marginTop:12}}><button className="btn btn-primary" disabled={busy}>{busy?'Saving…':editing?'Update Asset':'Save Asset'}</button>{editing&&<button className="btn btn-outline" type="button" onClick={reset}>Cancel Edit</button>}</div>
       </form>
     </div></div>
-    <div className="card" style={{marginTop:16}}><div className="card-body"><h3>Asset Register ({filtered.length})</h3>
+    <div className="card" style={{marginTop:16}}><div className="card-body"><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h3>Asset Register {registerLoaded?`(${filtered.length})`:''}</h3><button type="button" className="btn btn-primary" disabled={registerLoading} onClick={()=>load().catch(e=>setMessage(e.message))}>{registerLoading?'Querying…':registerLoaded?'Refresh / Query Again':'Query Asset Register'}</button></div>
+      {!registerLoaded&&<p className="text-muted">Asset transactions, photographs and movement counts are not downloaded automatically. Click Query Asset Register when needed.</p>}
       <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}}><input className="form-control" style={{flex:'1 1 240px'}} placeholder="Search assets, serials, apartments" value={search} onChange={e=>setSearch(e.target.value)}/><select className="form-control" value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">All statuses</option>{['active','repair','damaged','disposed','lost'].map(x=><option key={x} value={x}>{x}</option>)}</select></div>
       <div className="table-wrap"><table><thead><tr><th>Image</th><th>Asset ID</th><th>Description</th><th>Location</th><th>Ownership</th><th>Qty</th><th>Unit price</th><th>Total cost</th><th>Status</th><th>Actions</th></tr></thead><tbody>
         {filtered.map(x=><tr key={x.id}><td>{(()=>{const pics=[...attachments.filter(a=>a.asset_id===x.id).map(a=>a.image_path),x.image_path].filter(Boolean);return pics.length?<div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{pics.map(path=>imageUrls[path]?<button key={path} type="button" title="Enlarge image" onClick={()=>openPhotos(pics,pics.indexOf(path))} style={{padding:0,border:0,background:"none",cursor:"zoom-in"}}><img src={imageUrls[path]} alt={x.name} style={{width:45,height:42,objectFit:'cover',borderRadius:4}}/></button>:null)}</div>:'—'})()}</td><td>{x.asset_code}</td><td><strong>{x.name}</strong><div className="text-muted">{x.category}{x.serial_number?` · ${x.serial_number}`:''}</div></td><td>{locationName(x)}</td><td>{x.ownership==='company'?'Company':`Owner: ${x.owner_name}`}</td><td>{x.quantity}</td><td>{money(x.purchase_price)}</td><td>{money(x.purchase_price*x.quantity)}</td><td>{x.status}</td><td><div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-outline" onClick={()=>editAsset(x)}>Edit</button><button className="btn btn-outline" type="button" disabled={busy} onClick={()=>duplicateAsset(x)}>Duplicate</button><button className="btn btn-outline" disabled={x.status==='disposed'||x.status==='lost'} onClick={()=>setTransfer({asset:x,qty:String(x.quantity),location_type:'apartment',class_id:'',store_id:'',note:''})}>Transfer</button><button className="btn btn-outline" onClick={()=>showHistory(x)}>History ({historyCounts[x.id]||0})</button>{['finance','superadmin'].includes(profile?.role)&&<button className="btn btn-danger" disabled={busy} onClick={()=>deleteAsset(x)}>Delete</button>}</div></td></tr>)}
-        {!filtered.length&&<tr><td colSpan="10">No assets found.</td></tr>}
+        {registerLoaded&&!filtered.length&&<tr><td colSpan="10">No assets found.</td></tr>}
       </tbody></table></div>
       <p className="text-muted">Showing up to 2,000 most recently created records. Asset quantities and purchase prices are historical-cost tracking, not accounting depreciation.</p>
     </div></div>
     </>}
     {activeTab==='report'&&<div role="tabpanel" className="card" style={{marginTop:16}}><div className="card-body">
       <h3>Inventory Report &amp; On-site Verification</h3>
+      <button type="button" className="btn btn-primary" disabled={registerLoading} onClick={()=>load().catch(e=>setMessage(e.message))}>{registerLoading?'Querying…':registerLoaded?'Refresh Report Data':'Query Inventory for Report'}</button>
+      {!registerLoaded&&<p className="text-muted">No inventory records have been downloaded. Query when you are ready to prepare a report.</p>}
       <p className="text-muted">Filter the recorded assets, export a CSV for Excel, or print a count sheet for inventory staff. Physical counts and discrepancies are for review only and do not update the asset register.</p>
       <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'end',marginBottom:12}}>
         <label style={{flex:'1 1 210px'}}>Location<select className="form-control" value={reportLocation} onChange={e=>setReportLocation(e.target.value)}><option value="all">All locations</option><optgroup label="Apartments">{classes.map(x=><option key={x.id} value={`apartment:${x.id}`}>{x.name}</option>)}</optgroup><optgroup label="Warehouses">{stores.map(x=><option key={x.id} value={`store:${x.id}`}>{x.name}</option>)}</optgroup></select></label>
@@ -294,6 +408,18 @@ export default function InventoryControl() {
       <p className="text-muted">Report uses the loaded register (up to 2,000 assets). For a complete audit of larger inventories, pagination will be required.</p>
     </div></div>
     }
+    {referenceOpen&&<div role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setReferenceOpen(false)}} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:1100,display:'flex',alignItems:'center',justifyContent:'center',padding:18}}>
+      <div role="dialog" aria-modal="true" aria-label="Pull from Dashboard Reference" onKeyDown={e=>{if(e.key==='Escape')setReferenceOpen(false)}} style={{background:'white',width:'min(960px,96vw)',maxHeight:'88vh',overflow:'auto',borderRadius:10,padding:20,boxShadow:'0 18px 60px #0004'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}><h3>Pull from Dashboard Reference</h3><button type="button" className="btn btn-outline" onClick={()=>setReferenceOpen(false)}>Close ×</button></div>
+        <p className="text-muted">Search existing Dashboard payment applications. Category (payment reason), amount and apartment will prefill the registration. Enter the asset name and verify the amount, which may be a total payment rather than the unit purchase price.</p>
+        <form onSubmit={e=>{e.preventDefault();searchReferences()}} style={{display:'flex',gap:8,marginBottom:12}}><input autoFocus className="form-control" aria-label="Search Dashboard Reference" placeholder="Reference number, category or description" value={referenceSearch} onChange={e=>setReferenceSearch(e.target.value)}/><button className="btn btn-primary" disabled={referenceBusy}>{referenceBusy?'Searching…':'Search'}</button></form>
+        {referenceError&&<p role="alert" style={{color:'#b91c1c'}}>{referenceError}</p>}
+        <div className="table-wrap"><table><thead><tr><th>Reference</th><th>Category / Payment reason</th><th>Amount</th><th>Apartment / Class</th><th>Date</th><th>Action</th></tr></thead><tbody>
+          {referenceRows.map(ref=>{const names=[...new Set([...(Array.isArray(ref.class_names)?ref.class_names:[]),...(ref.class_name?ref.class_name.split(','):[])].map(x=>x.trim()).filter(Boolean))];return <tr key={ref.id}><td>{ref.ref_number||'—'}</td><td>{ref.payment_reason||'—'}</td><td>{money(ref.amount)}</td><td>{names.length>1?<select aria-label={`Choose apartment for ${ref.ref_number}`} className="form-control" id={`ref-class-${ref.id}`}>{names.map(n=><option key={n}>{n}</option>)}</select>:names[0]||'Not specified'}</td><td>{ref.created_at?.slice(0,10)||'—'}</td><td><button type="button" className="btn btn-outline" onClick={()=>pullReference(ref,names.length>1?document.getElementById(`ref-class-${ref.id}`)?.value||names[0]:names[0]||'')}>Use</button></td></tr>})}
+          {!referenceRows.length&&!referenceBusy&&<tr><td colSpan="6">Search to find matching Dashboard records.</td></tr>}
+        </tbody></table></div><p className="text-muted">Results are limited to the latest 100 matches. The original Dashboard record is not modified. The payment application date is shown for reference; purchase date defaults to today.</p>
+      </div>
+    </div>}
     {photoViewer&&<div role="dialog" aria-modal="true" aria-label="Asset photograph" onClick={()=>setPhotoViewer(null)} style={{position:'fixed',inset:0,zIndex:4000,background:'rgba(0,0,0,.85)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
       <div onClick={e=>e.stopPropagation()} style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12}}>
         <div style={{display:'flex',alignItems:'center',gap:14,color:'white'}}><span>Photo {photoViewer.index+1} of {photoViewer.urls.length}</span><button type="button" className="btn btn-outline" ref={dialogCloseRef} onClick={()=>setPhotoViewer(null)}>Close ✕</button></div>
@@ -312,6 +438,7 @@ export default function InventoryControl() {
         </div>
       </div>
     </div>}
+    {referenceAttachmentPreview&&<DashboardAttachmentPreview attachment={referenceAttachmentPreview} onClose={()=>setReferenceAttachmentPreview(null)}/>}
     {history&&<div role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setHistory(null)}} style={{position:'fixed',inset:0,zIndex:3900,background:'rgba(0,0,0,.65)',display:'flex',alignItems:'center',justifyContent:'center',padding:18}}>
       <div role="dialog" aria-modal="true" aria-label={`Movement history for ${history.asset.name}`} className="card" style={{width:'100%',maxWidth:1000,maxHeight:'90vh',overflowY:'auto',background:'white',boxShadow:'0 18px 55px #0005'}}>
         <div className="card-body"><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12}}><h3>Movement History — {history.asset.name} ({historyCounts[history.asset.id]||0})</h3><button ref={dialogCloseRef} className="btn btn-outline" onClick={()=>setHistory(null)}>Close ✕</button></div>

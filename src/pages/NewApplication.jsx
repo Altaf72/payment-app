@@ -7,7 +7,7 @@ import { buildPfsFieldsForCreation } from '../lib/pfs'
 import { readBrowserCache, writeBrowserCache } from '../lib/browserCache'
 
 // ── Keyboard-navigable combobox ──────────────────────────────
-function Combobox({ options, value, textValue, onChange, placeholder, allowNew, maxLength }) {
+function Combobox({ options, value, textValue, onChange, placeholder, allowNew, maxLength, canDelete = false, onDelete }) {
   const [input, setInput]       = useState('')
   const [open, setOpen]         = useState(false)
   const [cursor, setCursor]     = useState(-1)
@@ -119,10 +119,12 @@ function Combobox({ options, value, textValue, onChange, placeholder, allowNew, 
             <div
               key={o.id}
               className="autocomplete-item"
-              style={{ background: cursor === i ? 'var(--cream-2)' : '', fontWeight: cursor === i ? 500 : 400 }}
+              style={{ background: cursor === i ? 'var(--cream-2)' : '', fontWeight: cursor === i ? 500 : 400, display:'flex', alignItems:'center', justifyContent:'space-between', gap:'10px' }}
               onMouseDown={e => { e.preventDefault(); selectOption(o) }}
             >
-              {o.name}
+              <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.name}</span>
+              {canDelete && <button type="button" className="autocomplete-delete" title={`Remove ${o.name}`} aria-label={`Remove ${o.name}`}
+                onMouseDown={e => { e.preventDefault(); e.stopPropagation(); onDelete?.(o) }}>×</button>}
             </div>
           ))}
           {allowNew && input.trim() && (
@@ -236,6 +238,7 @@ export default function NewApplication() {
   const duplicateId        = searchParams.get('duplicate')
   const isEditing          = !!editId
   const isFinanceEdit = searchParams.get('financeEdit') === '1' && ['finance','superadmin'].includes(profile?.role)
+  const canManageSuggestions = ['finance','superadmin'].includes(profile?.role)
   const categoryMaxLength = ['finance','superadmin'].includes(profile?.role) ? undefined : 25
   const submittingRef      = useRef(false)
   const attachmentsRef     = useRef([])
@@ -302,7 +305,7 @@ export default function NewApplication() {
       ['companies', 'companies', 'id,name,active', query => query.eq('active', true).order('name')],
       ['methods', 'payment_methods', 'id,name,active', query => query.eq('active', true).order('name')],
       ['reasons', 'payment_reasons', 'id,name,active', query => query.eq('active', true).order('name')],
-      ['payees', 'payees', 'id,company_name,bank_name,bank_account,last_used_at', query => query.order('last_used_at', { ascending: false })],
+      ['payees', 'payees', 'id,company_name,bank_name,bank_account,last_used_at,active', query => query.eq('active', true).order('last_used_at', { ascending: false })],
       ['banks', 'banks', 'id,name,active', query => query.eq('active', true).order('name')],
       ['classes', 'application_classes', 'id,name,active', query => query.eq('active', true).order('name')],
     ]
@@ -569,6 +572,22 @@ export default function NewApplication() {
     return data?.id
   }
 
+  async function removeSuggestion({ table, cacheList, item, label, setter, clearSelection }) {
+    if (!canManageSuggestions || !item?.id) return
+    if (!window.confirm(`Remove ${label} "${item.name}" from the New Application list?\n\nExisting applications will not be changed.`)) return
+    setError('')
+    const { error: removeError } = await supabase.rpc('archive_application_suggestion', { p_table:table, p_id:item.id })
+    if (removeError) {
+      setError(`Could not remove ${label.toLowerCase()}. Run sql/new_application_suggestion_management.sql in Supabase once if permissions are not installed. ${removeError.message}`)
+      return
+    }
+    setter(current => current.filter(option => option.id !== item.id))
+    clearSelection?.()
+    const cacheKey = `new-application:${user.id}`
+    const cached = readBrowserCache(cacheKey)
+    if (cached) writeBrowserCache(cacheKey, { ...cached, [cacheList]:(cached[cacheList] || []).filter(option => option.id !== item.id) })
+  }
+
   async function upsertPayee(bankName) {
     if (!form.payee_name.trim()) return null
     const existing = payees.find(p => p.company_name.toLowerCase() === form.payee_name.trim().toLowerCase())
@@ -583,21 +602,21 @@ export default function NewApplication() {
   }
 
   async function deletePayee(payee) {
-    if (!isSuperAdmin || !payee?.id) return
+    if (!canManageSuggestions || !payee?.id) return
     const confirmed = window.confirm(`Delete receiving company "${payee.company_name}" from suggestions?\n\nExisting applications will not be changed.`)
     if (!confirmed) return
 
     setError('')
-    const { error: deleteError } = await supabase
-      .from('payees')
-      .delete()
-      .eq('id', payee.id)
+    const { error: deleteError } = await supabase.rpc('archive_application_suggestion', { p_table:'payees', p_id:payee.id })
     if (deleteError) {
-      setError(`Could not delete receiving company. If this is blocked by permissions, run sql/superadmin_delete_payees.sql in Supabase. ${deleteError.message}`)
+      setError(`Could not remove receiving company. Run the latest sql/new_application_suggestion_management.sql in Supabase once. ${deleteError.message}`)
       return
     }
 
     setPayees(current => current.filter(item => item.id !== payee.id))
+    const cacheKey = `new-application:${user.id}`
+    const cached = readBrowserCache(cacheKey)
+    if (cached) writeBrowserCache(cacheKey, { ...cached, payees:(cached.payees || []).filter(item => item.id !== payee.id) })
     setForm(current => current.payee_name.trim().toLowerCase() === payee.company_name.trim().toLowerCase()
       ? { ...current, payee_name:'', bank_id:'', bank_name:'', bank_account:'' }
       : current
@@ -661,6 +680,14 @@ export default function NewApplication() {
         })
         if (changed) sessionStorage.setItem(key, JSON.stringify({ ...cached, applications }))
       } catch {}
+    }
+  }
+
+  function invalidateFinanceDashboardCache() {
+    const prefix = 'finance_dashboard_page:'
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index)
+      if (key?.startsWith(prefix)) sessionStorage.removeItem(key)
     }
   }
 
@@ -731,6 +758,12 @@ export default function NewApplication() {
         action:  isEditing ? 'submitted' : (asDraft ? 'created' : 'submitted'),
         note:    isEditing && !asDraft ? (isFinanceEdit ? (editingStatus === 'returned' ? 'Resubmitted by Finance after returned corrections' : 'Edited by Finance') : 'Resubmitted after corrections') : asDraft ? 'Saved as draft' : 'Application submitted',
       })
+      // Update any open My Applications screen immediately. This does not rely
+      // on its next browser refresh or on a cached dashboard response.
+      window.dispatchEvent(new CustomEvent('payment-application-saved', { detail:{ applicationId:appId } }))
+      // A newly created row cannot be patched into a cached dashboard list;
+      // discard that cache so the next dashboard visit is current.
+      invalidateFinanceDashboardCache()
       if (isEditing) {
         patchCachedFinanceDashboardRow(appId, {
           company_id: payload.company_id,
@@ -825,6 +858,11 @@ export default function NewApplication() {
               placeholder="Type or select category… (↑↓ to navigate, Enter to select)"
               maxLength={categoryMaxLength}
               allowNew
+              canDelete={canManageSuggestions}
+              onDelete={item => removeSuggestion({
+                table:'payment_reasons', cacheList:'reasons', item, label:'Category', setter:setPaymentReasons,
+                clearSelection:() => setForm(current => current.payment_reason_id === item.id ? { ...current, payment_reason_id:'', payment_reason_text:'' } : current),
+              })}
               onChange={async (id, name) => {
                 if (id === '__new__') {
                   const newId = await addReason(name)
@@ -863,6 +901,11 @@ export default function NewApplication() {
               textValue={form.payment_method_text}
               placeholder="Type or select method… (↑↓ to navigate)"
               allowNew
+              canDelete={canManageSuggestions}
+              onDelete={item => removeSuggestion({
+                table:'payment_methods', cacheList:'methods', item, label:'Payment Method', setter:setPaymentMethods,
+                clearSelection:() => setForm(current => current.payment_method_id === item.id ? { ...current, payment_method_id:'', payment_method_text:'' } : current),
+              })}
               onChange={async (id, name) => {
                 if (id === '__new__') {
                   const newId = await addMethod(name)
@@ -880,7 +923,8 @@ export default function NewApplication() {
             <div className="form-group">
               <label className="form-label">付款金额 <span className="cn">Amount (AED)</span><span className="required">*</span></label>
               <input className="form-control no-number-spinner" type="number" step="0.01" min="0" placeholder="0.00"
-                value={form.amount} onChange={e => set('amount', e.target.value)} />
+                value={form.amount} onChange={e => set('amount', e.target.value)}
+                onKeyDown={e => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault() }} />
             </div>
             <div className="form-group">
               <label className="form-label">大写金额 <span className="cn">Amount in Words</span></label>
@@ -894,7 +938,7 @@ export default function NewApplication() {
             <PayeeInput
               payees={payees}
               value={form.payee_name}
-              canDelete={isSuperAdmin}
+              canDelete={canManageSuggestions}
               onDelete={deletePayee}
               onChange={val => set('payee_name', val)}
               onSelect={p => {
@@ -920,6 +964,11 @@ export default function NewApplication() {
                 textValue={form.bank_name}
                 placeholder="Type or select bank…"
                 allowNew
+                canDelete={canManageSuggestions}
+                onDelete={item => removeSuggestion({
+                  table:'banks', cacheList:'banks', item, label:'Bank', setter:setBanks,
+                  clearSelection:() => setForm(current => current.bank_id === item.id ? { ...current, bank_id:'', bank_name:'', bank_account:'' } : current),
+                })}
                 onChange={async (id, name) => {
                   if (id === '__new__') {
                     const newId = await addBank(name)

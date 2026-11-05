@@ -107,6 +107,25 @@ export default function MyApplications({ supervisorDashboard = false }) {
 
   useEffect(() => { load() }, [page, pageSize, search, statusFilter, fromDate, toDate, user?.id, profile?.role, supervisorDashboard, selectedSubordinateId])
 
+  useEffect(() => {
+    if (!user?.id) return undefined
+    let refreshTimer
+    const refresh = () => {
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => load(), 120)
+    }
+    window.addEventListener('payment-application-saved', refresh)
+    const channel = supabase
+      .channel(`my-applications-live-${user.id}`)
+      .on('postgres_changes', { event:'*', schema:'public', table:'applications' }, refresh)
+      .subscribe()
+    return () => {
+      window.removeEventListener('payment-application-saved', refresh)
+      window.clearTimeout(refreshTimer)
+      supabase.removeChannel(channel)
+    }
+  }, [page, pageSize, search, statusFilter, fromDate, toDate, user?.id, profile?.role, supervisorDashboard, selectedSubordinateId])
+
   async function load() {
     if (!user?.id) return
     const requestId = ++loadRequestRef.current

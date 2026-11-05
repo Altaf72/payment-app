@@ -595,6 +595,7 @@ export default function ApplicationDetail() {
   const isCFO     = profile?.role === 'cfo'
   const printRef    = useRef()
   const financeFileRef = useRef()
+  const batchConfirmationFileRef = useRef()
   const applicantFileRef = useRef()
   const cameraVideoRef = useRef()
   const cameraCanvasRef = useRef()
@@ -606,6 +607,8 @@ export default function ApplicationDetail() {
   const [app, setApp]               = useState(null)
   const [auditLog, setAuditLog]     = useState([])
   const [applicantAttachments, setApplicantAttachments] = useState([])
+  const [batchAttachments, setBatchAttachments] = useState([])
+  const [batchApplications, setBatchApplications] = useState([])
   const [loading, setLoading]       = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [note, setNote]             = useState('')
@@ -629,6 +632,9 @@ export default function ApplicationDetail() {
   const [financeAttLabel, setFinanceAttLabel]     = useState('')
   const [financeAttError, setFinanceAttError]     = useState('')
   const [uploadingFinanceAtt, setUploadingFinanceAtt] = useState(false)
+  const [uploadingBatchAttachment, setUploadingBatchAttachment] = useState(false)
+  const [batchAttError, setBatchAttError] = useState('')
+  const [batchAttLabel, setBatchAttLabel] = useState('')
   const [applicantAttError, setApplicantAttError] = useState('')
   const [applicantAttLabel, setApplicantAttLabel] = useState('')
   const [uploadingApplicantAtt, setUploadingApplicantAtt] = useState(false)
@@ -826,6 +832,18 @@ export default function ApplicationDetail() {
     }
     setManagers(mgrs || [])
     setAllCompanies(cos || [])
+
+    if (appData?.batch_id) {
+      const [{ data: confirmations }, { data: linkedApps }] = await Promise.all([
+        supabase.from('payment_batch_attachments').select('*').eq('batch_id', appData.batch_id).order('created_at'),
+        supabase.from('applications').select('id,ref_number,amount').eq('batch_id', appData.batch_id).order('ref_number'),
+      ])
+      setBatchAttachments(confirmations || [])
+      setBatchApplications(linkedApps || [])
+    } else {
+      setBatchAttachments([])
+      setBatchApplications([])
+    }
 
     // Use admin-saved colour, fallback to auto-palette by creation order
     if (appData?.company_id && cos) {
@@ -1411,6 +1429,74 @@ export default function ApplicationDetail() {
     }
   }
 
+  async function uploadBatchConfirmation(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    setBatchAttError('')
+    setBatchAttLabel('')
+    if (!file || !app?.batch_id) return
+    if (file.size > 5 * 1024 * 1024) {
+      setBatchAttError('File must be under 5MB')
+      return
+    }
+    setUploadingBatchAttachment(true)
+    try {
+      const extension = file.name.split('.').pop() || 'file'
+      const path = `${user.id}/batch/${app.batch_id}/confirmation-${Date.now()}.${extension}`
+      const { error: uploadError } = await supabase.storage.from('attachments').upload(path, file)
+      if (uploadError) throw uploadError
+      const { error: recordError } = await supabase.from('payment_batch_attachments').insert({
+        batch_id: app.batch_id,
+        storage_path: path,
+        file_name: file.name,
+        file_size: file.size,
+        mime_type: file.type,
+        uploaded_by: user.id,
+      })
+      if (recordError) {
+        await supabase.storage.from('attachments').remove([path])
+        throw recordError
+      }
+      const { data: linked } = await supabase.from('applications').select('id').eq('batch_id', app.batch_id)
+      if (linked?.length) await supabase.from('audit_log').insert(linked.map(row => ({
+        application_id: row.id,
+        action_by: user.id,
+        action: 'edited',
+        note: `Shared batch payment confirmation added: ${file.name}`,
+      })))
+      setBatchAttLabel(`${file.name} is now shared with this payment batch.`)
+      await load()
+    } catch (err) {
+      setBatchAttError(err.message || 'Could not upload payment confirmation')
+    } finally {
+      setUploadingBatchAttachment(false)
+    }
+  }
+
+  async function deleteBatchConfirmation(attachment) {
+    if (!window.confirm(`Remove shared payment confirmation ${attachment.file_name}?`)) return
+    setUploadingBatchAttachment(true)
+    setBatchAttError('')
+    try {
+      const { error: storageError } = await supabase.storage.from('attachments').remove([attachment.storage_path])
+      if (storageError) throw storageError
+      const { error: recordError } = await supabase.from('payment_batch_attachments').delete().eq('id', attachment.id)
+      if (recordError) throw recordError
+      const { data: linked } = await supabase.from('applications').select('id').eq('batch_id', app.batch_id)
+      if (linked?.length) await supabase.from('audit_log').insert(linked.map(row => ({
+        application_id: row.id,
+        action_by: user.id,
+        action: 'edited',
+        note: `Shared batch payment confirmation removed: ${attachment.file_name}`,
+      })))
+      await load()
+    } catch (err) {
+      setBatchAttError(err.message || 'Could not remove payment confirmation')
+    } finally {
+      setUploadingBatchAttachment(false)
+    }
+  }
+
   async function addApplicantAttachment(event) {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1788,6 +1874,7 @@ export default function ApplicationDetail() {
   const canExportQbo = ['finance','cfo','ceo','superadmin'].includes(profile?.role)
   const canAddFinanceAttachment = ['finance','superadmin'].includes(profile?.role) &&
     ['pending','mgr_approved','fin_approved','approved'].includes(app.status)
+  const canManageBatchConfirmation = ['finance','superadmin'].includes(profile?.role)
   const canAddFinancePostApprovalComment = ['finance','superadmin'].includes(profile?.role) && app.status !== 'draft'
   const canEditBankDetails = ['finance','superadmin'].includes(profile?.role)
   const canEditClass = ['finance','superadmin'].includes(profile?.role)
@@ -2642,6 +2729,71 @@ export default function ApplicationDetail() {
                 {app.batch_note && (
                   <div style={{ fontSize:'12px', color:'var(--ink-2)', fontStyle:'italic', marginBottom:'12px' }}>
                     Note: {app.batch_note}
+                  </div>
+                )}
+                <div style={{ borderTop:'1px solid #dbeafe', paddingTop:'14px', marginTop:'4px' }}>
+                  <div className="form-label" style={{ color:'#1e40af' }}>
+                    Shared Payment Confirmation{batchAttachments.length === 1 ? '' : 's'} ({batchAttachments.length})
+                  </div>
+                  {batchAttachments.length > 0 ? (
+                    <div style={{ display:'flex', flexDirection:'column', gap:'7px', marginTop:'8px' }}>
+                      {batchAttachments.map(attachment => (
+                        <div key={attachment.id} style={{
+                          display:'flex', alignItems:'center', justifyContent:'space-between', gap:'10px',
+                          padding:'8px 10px', border:'1px solid #bfdbfe', borderRadius:'var(--radius-sm)', background:'#f8fbff',
+                        }}>
+                          <div style={{ minWidth:0 }}>
+                            <div style={{ fontSize:'12px', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              {attachment.file_name}
+                            </div>
+                            <div style={{ fontSize:'11px', color:'var(--ink-3)' }}>
+                              Shared with every application in {app.batch_number}
+                              {attachment.file_size ? ` · ${formatFileSize(attachment.file_size)}` : ''}
+                            </div>
+                          </div>
+                          <div style={{ display:'flex', gap:'6px', flexShrink:0 }}>
+                            <DetailAttachmentLink path={attachment.storage_path} name={attachment.file_name} />
+                            {canManageBatchConfirmation && <button className="btn btn-danger btn-sm" type="button"
+                              disabled={uploadingBatchAttachment} onClick={() => deleteBatchConfirmation(attachment)}>
+                              Delete
+                            </button>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ marginTop:'6px', fontSize:'12px', color:'var(--ink-3)' }}>
+                      No shared confirmation has been attached yet.
+                    </div>
+                  )}
+                  {canManageBatchConfirmation && (
+                    <div style={{ marginTop:'10px' }}>
+                      <input ref={batchConfirmationFileRef} type="file" accept="*/*" onChange={uploadBatchConfirmation} style={{ display:'none' }} />
+                      <button className="btn btn-outline btn-sm" type="button" disabled={uploadingBatchAttachment}
+                        onClick={() => batchConfirmationFileRef.current?.click()}>
+                        {uploadingBatchAttachment ? 'Saving confirmation...' : '📎 Add shared payment confirmation'}
+                      </button>
+                      {batchAttLabel && <p className="form-hint" style={{ color:'var(--status-approved)' }}>✓ {batchAttLabel}</p>}
+                      {batchAttError && <p className="form-error">{batchAttError}</p>}
+                      <p className="form-hint">Add it once here; it will be visible from every application in this batch.</p>
+                    </div>
+                  )}
+                </div>
+                {canManageBatchConfirmation && batchApplications.length > 0 && (
+                  <div style={{ borderTop:'1px solid #dbeafe', paddingTop:'14px', marginTop:'14px' }}>
+                    <div className="form-label" style={{ color:'#1e40af' }}>
+                      Applications covered by this batch ({batchApplications.length})
+                    </div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:'7px', marginTop:'8px' }}>
+                      {batchApplications.map(linkedApp => (
+                        <button type="button" key={linkedApp.id} className="btn btn-outline btn-sm"
+                          onClick={() => linkedApp.id !== app.id && navigate(`/application/${linkedApp.id}`)}
+                          disabled={linkedApp.id === app.id}
+                          title={`AED ${formatCurrency(linkedApp.amount)}`}>
+                          {linkedApp.ref_number || 'Application'} · AED {formatCurrency(linkedApp.amount)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
                 <div style={{ fontSize:'12px', color:'var(--ink-3)' }}>

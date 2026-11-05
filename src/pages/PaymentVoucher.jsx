@@ -3,11 +3,6 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { amountToWords, formatCurrency } from '../lib/utils'
-import {
-  nextPaymentVoucherNumber,
-  nextStandalonePaymentVoucherNumber,
-  nextStandaloneReceiptVoucherNumber,
-} from '../lib/voucherUtils'
 
 const emptyCheque = {
   cheque_no: '',
@@ -465,18 +460,17 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     setLoading(false)
   }
 
-  function startNewVoucher(appData = application, companyData = company, vouchers = existingVouchers) {
+  function startNewVoucher(appData = application, companyData = company) {
     if (!appData) return
-    const next = nextPaymentVoucherNumber(companyData?.prefix, appData.ref_number, vouchers)
-    const usedAmount = vouchers.filter(voucher => voucher.status !== 'cancelled')
+    const usedAmount = existingVouchers.filter(voucher => voucher.status !== 'cancelled')
       .reduce((sum, voucher) => sum + Number(voucher.amount || 0), 0)
     const balance = Math.round((Number(appData.amount || 0) - usedAmount) * 100) / 100
     setCurrentVoucherId(null)
     setCurrentVoucher(null)
     setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
     setForm({
-      voucher_number: next.voucherNumber,
-      installment_no: next.installmentNo,
+      voucher_number: '',
+      installment_no: 1,
       voucher_date: localDate(),
       paid_to: appData.payee_name || '',
       amount: String(balance),
@@ -502,28 +496,13 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     setError('')
   }
 
-  async function startStandaloneVoucher(companyData = company, vouchers = existingVouchers) {
-    const companyVouchers = companyData
-      ? vouchers.filter(voucher => voucher.company_id === companyData.id)
-      : []
+  async function startStandaloneVoucher(companyData = company) {
     setCurrentVoucherId(null)
     setCurrentVoucher(null)
     setSearchParams(openedFromVouchers ? { from: 'vouchers' } : {})
     setCompany(companyData || null)
-    let voucherNumber = companyData
-        ? (isReceipt
-            ? nextStandaloneReceiptVoucherNumber(companyData.prefix, companyVouchers)
-            : nextStandalonePaymentVoucherNumber(companyData.prefix, companyVouchers))
-        : ''
-    if (companyData?.id) {
-      const { data } = await supabase.rpc('next_standalone_voucher_number', {
-        p_company_id: companyData.id,
-        p_voucher_type: voucherType,
-      })
-      if (typeof data === 'string' && data.trim()) voucherNumber = data
-    }
     setForm({
-      voucher_number: voucherNumber,
+      voucher_number: '',
       installment_no: 1,
       voucher_date: localDate(),
       paid_to: '',
@@ -648,7 +627,6 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
     if (isStandalone && !company?.id) return 'Company is required'
     if (!form.paid_to.trim()) return isReceipt ? 'Received From is required' : 'Payee name is required'
     if (!form.amount || Number(form.amount) <= 0) return 'Amount is required'
-    if (!form.voucher_number.trim()) return 'Voucher number is required'
     return ''
   }
 
@@ -690,6 +668,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
         status,
         updated_by: user.id,
       }
+      delete payload.voucher_number
 
       let voucher
       if (currentVoucherId) {
@@ -1012,7 +991,7 @@ export default function PaymentVoucher({ voucherType = 'payment' }) {
             <div className="form-row-3">
               <div className="form-group">
                 <label className="form-label">Voucher Number</label>
-                <input className="form-control" value={form.voucher_number} onChange={e => setField('voucher_number', e.target.value)} />
+                <input className="form-control" readOnly value={form.voucher_number || 'Assigned when saved'} />
               </div>
               <div className="form-group">
                 <label className="form-label">Voucher Date</label>
