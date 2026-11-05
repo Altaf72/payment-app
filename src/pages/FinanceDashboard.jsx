@@ -479,12 +479,15 @@ export default function FinanceDashboard() {
       refreshTimer = window.setTimeout(() => load({ preferCache:false }), 120)
     }
     window.addEventListener('payment-application-saved', refresh)
+    window.addEventListener('payment-batch-confirmation-saved', refresh)
     const channel = supabase
       .channel(`finance-dashboard-live-${user.id}`)
       .on('postgres_changes', { event:'*', schema:'public', table:'applications' }, refresh)
+      .on('postgres_changes', { event:'*', schema:'public', table:'payment_batch_attachments' }, refresh)
       .subscribe()
     return () => {
       window.removeEventListener('payment-application-saved', refresh)
+      window.removeEventListener('payment-batch-confirmation-saved', refresh)
       window.clearTimeout(refreshTimer)
       supabase.removeChannel(channel)
     }

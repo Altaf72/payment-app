@@ -1429,6 +1429,15 @@ export default function ApplicationDetail() {
     }
   }
 
+  function clearFinanceDashboardCache() {
+    try {
+      Object.keys(sessionStorage)
+        .filter(key => key.startsWith('finance_dashboard_page:'))
+        .forEach(key => sessionStorage.removeItem(key))
+    } catch {}
+    window.dispatchEvent(new Event('payment-batch-confirmation-saved'))
+  }
+
   async function uploadBatchConfirmation(event) {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1464,6 +1473,7 @@ export default function ApplicationDetail() {
         action: 'edited',
         note: `Shared batch payment confirmation added: ${file.name}`,
       })))
+      clearFinanceDashboardCache()
       setBatchAttLabel(`${file.name} is now shared with this payment batch.`)
       await load()
     } catch (err) {
@@ -1489,6 +1499,7 @@ export default function ApplicationDetail() {
         action: 'edited',
         note: `Shared batch payment confirmation removed: ${attachment.file_name}`,
       })))
+      clearFinanceDashboardCache()
       await load()
     } catch (err) {
       setBatchAttError(err.message || 'Could not remove payment confirmation')
