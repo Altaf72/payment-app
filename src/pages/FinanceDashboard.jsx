@@ -212,6 +212,10 @@ function parseDeletedFinanceAttachment(note) {
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const USED_REFS_KEY = 'finance_dashboard_used_refs'
 const QUERY_PAGE_SIZE = 1000
+// Increment whenever the cached row shape or its derived display data changes.
+// This prevents a normal dashboard visit from restoring older rows that lack a
+// newly introduced indicator, while filtered views happen to fetch fresh data.
+const DASHBOARD_CACHE_VERSION = '2'
 const DASHBOARD_FIELDS = [
   'id', 'ref_number', 'batch_id', 'batch_number', 'company_id', 'company_name',
   'submitted_by_name', 'payment_reason', 'payee_name', 'amount', 'created_at',
@@ -563,7 +567,7 @@ export default function FinanceDashboard() {
   }
 
   function dashboardCacheKey() {
-    return `finance_dashboard_page:${user?.id || 'anonymous'}:${profile?.role || 'unknown'}:${JSON.stringify({
+    return `finance_dashboard_page:${DASHBOARD_CACHE_VERSION}:${user?.id || 'anonymous'}:${profile?.role || 'unknown'}:${JSON.stringify({
       page, pageSize, search: searchRequest, amountSearch, filterStatus, filterCompany, filterBatch,
       batchTotalSearch, filterAttachment, allowedCompanyIds,
     })}`
