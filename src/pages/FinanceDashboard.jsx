@@ -5,10 +5,10 @@ import { useAuth } from '../context/AuthContext'
 import StatusBadge from '../components/StatusBadge'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { COMPANY_PALETTE } from '../lib/companyColors'
-import { saveOrganizedDownload } from '../lib/organizedDownloads'
+import { saveOrganizedDownload, ensureDownloadFolder } from '../lib/organizedDownloads'
 
 // Attachment popup
-function AttachmentPreview({ path, name, onClose }) {
+function AttachmentPreview({ path, name, app, batch = false, onClose }) {
   const [url, setUrl]         = useState(null)
   const [loading, setLoading] = useState(true)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
@@ -35,9 +35,11 @@ function AttachmentPreview({ path, name, onClose }) {
             <span style={{ fontSize:'13px',fontWeight:600 }}>{name}</span>
           </div>
           <div style={{ display:'flex',gap:'8px' }}>
-            {url && <a href={url} download={name} target="_blank" rel="noopener noreferrer"
-              style={{ fontSize:'12px',padding:'5px 12px',background:'#1e40af',color:'#fff',
-                borderRadius:'6px',textDecoration:'none',fontWeight:500 }}>↓ Download</a>}
+            {app
+              ? <AttachmentDownloadButton path={path} name={name} app={app} batch={batch} variant="label" />
+              : url && <a href={url} download={name} target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize:'12px',padding:'5px 12px',background:'#1e40af',color:'#fff',
+                    borderRadius:'6px',textDecoration:'none',fontWeight:500 }}>↓ Download</a>}
             <button onClick={onClose} style={{ background:'#f3f4f6',border:'1px solid #d1d5db',
               borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'12px' }}>✕ Close</button>
           </div>
@@ -50,7 +52,9 @@ function AttachmentPreview({ path, name, onClose }) {
           {!loading && url && !isImage && !isPDF && (
             <div style={{ textAlign:'center',padding:'40px' }}>
               <div style={{ fontSize:'48px',marginBottom:'12px' }}>📎</div>
-              <a href={url} download={name} style={{ padding:'8px 20px',background:'#1e40af',color:'#fff',borderRadius:'6px',textDecoration:'none' }}>↓ Download {name}</a>
+              {app
+                ? <AttachmentDownloadButton path={path} name={name} app={app} batch={batch} variant="label" />
+                : <a href={url} download={name} style={{ padding:'8px 20px',background:'#1e40af',color:'#fff',borderRadius:'6px',textDecoration:'none' }}>↓ Download {name}</a>}
             </div>
           )}
         </div>
@@ -82,18 +86,372 @@ function attachmentDownloadName({ reference, name }) {
   return [clean(reference), original].filter(Boolean).join(' - ')
 }
 
-function AttachmentDownloadButton({ path, name, app }) {
-  const downloadedKey = `payment_downloaded:${app.id}:${path}`
+function readSavedInfo(key) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    if (raw === '1') return { paths: [], review: false }   // saved by an older version
+    return JSON.parse(raw)
+  } catch { return null }
+}
+
+function savedKeyFor({ batch, appId, path }) {
+  // A batch confirmation is shared by every application in the batch, so it is
+  // tracked once per file rather than once per application.
+  return batch ? `payment_downloaded:batch:${path}` : `payment_downloaded:${appId}:${path}`
+}
+
+// File writes happen one at a time so two files with the same name can never
+// race for the same destination name (downloads themselves may run in parallel).
+let attachmentWriteChain = Promise.resolve()
+function runSerialized(task) {
+  const run = attachmentWriteChain.then(task)
+  attachmentWriteChain = run.catch(() => {})
+  return run
+}
+
+// Single place that fetches an attachment and files it. Used by the row/popup
+// buttons and by "Save all unsaved".
+async function saveAttachmentToFolders({ path, name, app, batch = false, classes = [] }) {
+  const { data, error } = await supabase.storage.from('attachments').download(path)
+  if (error) throw error
+  if (!data) throw new Error('Attachment returned no data')
+  const batchNo = String(app.batch_number || '').trim()
+  const downloadName = attachmentDownloadName({ reference: batch ? batchNo : app.ref_number, name })
+  const organized = await runSerialized(() => saveOrganizedDownload({
+    blob: data,
+    fileName: downloadName,
+    date: batch ? (app.batch_transfer_date || app.created_at) : app.created_at,
+    classNames: classes,
+    folder: batch && batchNo ? ['Batches', batchNo] : undefined,
+    reviewReason: batch && !batchNo ? 'Batch number is missing' : undefined,
+  }))
+  return { data, downloadName, organized }
+}
+
+// ---------- "Save all unsaved" (current month) ----------
+
+function currentMonthRange() {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+    label: start.toLocaleString('en', { month: 'long', year: 'numeric' }),
+  }
+}
+
+async function fetchAllRows(buildQuery) {
+  const rows = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await buildQuery().range(from, from + 999)
+    if (error) throw error
+    rows.push(...(data || []))
+    if (!data || data.length < 1000) break
+  }
+  return rows
+}
+
+function chunkList(list, size = 200) {
+  const chunks = []
+  for (let index = 0; index < list.length; index += size) chunks.push(list.slice(index, index + size))
+  return chunks
+}
+
+// Finds every file ADDED this month (by the file's own added date, not the
+// application's date) and splits them into still-to-save and already-saved.
+async function scanMonthAttachments() {
+  const { start, end, label } = currentMonthRange()
+  const [applicantFiles, auditRows, batchFiles, originals] = await Promise.all([
+    fetchAllRows(() => supabase.from('application_attachments')
+      .select('application_id,storage_path,file_name,file_size,created_at')
+      .gte('created_at', start).lt('created_at', end).order('created_at')),
+    fetchAllRows(() => supabase.from('audit_log')
+      .select('application_id,note,created_at')
+      .eq('action', 'edited').like('note', '%finance_attachment%')
+      .gte('created_at', start).lt('created_at', end).order('created_at')),
+    fetchAllRows(() => supabase.from('payment_batch_attachments')
+      .select('batch_id,storage_path,file_name,file_size,created_at')
+      .gte('created_at', start).lt('created_at', end).order('created_at')),
+    // Older applications whose original file exists only on the application itself
+    fetchAllRows(() => supabase.from('applications_full')
+      .select('id,attachment_path,attachment_name,created_at')
+      .not('attachment_path', 'is', null).is('deleted_at', null)
+      .gte('created_at', start).lt('created_at', end).order('created_at')),
+  ])
+
+  const financeFiles = []
+  const deletedPaths = new Set()
+  auditRows.forEach(row => {
+    const deleted = parseDeletedFinanceAttachment(row.note)
+    if (deleted) { deletedPaths.add(deleted.path); return }
+    const file = parseFinanceAttachment(row.note)
+    if (file) financeFiles.push({ ...file, application_id: row.application_id, created_at: row.created_at })
+  })
+
+  const appIds = [...new Set([
+    ...applicantFiles.map(row => row.application_id),
+    ...financeFiles.map(row => row.application_id),
+    ...originals.map(row => row.id),
+  ].filter(Boolean))]
+  const batchIds = [...new Set(batchFiles.map(row => row.batch_id).filter(Boolean))]
+
+  const appInfo = new Map()
+  const classInfo = new Map()
+  const batchInfo = new Map()
+  await Promise.all([
+    ...chunkList(appIds).map(async ids => {
+      const { data, error } = await supabase.from('applications_full')
+        .select('id,ref_number,created_at,batch_number,batch_transfer_date,deleted_at').in('id', ids)
+      if (error) throw error
+      ;(data || []).forEach(row => appInfo.set(row.id, row))
+    }),
+    ...chunkList(appIds).map(async ids => {
+      const { data, error } = await supabase.from('applications')
+        .select('id,class_name,class_names').in('id', ids)
+      if (error) throw error
+      ;(data || []).forEach(row => classInfo.set(row.id, row))
+    }),
+    ...chunkList(batchIds).map(async ids => {
+      const { data, error } = await supabase.from('payment_batches')
+        .select('id,batch_number,transfer_date').in('id', ids)
+      if (error) throw error
+      ;(data || []).forEach(row => batchInfo.set(row.id, row))
+    }),
+  ])
+
+  const items = new Map()
+  function addApplicationItem({ appId, path, name, size, addedAt }) {
+    if (!appId || !path) return
+    const info = appInfo.get(appId)
+    if (!info || info.deleted_at) return
+    const app = { ...info, ...(classInfo.get(appId) || {}) }
+    const savedKey = savedKeyFor({ batch: false, appId, path })
+    if (items.has(savedKey)) return
+    items.set(savedKey, {
+      savedKey, path, name: name || 'attachment', size: Number(size) || 0, addedAt,
+      batch: false, app, classes: downloadClasses(app), label: info.ref_number || appId,
+    })
+  }
+  applicantFiles.forEach(row => addApplicationItem({
+    appId: row.application_id, path: row.storage_path, name: row.file_name, size: row.file_size, addedAt: row.created_at,
+  }))
+  financeFiles.forEach(file => {
+    if (deletedPaths.has(file.path)) return
+    addApplicationItem({ appId: file.application_id, path: file.path, name: file.name, size: file.size, addedAt: file.created_at })
+  })
+  originals.forEach(row => addApplicationItem({
+    appId: row.id, path: row.attachment_path, name: row.attachment_name, size: 0, addedAt: row.created_at,
+  }))
+  batchFiles.forEach(row => {
+    const savedKey = savedKeyFor({ batch: true, path: row.storage_path })
+    if (items.has(savedKey)) return
+    const batchRow = batchInfo.get(row.batch_id)
+    const app = {
+      id: null,
+      batch_number: batchRow?.batch_number || '',
+      batch_transfer_date: batchRow?.transfer_date || null,
+      created_at: batchRow?.transfer_date || row.created_at,
+    }
+    items.set(savedKey, {
+      savedKey, path: row.storage_path, name: row.file_name || 'confirmation', size: Number(row.file_size) || 0,
+      addedAt: row.created_at, batch: true, app, classes: [], label: batchRow?.batch_number || 'Batch (number unknown)',
+    })
+  })
+
+  const pending = []
+  let alreadySaved = 0
+  items.forEach(item => { if (readSavedInfo(item.savedKey)) alreadySaved += 1; else pending.push(item) })
+  return { label, pending, alreadySaved }
+}
+
+function BulkSaveAttachmentsButton() {
+  const [open, setOpen] = useState(false)
+  const [phase, setPhase] = useState('scanning')   // scanning | message | preview | running | done
+  const [message, setMessage] = useState('')
+  const [scan, setScan] = useState(null)
+  const [progress, setProgress] = useState({ done: 0, total: 0, current: '' })
+  const [results, setResults] = useState(null)
+  const cancelRef = useRef(false)
+  const runningRef = useRef(false)
+
+  async function start() {
+    if (runningRef.current) { setOpen(true); return }
+    setOpen(true); setPhase('scanning'); setMessage(''); setScan(null); setResults(null)
+    try {
+      // First await in the click: lets the browser show its folder permission prompt.
+      const folder = await ensureDownloadFolder()
+      if (folder.unsupported) { setMessage('Saving to folders needs Chrome or Edge on a computer.'); setPhase('message'); return }
+      if (folder.cancelled) { setMessage('No folder was selected, so nothing was saved.'); setPhase('message'); return }
+      const found = await scanMonthAttachments()
+      setScan(found)
+      setPhase('preview')
+    } catch (error) {
+      setMessage(`Could not check for files: ${error?.message || error}`)
+      setPhase('message')
+    }
+  }
+
+  async function run() {
+    if (!scan?.pending.length || runningRef.current) return
+    runningRef.current = true
+    cancelRef.current = false
+    const queue = [...scan.pending]
+    const out = { saved: [], review: [], failed: [] }
+    let nextIndex = 0
+    setResults(null)
+    setProgress({ done: 0, total: queue.length, current: '' })
+    setPhase('running')
+
+    async function worker() {
+      while (!cancelRef.current) {
+        const item = queue[nextIndex++]
+        if (!item) return
+        setProgress(previous => ({ ...previous, current: item.name }))
+        try {
+          const { organized } = await saveAttachmentToFolders({
+            path: item.path, name: item.name, app: item.app, batch: item.batch, classes: item.classes,
+          })
+          if (organized.saved) {
+            const paths = organized.paths || []
+            try {
+              localStorage.setItem(item.savedKey, JSON.stringify({
+                paths, review: !!organized.needsReview, reason: organized.reason || '', at: new Date().toISOString(),
+              }))
+            } catch {}
+            ;(organized.needsReview ? out.review : out.saved).push({ item, paths, reason: organized.reason || '' })
+          } else if (organized.cancelled || organized.unsupported) {
+            out.failed.push({ item, message: organized.unsupported ? 'This browser cannot save to folders' : 'No folder selected' })
+            cancelRef.current = true
+          } else {
+            out.failed.push({ item, message: (organized.errors || []).map(error => `${error.className}: ${error.message}`).join('; ') || 'Not saved' })
+          }
+        } catch (error) {
+          out.failed.push({ item, message: error?.message || String(error) })
+        }
+        setProgress(previous => ({ ...previous, done: previous.done + 1 }))
+      }
+    }
+
+    await Promise.all([worker(), worker(), worker()])
+    runningRef.current = false
+    const attempted = out.saved.length + out.review.length + out.failed.length
+    setResults({ ...out, notAttempted: Math.max(0, queue.length - attempted), cancelled: cancelRef.current })
+    setPhase('done')
+    window.dispatchEvent(new Event('payment-attachments-saved'))
+  }
+
+  function close() {
+    if (runningRef.current) return
+    setOpen(false)
+  }
+
+  const totalBytes = scan ? scan.pending.reduce((sum, item) => sum + (item.size || 0), 0) : 0
+  const unknownSize = scan ? scan.pending.filter(item => !item.size).length : 0
+  const cardStyle = { background: '#fff', borderRadius: 12, padding: 22, width: '100%', maxWidth: 520, maxHeight: '86vh', overflowY: 'auto', boxShadow: '0 20px 56px rgba(0,0,0,.3)' }
+  const listStyle = { margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#475569', maxHeight: 140, overflowY: 'auto' }
+
+  return <>
+    <button className="btn btn-outline" onClick={start} title="Save every attachment added this month that has not been saved yet">
+      {runningRef.current ? 'Saving…' : '⬇ Save all unsaved'}
+    </button>
+    {open && <div role="presentation" onClick={event => { if (event.target === event.currentTarget) close() }}
+      style={{ position: 'fixed', inset: 0, zIndex: 3500, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div role="dialog" aria-modal="true" aria-label="Save all unsaved attachments" style={cardStyle}>
+        <h3 style={{ margin: '0 0 10px', fontSize: 17 }}>Save all unsaved attachments</h3>
+
+        {phase === 'scanning' && <p style={{ fontSize: 13, color: '#475569' }}>Checking this month’s files…</p>}
+
+        {phase === 'message' && <>
+          <p style={{ fontSize: 13, color: '#991b1b' }}>{message}</p>
+          <div style={{ textAlign: 'right' }}><button className="btn btn-outline" onClick={close}>Close</button></div>
+        </>}
+
+        {phase === 'preview' && scan && <>
+          <p style={{ fontSize: 13, color: '#334155', margin: '0 0 6px' }}>
+            Files added in <strong>{scan.label}</strong>, regardless of the dashboard filters.
+          </p>
+          {scan.pending.length === 0
+            ? <p style={{ fontSize: 13 }}>Nothing new to save.{scan.alreadySaved ? ` ${scan.alreadySaved} already saved on this computer.` : ''}</p>
+            : <p style={{ fontSize: 14, margin: '4px 0 12px' }}>
+                <strong>{scan.pending.length}</strong> file{scan.pending.length === 1 ? '' : 's'} to save
+                {totalBytes ? ` (${formatFileSize(totalBytes)}${unknownSize ? ` + ${unknownSize} of unknown size` : ''})` : ''}
+                {scan.alreadySaved ? `, ${scan.alreadySaved} already saved and skipped` : ''}.
+              </p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button className="btn btn-outline" onClick={close}>{scan.pending.length ? 'Cancel' : 'Close'}</button>
+            {scan.pending.length > 0 && <button className="btn btn-primary" onClick={run}>Save {scan.pending.length} file{scan.pending.length === 1 ? '' : 's'}</button>}
+          </div>
+        </>}
+
+        {phase === 'running' && <>
+          <p style={{ fontSize: 13, margin: '0 0 8px' }}>Saved {progress.done} of {progress.total}…</p>
+          <div style={{ height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`, background: '#1d4ed8', transition: 'width .2s' }} />
+          </div>
+          <p style={{ fontSize: 11, color: '#64748b', margin: '8px 0 14px', overflowWrap: 'anywhere' }}>{progress.current}</p>
+          <div style={{ textAlign: 'right' }}>
+            <button className="btn btn-outline" onClick={() => { cancelRef.current = true }}>Stop after current files</button>
+          </div>
+        </>}
+
+        {phase === 'done' && results && <>
+          <p style={{ fontSize: 14, margin: '0 0 6px' }}>
+            {results.cancelled ? 'Stopped. ' : 'Finished. '}
+            <strong style={{ color: '#166534' }}>{results.saved.length} saved</strong>
+            {results.review.length > 0 && <>, <strong style={{ color: '#92400e' }}>{results.review.length} need filing</strong></>}
+            {results.failed.length > 0 && <>, <strong style={{ color: '#991b1b' }}>{results.failed.length} failed</strong></>}
+            {results.notAttempted > 0 && <>, {results.notAttempted} not attempted</>}.
+          </p>
+          {results.review.length > 0 && <>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#92400e', marginTop: 8 }}>Needs manual filing (saved to _Needs Review)</div>
+            <ul style={listStyle}>{results.review.map(({ item, reason }) => <li key={item.savedKey}>{item.label} · {item.name} — {reason}</li>)}</ul>
+          </>}
+          {results.failed.length > 0 && <>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#991b1b', marginTop: 8 }}>Failed (not marked as saved; they will be offered again next time)</div>
+            <ul style={listStyle}>{results.failed.map(({ item, message }) => <li key={item.savedKey}>{item.label} · {item.name} — {message}</li>)}</ul>
+          </>}
+          <div style={{ textAlign: 'right', marginTop: 14 }}><button className="btn btn-primary" onClick={close}>Done</button></div>
+        </>}
+      </div>
+    </div>}
+  </>
+}
+
+// One entry point for every download (row button, preview popup, batch confirmations).
+function AttachmentDownloadButton({ path, name, app, batch = false, variant = 'icon' }) {
+  // A batch confirmation is shared by every application in the batch, so it is
+  // tracked (and downloaded) once per file rather than once per application.
+  const downloadedKey = savedKeyFor({ batch, appId: app.id, path })
   const [downloading, setDownloading] = useState(false)
-  const [saved, setSaved] = useState(() => localStorage.getItem(downloadedKey) === '1')
-  const [savedPaths, setSavedPaths] = useState([])
+  const [info, setInfo] = useState(() => readSavedInfo(downloadedKey))
+  const [toast, setToast] = useState(null)
   const busyRef = useRef(false)
   const [chooseClasses, setChooseClasses] = useState(false)
   const [selectedClasses, setSelectedClasses] = useState([])
+
+  useEffect(() => {
+    const refresh = () => setInfo(readSavedInfo(downloadedKey))
+    window.addEventListener('payment-attachments-saved', refresh)
+    return () => window.removeEventListener('payment-attachments-saved', refresh)
+  }, [downloadedKey])
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), toast.kind === 'ok' ? 6000 : 12000)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
   function beginDownload(event) {
-    event.preventDefault(); event.stopPropagation()
+    event?.preventDefault?.(); event?.stopPropagation?.()
     if (busyRef.current) return
-    const classes = downloadClasses(app)
+    if (info) {
+      const where = info.paths?.length ? info.paths.join('\n') : 'location was not recorded'
+      const label = info.review ? 'Already saved (needs manual filing)' : 'Already saved'
+      if (!window.confirm(`${label}:\n${where}\n\nSave another copy?`)) return
+    }
+    const classes = batch ? [] : downloadClasses(app)
     if (classes.length > 1) {
       setSelectedClasses([])
       setChooseClasses(true)
@@ -101,29 +459,35 @@ function AttachmentDownloadButton({ path, name, app }) {
       download(classes)
     }
   }
+
+  function remember(next) {
+    try { localStorage.setItem(downloadedKey, JSON.stringify(next)) } catch {}
+    setInfo(next)
+  }
+
   async function download(classes) {
     if (busyRef.current) return
     busyRef.current = true
     setDownloading(true)
     try {
-      const { data, error } = await supabase.storage.from('attachments').download(path)
-      if (error) throw error
-      if (!data) throw new Error('Attachment returned no data')
-      const downloadName = attachmentDownloadName({ reference: app.ref_number, name })
-      const organized = await saveOrganizedDownload({
-        blob:data, fileName:downloadName, date:app.created_at, classNames:classes,
-      })
+      const { data, downloadName, organized } = await saveAttachmentToFolders({ path, name, app, batch, classes })
+      if (organized.cancelled) {
+        setToast({ kind: 'warn', text: 'Download cancelled: no folder was selected.' })
+        return
+      }
       if (organized.saved) {
-        localStorage.setItem(downloadedKey, '1')
-        setSaved(true)
-        setSavedPaths(organized.paths || (organized.path ? [organized.path] : []))
+        const paths = organized.paths || (organized.path ? [organized.path] : [])
+        remember({ paths, review: !!organized.needsReview, reason: organized.reason || '', at: new Date().toISOString() })
+        setToast(organized.needsReview
+          ? { kind: 'warn', text: `⚠ Needs manual filing (${organized.reason}). Saved to:`, paths }
+          : { kind: 'ok', text: paths.length > 1 ? `Saved ${paths.length} copies:` : 'Saved to:', paths })
         return
       }
       if (organized.paths?.length || organized.errors?.length) {
-        throw new Error(`Saved ${organized.paths?.length || 0} of ${classes.length || 1} class copies. ` +
+        throw new Error(`Saved ${organized.paths?.length || 0} of ${classes.length || 1} copies. ` +
           (organized.errors || []).map(item => `${item.className}: ${item.message}`).join('; '))
       }
-      // Fallback only when the browser does not support organized folder saving.
+      // Browser cannot write to folders: plain download, flagged for manual filing.
       if (!organized.unsupported) throw new Error('Organized download did not complete')
       const url = URL.createObjectURL(data)
       const link = document.createElement('a')
@@ -131,16 +495,43 @@ function AttachmentDownloadButton({ path, name, app }) {
       link.download = downloadName
       document.body.appendChild(link); link.click(); link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      const reason = 'This browser cannot file automatically (use Chrome or Edge)'
+      remember({ paths: ['Browser Downloads folder'], review: true, reason, at: new Date().toISOString() })
+      setToast({ kind: 'warn', text: `⚠ Needs manual filing: ${reason}. Saved to your browser's Downloads folder.` })
     } catch (error) {
-      window.alert(`Download failed: ${error.message || 'Could not retrieve the attachment'}`)
+      setToast({ kind: 'error', text: `Download failed: ${error.message || 'Could not retrieve the attachment'}` })
     } finally { busyRef.current = false; setDownloading(false) }
   }
-  const hint = savedPaths.length
-    ? `Saved ${savedPaths.length} copies:\n${savedPaths.join('\n')}`
-    : saved ? 'Previously saved (click to save another copy)' : `Download ${name || 'attachment'}`
+
+  const review = !!info?.review
+  const hint = info
+    ? `${review ? `Needs manual filing${info.reason ? ` (${info.reason})` : ''}` : 'Saved'}${info.paths?.length ? `:\n${info.paths.join('\n')}` : ''}\n(click to save another copy)`
+    : `Download ${name || 'attachment'}`
+  const palette = review
+    ? { bg:'#fef3c7', fg:'#92400e', border:'#fcd34d' }
+    : info ? { bg:'#dcfce7', fg:'#166534', border:'#86efac' } : { bg:'#fff', fg:'#1d4ed8', border:'#bfdbfe' }
+  const toastColors = toast?.kind === 'ok'
+    ? { bg:'#f0fdf4', border:'#86efac', fg:'#166534' }
+    : toast?.kind === 'error' ? { bg:'#fef2f2', border:'#fca5a5', fg:'#991b1b' } : { bg:'#fffbeb', border:'#fcd34d', fg:'#92400e' }
+
   return <>
-    <button type="button" onClick={beginDownload} disabled={downloading} title={hint} aria-label={`Download ${name || 'attachment'}`}
-      style={{border:'1px solid #bfdbfe',background:saved ? '#dcfce7' : '#fff',color:saved ? '#166534' : '#1d4ed8',borderRadius:'4px',padding:'2px 5px',cursor:downloading ? 'wait' : 'pointer',fontSize:'11px',lineHeight:1}}>{downloading ? '…' : saved ? '✓' : '↓'}</button>
+    {variant === 'label'
+      ? <button type="button" onClick={beginDownload} disabled={downloading} title={hint}
+          style={{fontSize:'12px',padding:'5px 12px',background:review ? '#d97706' : info ? '#15803d' : '#1e40af',color:'#fff',border:0,borderRadius:'6px',fontWeight:500,cursor:downloading ? 'wait' : 'pointer'}}>
+          {downloading ? 'Saving…' : review ? '⚠ Saved - needs filing' : info ? '✓ Saved' : '↓ Download'}
+        </button>
+      : <button type="button" onClick={beginDownload} disabled={downloading} title={hint} aria-label={`Download ${name || 'attachment'}`}
+          style={{border:`1px solid ${palette.border}`,background:palette.bg,color:palette.fg,borderRadius:'4px',padding:'2px 5px',cursor:downloading ? 'wait' : 'pointer',fontSize:'11px',lineHeight:1}}>
+          {downloading ? '…' : review ? '⚠' : info ? '✓' : '↓'}
+        </button>}
+    {toast && <div role="status" onClick={event => event.stopPropagation()}
+      style={{position:'fixed',right:20,bottom:20,zIndex:4000,maxWidth:440,background:toastColors.bg,border:`1px solid ${toastColors.border}`,color:toastColors.fg,borderRadius:10,padding:'10px 14px',fontSize:12,boxShadow:'0 8px 28px rgba(0,0,0,.18)',fontWeight:400,textAlign:'left'}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:12}}>
+        <strong style={{fontWeight:600}}>{toast.text}</strong>
+        <button type="button" onClick={() => setToast(null)} aria-label="Dismiss" style={{border:0,background:'transparent',cursor:'pointer',color:'inherit',fontSize:14,lineHeight:1}}>✕</button>
+      </div>
+      {toast.paths?.map(item => <div key={item} style={{marginTop:4,fontFamily:'monospace',fontSize:11,overflowWrap:'anywhere'}}>{item}</div>)}
+    </div>}
     {chooseClasses && <div role="presentation" onClick={event => { event.stopPropagation(); setChooseClasses(false) }}
       style={{position:'fixed',inset:0,zIndex:3000,background:'rgba(0,0,0,.45)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
       <div role="dialog" aria-modal="true" aria-label="Choose download classes" onClick={event => event.stopPropagation()}
@@ -168,7 +559,7 @@ function AttachmentDownloadButton({ path, name, app }) {
   </>
 }
 
-function AttachmentPill({ path, name, size, tabIndex, finance = false, batch = false }) {
+function AttachmentPill({ path, name, size, tabIndex, app, finance = false, batch = false }) {
   const [show, setShow] = useState(false)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
   const isPDF   = /\.pdf$/i.test(name || '')
@@ -186,7 +577,7 @@ function AttachmentPill({ path, name, size, tabIndex, finance = false, batch = f
         </span>
         <span style={{ opacity:0.6,fontSize:'10px' }}>👁</span>
       </button>
-      {show && <AttachmentPreview path={path} name={name} onClose={() => setShow(false)} />}
+      {show && <AttachmentPreview path={path} name={name} app={app} batch={batch} onClose={() => setShow(false)} />}
     </>
   )
 }
@@ -210,7 +601,7 @@ function parseDeletedFinanceAttachment(note) {
 }
 
 const BATCH_ATTACH_MAX_FILES = 10
-const BATCH_ATTACH_MAX_BYTES  = 10 * 1024 * 1024
+const BATCH_ATTACH_MAX_BYTES  = 5 * 1024 * 1024
 const BATCH_ATTACH_EXT = ['jpg','jpeg','png','webp','gif','pdf','csv','xls','xlsx','doc','docx','txt']
 const BATCH_ATTACH_ACCEPT = BATCH_ATTACH_EXT.map(e => '.' + e).join(',')
 
@@ -1547,6 +1938,7 @@ export default function FinanceDashboard() {
           {lastRefreshedAt && <span style={{fontSize:'11px',color:'var(--ink-3)',alignSelf:'center'}}>
             Last refreshed {new Date(lastRefreshedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
           </span>}
+          <BulkSaveAttachmentsButton />
           <button className="btn btn-outline" onClick={exportCSV}>↓ Export CSV</button>
         </div>
       </div>
@@ -1967,19 +2359,19 @@ export default function FinanceDashboard() {
                           {(app.attachment_path || app.applicant_attachments?.length > 0 || app.finance_attachments?.length > 0 || app.batch_attachments?.length > 0) ? (
                             <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', maxWidth:'170px' }}>
                               {app.attachment_path && (
-                                <div style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} /><AttachmentDownloadButton path={app.attachment_path} name={app.attachment_name} app={app} /></div>
+                                <div style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} app={app} /><AttachmentDownloadButton path={app.attachment_path} name={app.attachment_name} app={app} /></div>
                               )}
                               {(app.applicant_attachments || [])
                                 .filter(att => att.storage_path !== app.attachment_path)
                                 .map((att, index) => (
                                   <div key={`${att.storage_path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.storage_path}
-                                    name={att.file_name} size={att.file_size} tabIndex={-1} /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} /></div>
+                                    name={att.file_name} size={att.file_size} tabIndex={-1} app={app} /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} /></div>
                                 ))}
                               {(app.finance_attachments || []).map((att, index) => (
-                                <div key={`${att.path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.path} name={att.name} size={att.size} tabIndex={-1} finance /><AttachmentDownloadButton path={att.path} name={att.name} app={app} /></div>
+                                <div key={`${att.path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.path} name={att.name} size={att.size} tabIndex={-1} app={app} finance /><AttachmentDownloadButton path={att.path} name={att.name} app={app} /></div>
                               ))}
                               {(app.batch_attachments || []).map((att, index) => (
-                                <div key={`${att.storage_path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.storage_path} name={att.file_name} size={att.file_size} tabIndex={-1} batch /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} /></div>
+                                <div key={`${att.storage_path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.storage_path} name={att.file_name} size={att.file_size} tabIndex={-1} app={app} batch /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} batch /></div>
                               ))}
                             </div>
                           ) : (
