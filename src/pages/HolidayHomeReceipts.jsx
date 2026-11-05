@@ -56,6 +56,7 @@ export default function HolidayHomeReceipts() {
   const [auditedReceiptIds, setAuditedReceiptIds] = useState(new Set())
   const [sortDirection, setSortDirection] = useState('asc')
   const [sortKey, setSortKey] = useState('prepared_by')
+  const [copiedId, setCopiedId] = useState(null)
 
   const set = (key, value) => setForm(current => ({ ...current, [key]:value }))
   const guests = useMemo(() => (history.guests || []).map(item => {
@@ -98,6 +99,42 @@ export default function HolidayHomeReceipts() {
   const canCreate = ['superadmin','supervisor'].includes(normalizedRole) || moduleAccess.includes('holiday_home_receipts') || profile?.holiday_home_receipts_enabled === true
   const isFinance = profile?.role === 'finance'
   const isSuperAdmin = normalizedRole === 'superadmin'
+  // Single-line, plain-text summary of a receipt row, for pasting into descriptions elsewhere.
+  // Format: Receipt | Date | Guest | Property | [Nights] | Amount | Prepared By (nights only when > 0)
+  const receiptCopyText = receipt => {
+    const amount = Number(receipt.rental_payment || 0) + Number(receipt.security_deposit || 0) + Number(receipt.admin_fee || 0) + Number(receipt.additional_service || 0)
+    const property = receipt.property_display || properties.find(item => item.property_key === receipt.property_key)?.property_unit || receipt.property_key || ''
+    const nightCount = Number(receipt.nights || 0)
+    return [
+      receipt.receipt_number,
+      receipt.receipt_date,
+      receipt.received_from,
+      property,
+      nightCount > 0 ? `${nightCount} night${nightCount === 1 ? '' : 's'}` : '',
+      `AED ${formatCurrency(amount)}`,
+      usersById[receipt.created_by] || '',
+    ].filter(Boolean).join(' | ')
+  }
+  const copyReceiptText = async receipt => {
+    const text = receiptCopyText(receipt)
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Fallback for browsers/contexts where the async clipboard API is unavailable.
+      const area = document.createElement('textarea')
+      area.value = text
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      let ok = false
+      try { ok = document.execCommand('copy') } catch { ok = false }
+      document.body.removeChild(area)
+      if (!ok) { setError('Could not copy to the clipboard.'); return }
+    }
+    setCopiedId(receipt.id)
+    setTimeout(() => setCopiedId(current => current === receipt.id ? null : current), 1500)
+  }
   const receiptStatusMarker = receipt => {
     const status = String(receipt.status || 'pending').toLowerCase()
     const details = status === 'acknowledged'
@@ -105,7 +142,11 @@ export default function HolidayHomeReceipts() {
       : status === 'void'
         ? { icon:'×', label:'Void', color:'#b91c1c', background:'#fee2e2', border:'#fca5a5' }
         : { icon:'•', label:'Pending finance acknowledgement', color:'#a16207', background:'#fef3c7', border:'#fcd34d' }
-    return <span title={`Status: ${details.label}`} aria-label={`Status: ${details.label}`} style={{ display:'inline-flex', width:18, height:18, borderRadius:'50%', alignItems:'center', justifyContent:'center', marginLeft:6, fontSize:14, fontWeight:800, lineHeight:1, color:details.color, background:details.background, border:`1px solid ${details.border}`, verticalAlign:'middle' }}>{details.icon}</span>
+    const copied = copiedId === receipt.id
+    return <>
+      <button type="button" onClick={() => copyReceiptText(receipt)} title={`Status: ${details.label} — click to copy receipt details`} aria-label={`Status: ${details.label}. Click to copy receipt details`} style={{ display:'inline-flex', width:18, height:18, padding:0, borderRadius:'50%', alignItems:'center', justifyContent:'center', marginLeft:6, fontSize:14, fontWeight:800, lineHeight:1, color:details.color, background:details.background, border:`1px solid ${details.border}`, verticalAlign:'middle', cursor:'pointer', fontFamily:'inherit' }}>{details.icon}</button>
+      {copied && <span role="status" style={{ marginLeft:6, fontSize:11, fontWeight:600, color:'#166534' }}>Copied</span>}
+    </>
   }
   const toggleSort = key => {
     if (sortKey === key) setSortDirection(current => current === 'asc' ? 'desc' : 'asc')
