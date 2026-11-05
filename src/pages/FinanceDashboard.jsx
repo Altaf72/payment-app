@@ -168,19 +168,19 @@ function AttachmentDownloadButton({ path, name, app }) {
   </>
 }
 
-function AttachmentPill({ path, name, size, tabIndex, finance = false }) {
+function AttachmentPill({ path, name, size, tabIndex, finance = false, batch = false }) {
   const [show, setShow] = useState(false)
   const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name || '')
   const isPDF   = /\.pdf$/i.test(name || '')
   const displayName = size ? `${name} (${formatFileSize(size)})` : name
   return (
     <>
-      <button onClick={() => setShow(true)} title={`${finance ? 'Finance document · ' : ''}Preview: ${displayName}`} tabIndex={tabIndex}
+      <button onClick={() => setShow(true)} title={`${batch ? 'Shared batch payment confirmation · ' : finance ? 'Finance document · ' : ''}Preview: ${displayName}`} tabIndex={tabIndex}
         style={{ display:'inline-flex',alignItems:'center',gap:'4px',padding:'3px 8px',
-          borderRadius:'20px',cursor:'pointer',background:finance ? '#ecfdf5' : '#eff6ff',border:`1px solid ${finance ? '#86efac' : '#bfdbfe'}`,
-          color:finance ? '#166534' : '#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
+          borderRadius:'20px',cursor:'pointer',background:batch ? '#f3e8ff' : finance ? '#ecfdf5' : '#eff6ff',border:`1px solid ${batch ? '#d8b4fe' : finance ? '#86efac' : '#bfdbfe'}`,
+          color:batch ? '#6b21a8' : finance ? '#166534' : '#1d4ed8',fontSize:'11px',fontWeight:500,whiteSpace:'nowrap',maxWidth:'160px' }}>
         {isPDF ? '📄' : isImage ? '🖼' : '📎'}
-        {finance && <span style={{fontSize:'9px',fontWeight:800,letterSpacing:'.3px'}}>FIN</span>}
+        {batch ? <span style={{fontSize:'9px',fontWeight:800,letterSpacing:'.3px'}}>BATCH</span> : finance && <span style={{fontSize:'9px',fontWeight:800,letterSpacing:'.3px'}}>FIN</span>}
         <span style={{ overflow:'hidden',textOverflow:'ellipsis',maxWidth:'60px',fontSize:'11px' }}>
           {displayName && displayName.length > 9 ? displayName.slice(0,8)+'…' : displayName}
         </span>
@@ -873,7 +873,8 @@ export default function FinanceDashboard() {
       const ids = rows.map(a => a.id)
       const idChunks = []
       for (let index = 0; index < ids.length; index += 200) idChunks.push(ids.slice(index, index + 200))
-      const [logResults, applicantAttachmentResults] = await Promise.all([
+      const batchIds = [...new Set(rows.map(app => app.batch_id).filter(Boolean))]
+      const [logResults, applicantAttachmentResults, batchAttachmentResult] = await Promise.all([
         Promise.all(idChunks.map(chunk => supabase
         .from('audit_log')
         .select('application_id,action,note,created_at')
@@ -885,11 +886,16 @@ export default function FinanceDashboard() {
           .select('application_id,storage_path,file_name,file_size,mime_type,source,created_at')
           .in('application_id', chunk)
           .order('created_at', { ascending: true }))),
+        batchIds.length
+          ? supabase.from('payment_batch_attachments').select('batch_id,storage_path,file_name,file_size,mime_type,created_at').in('batch_id', batchIds).order('created_at', { ascending: true })
+          : Promise.resolve({ data: [], error: null }),
       ])
       const logError = logResults.find(result => result.error)?.error
       const applicantAttachmentError = applicantAttachmentResults.find(result => result.error)?.error
+      const batchAttachmentError = batchAttachmentResult.error
       const financeLogs = logResults.flatMap(result => result.data || [])
 
+      if (batchAttachmentError) console.info('Shared batch confirmations are not available yet', batchAttachmentError)
       if (logError || applicantAttachmentError) {
         console.error(logError || applicantAttachmentError)
       } else {
@@ -897,6 +903,11 @@ export default function FinanceDashboard() {
         const deletedByApp = {}
         const commentsByApp = {}
         const applicantAttachmentsByApp = {}
+        const batchAttachmentsByBatch = {}
+        ;(batchAttachmentResult.data || []).forEach(attachment => {
+          if (!batchAttachmentsByBatch[attachment.batch_id]) batchAttachmentsByBatch[attachment.batch_id] = []
+          batchAttachmentsByBatch[attachment.batch_id].push(attachment)
+        })
         applicantAttachmentResults.flatMap(result => result.data || []).forEach(attachment => {
           if (!applicantAttachmentsByApp[attachment.application_id]) applicantAttachmentsByApp[attachment.application_id] = []
           applicantAttachmentsByApp[attachment.application_id].push(attachment)
@@ -922,6 +933,7 @@ export default function FinanceDashboard() {
           ...app,
           applicant_attachments: applicantAttachmentsByApp[app.id] || [],
           finance_attachments: (byApp[app.id] || []).filter(att => !deletedByApp[app.id]?.has(att.path)),
+          batch_attachments: batchAttachmentsByBatch[app.batch_id] || [],
           finance_comments: commentsByApp[app.id] || [],
         }))
       }
@@ -1800,10 +1812,11 @@ export default function FinanceDashboard() {
                               app.attachment_name,
                               ...(app.applicant_attachments || []).map(att => att.file_name),
                               ...(app.finance_attachments || []).map(att => att.name),
+                              ...(app.batch_attachments || []).map(att => `Batch confirmation: ${att.file_name}`),
                             ].filter(Boolean).join(', ')}
                             label="Attachment names"
                           >
-                          {(app.attachment_path || app.applicant_attachments?.length > 0 || app.finance_attachments?.length > 0) ? (
+                          {(app.attachment_path || app.applicant_attachments?.length > 0 || app.finance_attachments?.length > 0 || app.batch_attachments?.length > 0) ? (
                             <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', maxWidth:'170px' }}>
                               {app.attachment_path && (
                                 <div style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={app.attachment_path} name={app.attachment_name} tabIndex={-1} /><AttachmentDownloadButton path={app.attachment_path} name={app.attachment_name} app={app} /></div>
@@ -1816,6 +1829,9 @@ export default function FinanceDashboard() {
                                 ))}
                               {(app.finance_attachments || []).map((att, index) => (
                                 <div key={`${att.path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.path} name={att.name} size={att.size} tabIndex={-1} finance /><AttachmentDownloadButton path={att.path} name={att.name} app={app} /></div>
+                              ))}
+                              {(app.batch_attachments || []).map((att, index) => (
+                                <div key={`${att.storage_path}-${index}`} style={{display:'inline-flex',alignItems:'center',gap:'2px'}}><AttachmentPill path={att.storage_path} name={att.file_name} size={att.file_size} tabIndex={-1} batch /><AttachmentDownloadButton path={att.storage_path} name={att.file_name} app={app} /></div>
                               ))}
                             </div>
                           ) : (
